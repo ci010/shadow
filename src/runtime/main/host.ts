@@ -322,7 +322,8 @@ export async function startProjectHost(
   registerRealtimeRoute(app, realtimeHub, authorize, {
     authorize: request => !!directUi?.authorize(request) || authorizeOwner(request),
     ownerSignal: request => directUi?.ownerSignal(request),
-    authorizeTopic: (_request, topic) => authorizeLiveTopic(topic),
+    authorizeTopic: (request, topic) => authorizeLiveTopic(topic) &&
+      (!!directUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeOwner(request) === true),
   })
   const hostDiagnostics = new Hono()
   otelPlugin(hostOtelStore)(hostDiagnostics)

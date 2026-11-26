@@ -8,7 +8,7 @@ import { compileScript, parse } from 'vue/compiler-sfc'
 import ts from 'typescript'
 import { createIoBridge } from './io/bridge.ts'
 import { IoExecution } from './io/execution.ts'
-import type { LiveStatus } from './live-client.ts'
+import type { LiveStatus, LiveObserver } from './live-client.ts'
 import { parseIoDefinition } from '../../src/io/contracts.ts'
 
 const run = {
@@ -38,6 +38,8 @@ function fixture(t: TestContext, waitForReady = false) {
   }
   t.mock.method(IoExecution.prototype, 'connect', () => {})
   let phase!: (status: LiveStatus) => void
+  let currentPhase: LiveStatus['phase'] = 'live'
+  let projection!: LiveObserver
   let live!: { event: () => void; reset: () => void; reconnected: () => void }
   const calls: { path: string; init: RequestInit }[] = []
   let register = async () => Response.json({ clientToken: 'synthetic-client' })
@@ -91,8 +93,8 @@ function fixture(t: TestContext, waitForReady = false) {
   })
   const app = renderer.createApp(module.exports.default, { bridge })
   app.provide(Symbol.for('shadow.live-client-pool'), {
-    observeHost: (_base: string, callback: typeof phase) => { phase = callback; callback({ phase: 'live' }); return () => {} },
-    client: () => ({ subscribe: (_topic: unknown, observer: typeof live) => { live = observer; return { close() { closed = true }, ready: (signal: AbortSignal) => { readySignal = signal; return readiness } } } }),
+    observeHost: (_base: string, callback: typeof phase) => { phase = status => { currentPhase = status.phase; callback(status) }; callback({ phase: 'live' }); return () => {} },
+    client: () => ({ isLive: () => currentPhase === 'live', retry() {}, subscribe: (_topic: { kind: string }, observer: LiveObserver & typeof live) => { if (_topic.kind === 'io-runs') projection = observer; else live = observer; return { close() { closed = true }, ready: (signal: AbortSignal) => { readySignal = signal; return readiness } } } }),
   })
   let mounted = true
   const unmount = () => { if (mounted) { app.unmount(); mounted = false } }
@@ -104,9 +106,11 @@ function fixture(t: TestContext, waitForReady = false) {
   })
   return {
     bridge, calls, errors, document, unmount, ready,
+    async settle() { await settle(); if (waitForReady) t.mock.timers.tick(0); else await new Promise(resolve => setTimeout(resolve, 2)); await settle() },
     readySignal: () => readySignal, closed: () => closed,
     inventory: (next: typeof inventory) => { inventory = next },
     live: () => live,
+    projection: () => projection,
     phase: (value: LiveStatus['phase']) => phase({ phase: value }),
     prepare: () => bridge.actions.value!.prepare(run, base),
     polls: () => calls.filter(call => call.path.endsWith('/runs')),
@@ -123,80 +127,80 @@ const expired = () => Promise.resolve(Response.json({
 
 test('idle discovery uses live invalidation and a slower fallback without registering or heartbeating', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
   t.mock.timers.tick(10_000)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
   f.live().event()
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 2)
   f.live().reset()
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 3)
   t.mock.timers.tick(60_000)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 3)
   f.phase('reconnecting')
   t.mock.timers.tick(30_000)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 4)
   f.phase('live')
   f.live().reconnected()
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 5)
   assert.equal(f.registrations().length, 0)
   assert.equal(f.calls.filter(call => call.path.endsWith('/heartbeat')).length, 0)
 })
 
-test('hidden idle views do not poll; becoming visible immediately refreshes without registration', async t => {
+test('hidden idle views do not poll; healthy focus checks do not reread runs', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   f.document.hidden = true
   t.mock.timers.tick(30_000)
   f.live().event()
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
   f.document.hidden = false
   f.document.dispatchEvent(new Event('visibilitychange'))
-  await settle()
-  assert.equal(f.polls().length, 2)
+  await f.settle()
+  assert.equal(f.polls().length, 1)
   assert.equal(f.registrations().length, 0)
 })
 
 test('prepare registers on demand and active hidden capture still heartbeats', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   await f.prepare()
   assert.deepEqual(f.errors, [])
   assert.equal(f.registrations().length, 1)
   assert.ok(f.bridge.execution.value)
   f.document.hidden = true
   t.mock.timers.tick(5000)
-  await settle()
+  await f.settle()
   assert.equal(f.calls.filter(call => call.path.endsWith('/heartbeat')).length, 1)
 })
 
 test('expired active credentials fail capture and never silently register replacements on wake', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   await f.prepare()
   const execution = f.bridge.execution.value!
   f.heartbeat(expired)
   f.document.dispatchEvent(new Event('visibilitychange'))
-  await settle()
+  await f.settle()
   assert.equal(execution.phase, 'closed')
   assert.match(execution.error!, /Capture connection lost:.*client expired/)
   t.mock.timers.tick(30_000)
   f.document.dispatchEvent(new Event('visibilitychange'))
-  await settle()
+  await f.settle()
   assert.equal(f.registrations().length, 1)
   assert.equal(f.calls.filter(call => call.path.endsWith('/prepare')).length, 1)
 })
 
 test('malformed on-demand credentials are reported without preparing capture', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   f.register(async () => Response.json({ clientToken: null }))
   await f.prepare()
   assert.ok(f.errors.includes('Invalid capture client registration'))
@@ -205,14 +209,14 @@ test('malformed on-demand credentials are reported without preparing capture', a
 
 test('navigation aborts pending on-demand registration and discards late credentials', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   let release!: (value: Response) => void
   f.register(() => new Promise(resolve => { release = resolve }))
   const preparing = f.prepare()
-  await settle()
+  await f.settle()
   const pending = f.registrations()[0]!
   f.bridge.views.value = new Map()
-  await settle()
+  await f.settle()
   assert.equal(pending.init.signal!.aborted, true)
   release(Response.json({ clientToken: 'obsolete' }))
   await preparing
@@ -222,11 +226,11 @@ test('navigation aborts pending on-demand registration and discards late credent
 
 test('a new prepare after an idle gap obtains a fresh identity, not expired cached credentials', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   await f.prepare()
   await f.bridge.execution.value!.cancel()
   t.mock.timers.tick(60_000)
-  await settle()
+  await f.settle()
   const pulses = f.calls.filter(call => call.path.endsWith('/heartbeat')).length
   assert.equal(pulses, 0)
   await f.prepare()
@@ -237,13 +241,13 @@ test('a new prepare after an idle gap obtains a fresh identity, not expired cach
 
 test('a slow prepare retains client heartbeats without registering another identity', async t => {
   const f = fixture(t)
-  await settle()
+  await f.settle()
   let release!: (response: Response) => void
   f.prepareResponse(() => new Promise(resolve => { release = resolve }))
   const preparing = f.prepare()
-  await settle()
+  await f.settle()
   t.mock.timers.tick(16_000)
-  await settle()
+  await f.settle()
   assert.ok(f.calls.some(call => call.path.endsWith('/heartbeat')))
   assert.equal(f.registrations().length, 1)
   release(Response.json({ leaseToken: 'synthetic-lease', run: { ...run, status: 'running' } }))
@@ -257,12 +261,12 @@ test('same-base duplicate view registrations do not enqueue another read during 
   // Initial ready starts one inventory read; retain it while another view mounts.
   let release!: (response: Response) => void
   f.inventory(() => new Promise(resolve => { release = resolve }))
-  await settle()
+  await f.settle()
   f.bridge.views.value = new Map([...f.bridge.views.value, ['split', { apiBase: base, sessionId: run.sessionId, remote: false }]])
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
   release(Response.json({ runs: [] }))
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
 })
 
@@ -270,14 +274,14 @@ test('switching visible sessions projects the shared Project inventory without a
   const f = fixture(t)
   f.bridge.views.value = new Map([['other', { apiBase: base, sessionId: 'other', remote: false }]])
   f.inventory(async () => Response.json({ runs: [run] }))
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
   assert.equal(f.registrations().length, 0, 'hidden session never acquires capture consent')
   const view = { apiBase: base, sessionId: run.sessionId, remote: false }
   f.bridge.context.value = view
   f.bridge.views.value = new Map([...f.bridge.views.value, ['new-session', view]])
-  await settle()
-  await settle()
+  await f.settle()
+  await f.settle()
   assert.equal(f.polls().length, 1, 'same Project session switch reuses inventory')
   assert.equal(f.registrations().length, 1)
   assert.equal(f.bridge.execution.value?.run.sessionId, run.sessionId)
@@ -286,16 +290,16 @@ test('switching visible sessions projects the shared Project inventory without a
 test('initial discovery waits for subscription ready and absorbs initial reset', async t => {
   const f = fixture(t, true)
   f.live().reset()
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 0)
   t.mock.timers.tick(749)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 0)
   f.ready()
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
   t.mock.timers.tick(1)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
 })
 
@@ -304,21 +308,21 @@ test('bounded initial fallback catches up at ready; real in-flight events queue 
   let release!: (response: Response) => void
   f.inventory(() => new Promise(resolve => { release = resolve }))
   t.mock.timers.tick(750)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 1)
   f.ready()
   f.live().event()
-  await settle()
+  await f.settle()
   f.inventory(async () => Response.json({ runs: [] }))
   release(Response.json({ runs: [] }))
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 2)
   f.phase('reconnecting')
   t.mock.timers.tick(30_000)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 3)
   f.live().reconnected()
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 4)
 })
 
@@ -329,7 +333,7 @@ test('cleanup aborts readiness and inventory without disturbing capture lease pa
   assert.equal(f.closed(), true)
   f.ready()
   t.mock.timers.tick(30_000)
-  await settle()
+  await f.settle()
   assert.equal(f.polls().length, 0)
   assert.equal(f.registrations().length, 0)
 })
@@ -339,13 +343,32 @@ test('removing a base aborts its in-flight discovery and ignores a late response
   const f = fixture(t)
   let release!: (response: Response) => void
   f.inventory(() => new Promise(resolve => { release = resolve }))
-  await settle()
+  await f.settle()
   const request = f.polls()[0]
   f.bridge.views.value = new Map()
-  await settle()
+  await f.settle()
   assert.equal(request.init.signal!.aborted, true)
   release(Response.json({ runs: [run] }))
-  await settle()
+  await f.settle()
   assert.equal(f.bridge.runs.value.has(base), false)
   assert.equal(f.registrations().length, 0)
+})
+
+
+test('revoked projection clears displayed runs and prevents stale prepare after a successful snapshot', async t => {
+  const f = fixture(t)
+  await f.settle()
+  // Retain a visible request without auto-preparing it while seeding push state.
+  f.document.hidden = true
+  f.projection().projectionSnapshot!({ event: 'snapshot', revision: 'authorized', data: { runs: [run] } })
+  assert.equal(f.bridge.runs.value.get(base)?.[0]?.id, run.id)
+  f.inventory(async () => Response.json({ error: 'revoked' }, { status: 403 }))
+  f.document.hidden = false
+  f.projection().projectionUnavailable!()
+  await f.settle()
+  assert.equal(f.bridge.runs.value.has(base), false, 'protected presentation cache cannot outlive authorization')
+  const calls = f.calls.length
+  await f.prepare()
+  assert.equal(f.calls.length, calls, 'a stale UI callback cannot prepare a revoked cached run')
+  assert.equal(f.bridge.execution.value, undefined)
 })

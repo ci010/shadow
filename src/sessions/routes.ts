@@ -182,6 +182,210 @@ async function sessionFileBase(
   return base
 }
 
+/** The same bounded DTO builder backs HTTP and trusted realtime projections. */
+export function createSessionInventoryReader(sessions: SessionManager, options: {
+  cron?: Pick<CronService, 'listJobs'> & Partial<Pick<CronService, 'nextJobRun'>>
+  backgroundTasks?: Pick<BackgroundTaskManager, 'listTasks'>
+  sidebarConnections?: () => ReadonlyArray<{ id: string; platform: string }>
+} = {}) {
+  const summaryRows = new SummaryRowCache<{ sessionId: string; [key: string]: unknown }>()
+  // Recreated logical IDs must not reuse titles from a deleted execution's log.
+  const stateIdentities = new WeakMap<object, number>()
+  let nextStateIdentity = 0
+  let sidebarConnections: ReturnType<NonNullable<typeof options.sidebarConnections>> | undefined
+  return async (summary = true, scope: string | undefined = 'full', requestedIds?: string[]) => {
+    const selected = requestedIds ? new Set(requestedIds) : undefined
+    // Only the sidebar navigation projection excludes removed connections.
+    // Explicit history/full graph reads remain available. On a transient
+    // catalog error retain the last successful snapshot, not an empty catalog.
+    const sidebar = summary && scope === 'navigation' && !selected
+    if (sidebar && options.sidebarConnections) {
+      try { sidebarConnections = options.sidebarConnections().map(bot => ({ ...bot })) }
+      catch { /* An unavailable catalog is not evidence of deletion. */ }
+    }
+    const includeSidebarSession = (sessionId: string) => {
+      if (!sidebar || !sidebarConnections) return true
+      const address = channelAddressFromSessionId(sessionId)
+      return !address || address.projectId !== sessions.projectId || sidebarConnections.some(bot =>
+        bot.id === address.botInstanceId && bot.platform === address.platform)
+    }
+    const states = summary ? (await sessions.listSummaryStates()).filter(state => includeSidebarSession(state.sessionId) && !state.retirement && state.agentType !== 'work-observer'
+      && (!selected || selected.has(state.sessionId))) : []
+    const list = summary ? states.map(state => sessions.historySessionSummary(state))
+      : (await sessions.listHistorySessions()).filter(state => state.agentType !== 'work-observer' && (!selected || selected.has(state.sessionId)))
+    const statesById = new Map(states.map(state => [state.sessionId, state]))
+    if (summary && !selected) summaryRows.retain(new Set(statesById.keys()))
+
+    const nodes: Array<{
+      projectId?: string
+      mode: string
+      agentType: string
+      parentSessionId: string | null
+      executionId?: string
+      executionStatus: string
+      physicalId: string
+      logicalId: string
+      folderId?: string
+      parentPhysicalId: string | null
+      parentIndex: number | null
+      isCurrent: boolean
+      timestamp: string | null
+    }> = []
+
+    // Only enabled schedules delivering to this conversation count; fresh jobs
+    // belong to their runs, not the conversation that created them.
+    const cronTargets = new Set(options.cron?.listJobs()
+      .filter(job => job.enabled !== false && cronContextMode(job) === 'existing')
+      .map(job => job.target?.sessionId))
+    const backgroundOwners = new Set(options.backgroundTasks?.listTasks()
+      .filter(task => task.status === 'running' || task.status === 'cancelling')
+      .map(task => task.sessionId))
+    const enrichedSessions = []
+    // Resolve only the logical context parent. Never enumerate physical segments
+    // for navigation: a session may have arbitrarily many historical segments.
+    const physicalOwners = new Map<string, { id: string; last: number }>()
+    const contextParents = new Map<string, string>()
+    if (summary) for (const state of states) {
+      const prefix = physicalSessionId(state, 0).slice(0, -1)
+      physicalOwners.set(prefix, { id: state.sessionId, last: state.segmentIndex })
+      if (state.parent?.physicalId) contextParents.set(state.sessionId, state.parent.physicalId)
+    }
+    for (const session of list) {
+      const state = summary ? statesById.get(session.sessionId)! : await sessions.readSessionState(session.sessionId)
+      const physical = contextParents.get(session.sessionId)
+      const match = physical?.match(/^(.*-)(\d+)$/)
+      const owner = match ? physicalOwners.get(match[1]) : undefined
+      const contextParentSessionId = owner && Number(match![2]) <= owner.last && owner.id !== session.sessionId ? owner.id : undefined
+      const execution = {
+        mode: state?.mode ?? 'session',
+        agentType: state?.agentType ?? 'general',
+        subRevision: state?.subDraft?.revision,
+        promptRevision: state?.promptDraft?.revision ?? state?.subDraft?.revision,
+        sessionKind: state?.sessionKind,
+        description: state?.mode === 'task' || state?.mode === 'call' ? state.description : undefined,
+        createdBySessionId: state?.createdBySessionId,
+        initiativeId: state?.initiativeId,
+        parentSessionId: delegationOwner(state) ?? null,
+        waitingForCall: !!sessions.isWaitingForCall?.(session.sessionId),
+        executionId: state?.executionId,
+        parentToolCallId: state?.parentToolCallId,
+        executionStatus: sessions.isWaitingForCall?.(session.sessionId) || sessions.yields.get(session.sessionId) || sessions.inputs.get(session.sessionId)
+          ? 'waiting' : state?.executionStatus ?? (state?.lastActivityAt ? 'completed' : 'pending'),
+      }
+      const automation = state ? resolveAutomationSession(state) : undefined
+      const namedTitle = automation?.config?.source === 'system' ? automation.name
+        : state?.topic ?? state?.name ?? state?.generatedTitle ?? state?.chatName
+          ?? (execution.mode !== 'session' ? state?.description : undefined)
+      // Message history can be expensive; only unnamed rows need that fallback.
+      let inferenceDefaults: ReturnType<SessionManager['getSessionInferenceDefaults']> | null
+      if (state && execution.mode === 'session') {
+        try {
+          inferenceDefaults = sessions.getSessionInferenceDefaults(session.sessionId)
+        } catch (error) {
+          console.error(`[sessions] Cannot resolve inference defaults for ${session.sessionId}:`, error)
+          inferenceDefaults = null
+        }
+      }
+      if (summary && state && !stateIdentities.has(state)) stateIdentities.set(state, ++nextStateIdentity)
+      // Pull-validated dirty row: only navigation inputs, not task records,
+      // prompt captures, working context, children or other execution payloads.
+      // Resolve external defaults/waiters on every read so mutable dependencies
+      // remain authoritative even when their publisher emits no event.
+      const inferenceOverrides = state?.config ? {
+        model: state.config.model, thinking: state.config.thinking,
+        reasoningEffort: state.config.reasoningEffort, contextWindow: state.config.contextWindow,
+      } : undefined
+      const discordChannel = state && sessions.projectId ? discordChannelNavigation(state, sessions.projectId) : undefined
+      const navigationAutomation = graphAutomation(automation)
+      const executionInference = execution.mode === 'session' ? undefined : state?.executionInference
+      const fingerprint = summary ? [state && stateIdentities.get(state), { ...session, automation: navigationAutomation }, execution, namedTitle,
+        discordChannel, inferenceOverrides, inferenceDefaults, executionInference,
+        cronTargets.has(session.sessionId), backgroundOwners.has(session.sessionId), contextParentSessionId] : undefined
+      const cached = summary ? summaryRows.get(session.sessionId, fingerprint) : undefined
+      if (cached) { enrichedSessions.push(cached); continue }
+      const title = graphTitle(namedTitle ?? await sessions.getFirstUserMessage(session.sessionId, state ?? undefined) ?? undefined)
+      const row = summary ? {
+        // Explicit navigation DTO: never spread persisted/history metadata.
+        sessionId: session.sessionId,
+        channelSource: session.channelSource,
+        folderId: session.folderId,
+        mode: execution.mode,
+        agentType: execution.agentType,
+        subRevision: execution.subRevision,
+        promptRevision: execution.promptRevision,
+        sessionKind: execution.sessionKind,
+        createdBySessionId: execution.createdBySessionId,
+        parentSessionId: execution.parentSessionId,
+        parentToolCallId: execution.parentToolCallId,
+        executionStatus: execution.executionStatus,
+        waitingForCall: execution.waitingForCall,
+        automation: navigationAutomation,
+        discordChannel,
+        completed: state?.completed ?? false,
+        hasCron: cronTargets.has(session.sessionId),
+        hasBackgroundTasks: backgroundOwners.has(session.sessionId),
+        // Topic is semantic metadata, not a title alias. Preserve it exactly;
+        // send a display fallback only when the topic is empty.
+        topic: state ? sessionTopic(state) : undefined,
+        title: (state && sessionTopic(state).trim()) ? undefined : graphTitle(session.name)?.trim() ? graphTitle(session.name) : title,
+        focus: state?.focus,
+        description: execution.description,
+        inferenceOverrides, inferenceDefaults, executionInference,
+        lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ?? null,
+        contextParentSessionId,
+      } : {
+        ...session,
+        ...execution,
+        // The renderer prioritizes name over title, so bound both preview fields.
+        name: graphTitle(session.name),
+        automation: navigationAutomation,
+        discordChannel,
+        completed: state?.completed ?? false,
+        hasCron: cronTargets.has(session.sessionId),
+        hasBackgroundTasks: backgroundOwners.has(session.sessionId),
+        title,
+        topic: state ? sessionTopic(state) : title,
+        focus: state?.focus,
+        description: execution.description,
+        ...(summary ? { config: undefined, inferenceOverrides } : { config: state?.config ?? undefined }),
+        inferenceDefaults,
+        executionInference,
+        lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
+          null,
+        ...(contextParentSessionId ? { contextParentSessionId } : {}),
+      }
+      // Detach nested focus/automation/defaults from mutable runtime metadata.
+      const snapshot = summary ? structuredClone(row) : row
+      enrichedSessions.push(snapshot)
+      // An empty log can receive its first user record without a metadata change.
+      if (summary && (namedTitle !== undefined || title !== undefined)) summaryRows.set(session.sessionId, fingerprint, snapshot)
+      if (!summary) for (let i = 0; i <= session.segmentIndex; i++) {
+        const physicalId = physicalSessionId(state ?? session, i)
+        const parentPhysicalId = state?.parent?.physicalId ??
+          null
+        nodes.push({
+          ...execution,
+          ...(state?.projectId ? { projectId: state.projectId } : {}),
+          physicalId,
+          logicalId: session.sessionId,
+          folderId: state?.folderId,
+          parentPhysicalId,
+          parentIndex: state?.parent?.index ?? null,
+          isCurrent: i === session.segmentIndex,
+          timestamp: state?.lastActivityAt ?? null,
+        })
+      }
+    }
+
+    if (summary) {
+      return { sessions: scope === 'navigation' && !selected ? navigationSummary(enrichedSessions) : enrichedSessions }
+    }
+    return { sessions: enrichedSessions, nodes,
+      ...(requestedIds ? { partial: true, sessionIds: requestedIds } : {}),
+    }
+  }
+}
+
 /**
  * Gateway plugin exposing read-only session inspection endpoints.
  *
@@ -212,11 +416,7 @@ export function sessionsApiPlugin(
   } = {},
 ): GatewayPlugin {
   const summaryResponse = createSummaryResponder(undefined, undefined, true)
-  const summaryRows = new SummaryRowCache<{ sessionId: string; [key: string]: unknown }>()
-  // Recreated logical IDs must not reuse titles from a deleted execution's log.
-  const stateIdentities = new WeakMap<object, number>()
-  let nextStateIdentity = 0
-  let sidebarConnections: ReturnType<NonNullable<typeof options.sidebarConnections>> | undefined
+  const readInventory = sessions ? createSessionInventoryReader(sessions, options) : undefined
   return (app: Hono) => {
     const authorizeOwnerQuestion: Parameters<Hono['use']>[1] = async (c, next) => {
       if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && sessions?.yields.get(c.req.param('key') ?? '')?.ownerOnly &&
@@ -329,196 +529,10 @@ export function sessionsApiPlugin(
           if (new Set(requestedIds).size !== requestedIds.length) throw new Error('duplicate')
         } catch { return c.json({ error: 'invalid_graph_session_ids' }, 400) }
       }
-      const selected = requestedIds ? new Set(requestedIds) : undefined
-      // Only the sidebar navigation projection excludes removed connections.
-      // Explicit history/full graph reads remain available. On a transient
-      // catalog error retain the last successful snapshot, not an empty catalog.
-      const sidebar = summary && scope === 'navigation' && !selected
-      if (sidebar && options.sidebarConnections) {
-        try { sidebarConnections = options.sidebarConnections().map(bot => ({ ...bot })) }
-        catch { /* An unavailable catalog is not evidence of deletion. */ }
-      }
-      const includeSidebarSession = (sessionId: string) => {
-        if (!sidebar || !sidebarConnections) return true
-        const address = channelAddressFromSessionId(sessionId)
-        return !address || address.projectId !== sessions.projectId || sidebarConnections.some(bot =>
-          bot.id === address.botInstanceId && bot.platform === address.platform)
-      }
-      const states = summary ? (await sessions.listSummaryStates()).filter(state => includeSidebarSession(state.sessionId) && !state.retirement && state.agentType !== 'work-observer'
-        && (!selected || selected.has(state.sessionId))) : []
-      const list = summary ? states.map(state => sessions.historySessionSummary(state))
-        : (await sessions.listHistorySessions()).filter(state => state.agentType !== 'work-observer' && (!selected || selected.has(state.sessionId)))
-      const statesById = new Map(states.map(state => [state.sessionId, state]))
-      if (summary && !selected) summaryRows.retain(new Set(statesById.keys()))
       c.header('Cache-Control', 'no-store')
-
-      const nodes: Array<{
-        projectId?: string
-        mode: string
-        agentType: string
-        parentSessionId: string | null
-        executionId?: string
-        executionStatus: string
-        physicalId: string
-        logicalId: string
-        folderId?: string
-        parentPhysicalId: string | null
-        parentIndex: number | null
-        isCurrent: boolean
-        timestamp: string | null
-      }> = []
-
-      // Only enabled schedules delivering to this conversation count; fresh jobs
-      // belong to their runs, not the conversation that created them.
-      const cronTargets = new Set(options.cron?.listJobs()
-        .filter(job => job.enabled !== false && cronContextMode(job) === 'existing')
-        .map(job => job.target?.sessionId))
-      const backgroundOwners = new Set(options.backgroundTasks?.listTasks()
-        .filter(task => task.status === 'running' || task.status === 'cancelling')
-        .map(task => task.sessionId))
-      const enrichedSessions = []
-      // Resolve only the logical context parent. Never enumerate physical segments
-      // for navigation: a session may have arbitrarily many historical segments.
-      const physicalOwners = new Map<string, { id: string; last: number }>()
-      const contextParents = new Map<string, string>()
-      if (summary) for (const state of states) {
-        const prefix = physicalSessionId(state, 0).slice(0, -1)
-        physicalOwners.set(prefix, { id: state.sessionId, last: state.segmentIndex })
-        if (state.parent?.physicalId) contextParents.set(state.sessionId, state.parent.physicalId)
-      }
-      for (const session of list) {
-        const state = summary ? statesById.get(session.sessionId)! : await sessions.readSessionState(session.sessionId)
-        const physical = contextParents.get(session.sessionId)
-        const match = physical?.match(/^(.*-)(\d+)$/)
-        const owner = match ? physicalOwners.get(match[1]) : undefined
-        const contextParentSessionId = owner && Number(match![2]) <= owner.last && owner.id !== session.sessionId ? owner.id : undefined
-        const execution = {
-          mode: state?.mode ?? 'session',
-          agentType: state?.agentType ?? 'general',
-          subRevision: state?.subDraft?.revision,
-          promptRevision: state?.promptDraft?.revision ?? state?.subDraft?.revision,
-          sessionKind: state?.sessionKind,
-          description: state?.mode === 'task' || state?.mode === 'call' ? state.description : undefined,
-          createdBySessionId: state?.createdBySessionId,
-          initiativeId: state?.initiativeId,
-          parentSessionId: delegationOwner(state) ?? null,
-          waitingForCall: !!sessions.isWaitingForCall?.(session.sessionId),
-          executionId: state?.executionId,
-          parentToolCallId: state?.parentToolCallId,
-          executionStatus: sessions.isWaitingForCall?.(session.sessionId) || sessions.yields.get(session.sessionId) || sessions.inputs.get(session.sessionId)
-            ? 'waiting' : state?.executionStatus ?? (state?.lastActivityAt ? 'completed' : 'pending'),
-        }
-        const automation = state ? resolveAutomationSession(state) : undefined
-        const namedTitle = automation?.config?.source === 'system' ? automation.name
-          : state?.topic ?? state?.name ?? state?.generatedTitle ?? state?.chatName
-            ?? (execution.mode !== 'session' ? state?.description : undefined)
-        // Message history can be expensive; only unnamed rows need that fallback.
-        let inferenceDefaults: ReturnType<SessionManager['getSessionInferenceDefaults']> | null
-        if (state && execution.mode === 'session') {
-          try {
-            inferenceDefaults = sessions.getSessionInferenceDefaults(session.sessionId)
-          } catch (error) {
-            console.error(`[sessions] Cannot resolve inference defaults for ${session.sessionId}:`, error)
-            inferenceDefaults = null
-          }
-        }
-        if (summary && state && !stateIdentities.has(state)) stateIdentities.set(state, ++nextStateIdentity)
-        // Pull-validated dirty row: only navigation inputs, not task records,
-        // prompt captures, working context, children or other execution payloads.
-        // Resolve external defaults/waiters on every read so mutable dependencies
-        // remain authoritative even when their publisher emits no event.
-        const inferenceOverrides = state?.config ? {
-          model: state.config.model, thinking: state.config.thinking,
-          reasoningEffort: state.config.reasoningEffort, contextWindow: state.config.contextWindow,
-        } : undefined
-        const discordChannel = state && sessions.projectId ? discordChannelNavigation(state, sessions.projectId) : undefined
-        const navigationAutomation = graphAutomation(automation)
-        const executionInference = execution.mode === 'session' ? undefined : state?.executionInference
-        const fingerprint = summary ? [state && stateIdentities.get(state), { ...session, automation: navigationAutomation }, execution, namedTitle,
-          discordChannel, inferenceOverrides, inferenceDefaults, executionInference,
-          cronTargets.has(session.sessionId), backgroundOwners.has(session.sessionId), contextParentSessionId] : undefined
-        const cached = summary ? summaryRows.get(session.sessionId, fingerprint) : undefined
-        if (cached) { enrichedSessions.push(cached); continue }
-        const title = graphTitle(namedTitle ?? await sessions.getFirstUserMessage(session.sessionId, state ?? undefined) ?? undefined)
-        const row = summary ? {
-          // Explicit navigation DTO: never spread persisted/history metadata.
-          sessionId: session.sessionId,
-          channelSource: session.channelSource,
-          folderId: session.folderId,
-          mode: execution.mode,
-          agentType: execution.agentType,
-          subRevision: execution.subRevision,
-          promptRevision: execution.promptRevision,
-          sessionKind: execution.sessionKind,
-          createdBySessionId: execution.createdBySessionId,
-          parentSessionId: execution.parentSessionId,
-          parentToolCallId: execution.parentToolCallId,
-          executionStatus: execution.executionStatus,
-          waitingForCall: execution.waitingForCall,
-          automation: navigationAutomation,
-          discordChannel,
-          completed: state?.completed ?? false,
-          hasCron: cronTargets.has(session.sessionId),
-          hasBackgroundTasks: backgroundOwners.has(session.sessionId),
-          // Topic is semantic metadata, not a title alias. Preserve it exactly;
-          // send a display fallback only when the topic is empty.
-          topic: state ? sessionTopic(state) : undefined,
-          title: (state && sessionTopic(state).trim()) ? undefined : graphTitle(session.name)?.trim() ? graphTitle(session.name) : title,
-          focus: state?.focus,
-          description: execution.description,
-          inferenceOverrides, inferenceDefaults, executionInference,
-          lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ?? null,
-          contextParentSessionId,
-        } : {
-          ...session,
-          ...execution,
-          // The renderer prioritizes name over title, so bound both preview fields.
-          name: graphTitle(session.name),
-          automation: navigationAutomation,
-          discordChannel,
-          completed: state?.completed ?? false,
-          hasCron: cronTargets.has(session.sessionId),
-          hasBackgroundTasks: backgroundOwners.has(session.sessionId),
-          title,
-          topic: state ? sessionTopic(state) : title,
-          focus: state?.focus,
-          description: execution.description,
-          ...(summary ? { config: undefined, inferenceOverrides } : { config: state?.config ?? undefined }),
-          inferenceDefaults,
-          executionInference,
-          lastActivityAt: state?.lastActivityAt ?? session.lastActivityAt ??
-            null,
-          ...(contextParentSessionId ? { contextParentSessionId } : {}),
-        }
-        // Detach nested focus/automation/defaults from mutable runtime metadata.
-        const snapshot = summary ? structuredClone(row) : row
-        enrichedSessions.push(snapshot)
-        // An empty log can receive its first user record without a metadata change.
-        if (summary && (namedTitle !== undefined || title !== undefined)) summaryRows.set(session.sessionId, fingerprint, snapshot)
-        if (!summary) for (let i = 0; i <= session.segmentIndex; i++) {
-          const physicalId = physicalSessionId(state ?? session, i)
-          const parentPhysicalId = state?.parent?.physicalId ??
-            null
-          nodes.push({
-            ...execution,
-            ...(state?.projectId ? { projectId: state.projectId } : {}),
-            physicalId,
-            logicalId: session.sessionId,
-            folderId: state?.folderId,
-            parentPhysicalId,
-            parentIndex: state?.parent?.index ?? null,
-            isCurrent: i === session.segmentIndex,
-            timestamp: state?.lastActivityAt ?? null,
-          })
-        }
-      }
-
-      if (summary) {
-        return summaryResponse(c, sessions.projectId, { sessions: scope === 'navigation' && !selected ? navigationSummary(enrichedSessions) : enrichedSessions })
-      }
-      return conditionalSessionJson(c, sessions.projectId, { sessions: enrichedSessions, nodes,
-        ...(requestedIds ? { partial: true, sessionIds: requestedIds } : {}),
-      })
+      const data = await readInventory!(summary, scope, requestedIds)
+      return summary ? summaryResponse(c, sessions.projectId, data as { sessions: Array<{ sessionId: string; [key: string]: unknown }> })
+        : conditionalSessionJson(c, sessions.projectId, data)
     })
 
     app.get('/api/sessions/:key/file-changes', async c => {

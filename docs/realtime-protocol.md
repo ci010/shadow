@@ -43,6 +43,58 @@ Commands are limited to 128 distinct topics, 32 KiB of topic JSON, and 64 KiB
 per frame. Invalid commands close the socket; clients can reconnect with
 per-topic cursors or recover through snapshots.
 
+## Fixed WebSocket read projections
+
+The renderer-safe contract is [`projection-wire.ts`](../src/realtime/projection-wire.ts).
+These explicit Project-qualified topics are available on the existing socket:
+
+- `{kind:'session-summary', projectId, scope:'navigation'|'full'}` uses the same
+  bounded DTO builder and navigation pruning as `/api/sessions/summary`.
+- `{kind:'session-stages', projectId}` initially supplies the sparse
+  `/api/sessions/stages` DTO. Continue consuming the existing `sessions` topic's
+  validated `activity` replacements; activity ticks do not reread the full map.
+- `{kind:'io-runs', projectId}` supplies `{runs}` with the same accessible-session
+  filtering and 100-run bound as `/api/io/runs`.
+- `{kind:'folders', projectId}`, `{kind:'folder-devices', projectId}` and
+  `{kind:'nodes', projectId}` supply the corresponding folders, picker devices,
+  and Main inventory HTTP DTOs. Admission uses the socket owner's current
+  authorization, not a credential supplied in the subscription. Node inventory
+  has the same host-wide visibility as its authorized HTTP endpoint; Project
+  qualification is a subscription/cache boundary, not a narrowed inventory claim.
+
+Hosts with a registered projection reader advertise `projectionSnapshots:true`
+in subscription acknowledgements. Mixed-version clients should negotiate this
+using legacy topics first, before sending these new topic kinds to an older
+host that cannot parse them.
+
+An accepted newly added projection is always resnapshotted, even when its cursor
+could replay ordinary events. The subscribe acknowledgement adds
+`projections:[{topic,snapshot:{event:'snapshot',revision,data}}]`, or an explicit
+`{topic,error:'projection_unavailable'}`. For a new consumer of an already active
+shared topic, or recovery after a revision mismatch, send `snapshot:true` on that
+subscription entry. This returns another acknowledgement snapshot without
+replacing the socket or disturbing other topics. Revisions are opaque strings.
+
+Updates use ordinary topic `event` envelopes. Summary and runs payloads are
+`{event:'delta',base,revision,upsert,removed}` relative to that socket's last
+snapshot/delta; key rows by `sessionId` and `id`, respectively. Apply the whole
+delta only when `base` matches; otherwise request a fresh snapshot. Other
+projections send `{event:'snapshot',revision,data}` replacements. Revision and
+row equality suppress unchanged output. Inventory bodies and per-viewer delta
+baselines are never put into the shared replay journal or another socket's
+cache. Lease replacement, replay gaps and reconnects use fresh snapshots rather
+than attempting to replay private inventory data.
+
+Reads retry across concurrent published mutations and recheck runtime identity
+and topic authorization before delivery. Repeated instability/read failure on
+an active projection disconnects for resnapshot. Existing per-client bounded
+send queues also apply to snapshots and deltas. HTTP remains an exceptional
+recovery/older-host path, not the normal response to projection changes. SSE
+retains its legacy invalidation topics and HTTP baselines; it does not supply
+these WebSocket acknowledgement projections. Audio status remains HTTP: its
+readiness includes externally changed executable/model paths without an
+observable authoritative change feed.
+
 ## SSE endpoint
 
 `GET /api/live?topics=<JSON array>&cursor=<optional epoch:sequence>` is a

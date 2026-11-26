@@ -1,3 +1,4 @@
+import { projectionKinds, projectionPayload, projectionRevision, type ProjectionReader, type ProjectionTopic } from './projections.ts'
 import { presenceReportSchema, type PresenceReport } from '../sessions/presence.ts'
 import { randomUUID } from 'node:crypto'
 import { parseSessionActivityReadModel, type SessionActivityReadModel } from '../sessions/activity-read-model.ts'
@@ -27,6 +28,7 @@ export interface RealtimePublisher {
 }
 interface Project {
   presence?: (report: PresenceReport) => void
+  projection?: ProjectionReader
   conversation?: (sessionId: string) => Promise<{ data?: unknown; error?: string }>
   telemetry?: RealtimeTelemetry
   tails: Map<TelemetryKind, { startedAt: number; count: number; timer: ReturnType<typeof setInterval> }>
@@ -38,6 +40,7 @@ interface Client {
   send(frame: Uint8Array): boolean
   close(error?: Error): void
   refresh(reason: ResetReason, projectId: string): void
+  projectionsChanged?(topic: RealtimeTopic, payload: unknown): void
   removeProject?(projectId: string): void
 }
 interface JournalEntry { sequence: number; projectId?: string; key: string; frame: Uint8Array; conversationOnly: boolean }
@@ -47,6 +50,7 @@ interface JournalEntry { sequence: number; projectId?: string; key: string; fram
 export class RealtimeHub {
   private readonly epoch = randomUUID()
   private sequence = 0
+  private mutation = 0
   private replayFloor = 0
   private journal: JournalEntry[] = []
   private journalBytes = 0
@@ -75,17 +79,24 @@ export class RealtimeHub {
     if (!this.closed) this.publish({ kind: 'projects' }, { event: 'invalidate' })
   }
 
+  /** Main inventory includes registered folders from every Project. */
+  invalidateNodeInventory(): void {
+    if (this.closed) return
+    for (const projectId of this.projects.keys()) this.publish({ kind: 'resources', projectId }, { event: 'invalidate', resource: 'nodes' })
+  }
+
   projectReady(projectId: string): void {
     for (const client of this.clients) {
       if (client.topics.some(topic => topic.projectId === projectId)) client.refresh('project-restored', projectId)
     }
   }
 
-  registerProject(projectId: string, telemetry?: RealtimeTelemetry, conversation?: Project['conversation'], presence?: Project['presence']): RealtimePublisher {
+  registerProject(projectId: string, telemetry?: RealtimeTelemetry, conversation?: Project['conversation'], presence?: Project['presence'], projection?: ProjectionReader): RealtimePublisher {
     if (this.closed || !isRealtimeTopic({ kind: 'sessions', projectId }) || this.projects.has(projectId)) {
       throw new TypeError('Invalid or duplicate realtime project')
     }
-    const project: Project = { telemetry, conversation, presence, tails: new Map() }
+    const project: Project = { telemetry, conversation, presence, projection, tails: new Map() }
+    this.mutation++
     this.projects.set(projectId, project)
     for (const client of this.clients) {
       if (client.topics.some(topic => topic.projectId === projectId)) client.refresh('project-restored', projectId)
@@ -117,6 +128,7 @@ export class RealtimeHub {
       },
       close: () => {
         if (!active()) return
+        this.mutation++
         this.projects.delete(projectId)
         for (const tail of project.tails.values()) clearInterval(tail.timer)
         project.tails.clear()
@@ -143,6 +155,7 @@ export class RealtimeHub {
 
   private publish(topic: RealtimeTopic, payload: unknown, requestId?: string): void {
     if (!isRealtimeTopic(topic)) throw new TypeError('Invalid realtime publication topic')
+    this.mutation++
     const event: EventEnvelope = { type: 'event', cursor: `${this.epoch}:${++this.sequence}`, topic, payload, ...(requestId ? { requestId } : {}) }
     const frame = this.frame(event)
     const key = realtimeTopicKey(topic)
@@ -154,7 +167,10 @@ export class RealtimeHub {
       this.journalBytes -= removed.frame.byteLength
       this.replayFloor = Math.max(this.replayFloor, removed.sequence)
     }
-    for (const client of this.clients) if (client.keys.has(key) && (!conversationOnly || client.conversationTopics?.has(key))) client.send(frame)
+    for (const client of this.clients) {
+      if (client.keys.has(key) && (!conversationOnly || client.conversationTopics?.has(key))) client.send(frame)
+      client.projectionsChanged?.(topic, payload)
+    }
   }
 
   private subscribeTelemetry(topic: RealtimeTopic): () => void {
@@ -225,6 +241,48 @@ export class RealtimeHub {
     let lastId = -1
     const active = new Map<string, { topic: RealtimeTopic; release(): void }>()
     const decoder = new TextDecoder()
+    const projected = new Map<string, { revision: string; data: unknown }>()
+    const refreshing = new Set<string>()
+    const dirty = new Set<string>()
+    const isProjection = (topic: RealtimeTopic): topic is ProjectionTopic => (projectionKinds as readonly string[]).includes(topic.kind)
+    const readProjection = async (topic: ProjectionTopic) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const project = this.projects.get(topic.projectId)
+        if (!project?.projection || !authorizeTopic(topic)) throw new Error('projection_unavailable')
+        const before = this.mutation
+        const data = await project.projection(topic)
+        if (ended || project !== this.projects.get(topic.projectId) || !authorizeTopic(topic)) throw new Error('projection_unavailable')
+        // Retry any overlapping mutation. A snapshot is never stamped after a
+        // mutation whose data it may not contain, including journal eviction.
+        if (before !== this.mutation) continue
+        return { data: structuredClone(data), revision: projectionRevision(data) }
+      }
+      throw new Error('projection_changed')
+    }
+    const refreshProjection = async (topic: ProjectionTopic) => {
+      const key = realtimeTopicKey(topic)
+      dirty.add(key)
+      if (refreshing.has(key) || updating) return
+      refreshing.add(key)
+      try {
+        while (!ended && dirty.delete(key) && active.has(key)) {
+          const next = await readProjection(topic)
+          if (ended || !active.has(key) || !authorizeTopic(topic)) return
+          if (updating) { dirty.add(key); return }
+          const previous = projected.get(key)
+          if (previous?.revision === next.revision) continue
+          const payload = projectionPayload(topic, next.data, previous)
+          // Private viewer projection: never put inventory in the shared journal.
+          send(JSON.stringify({ type: 'event', cursor: `${this.epoch}:${++this.sequence}`, topic, payload }))
+          projected.set(key, next)
+        }
+      } catch {
+        // No invalidate/GET normal path: a failed projection closes the socket
+        // so reconnect resnapshots, while HTTP remains the exceptional fallback.
+        if (!ended && active.has(key)) client.close(new Error('Realtime projection failed; reconnect and resnapshot'))
+      } finally { refreshing.delete(key) }
+    }
+
     const send = (text: string) => {
       if (ended || socket.readyState !== socket.OPEN) return false
       if (socket.bufferedAmount + Buffer.byteLength(text) > this.options.clientBytes) {
@@ -238,6 +296,8 @@ export class RealtimeHub {
     const remove = (key: string) => {
       active.get(key)?.release()
       active.delete(key)
+      projected.delete(key)
+      dirty.delete(key)
       client.keys.delete(key)
       client.conversationTopics?.delete(key)
     }
@@ -255,6 +315,10 @@ export class RealtimeHub {
       client.topics = [...active.values()].map(entry => entry.topic)
       send(JSON.stringify({ type: 'topic-reset', cursor: this.cursor, topics, reason,
         unavailable: this.projects.has(projectId) ? [] : topics }))
+      for (const topic of topics) if (!removed && isProjection(topic) && this.projects.has(projectId)) {
+        projected.delete(realtimeTopicKey(topic))
+        void refreshProjection(topic)
+      }
     }
     const cleanup = () => {
       if (ended) return
@@ -279,6 +343,22 @@ export class RealtimeHub {
       refresh: (reason, projectId) => {
         try { availability(projectId, reason, false) }
         catch { client.close(new Error('Realtime project refresh failed')) }
+      },
+      projectionsChanged: (changed, payload) => {
+        for (const { topic } of active.values()) {
+          if (!isProjection(topic) || topic.projectId !== changed.projectId) continue
+          const event = payload as { event?: string; resource?: string }
+          const sessionsChanged = changed.kind === 'sessions' && event.event !== 'activity'
+          const foldersChanged = changed.kind === 'resources' && event.resource === 'folders'
+          const nodesChanged = changed.kind === 'resources' && event.resource === 'nodes'
+          if (sessionsChanged && (topic.kind === 'session-summary' || topic.kind === 'session-stages' || topic.kind === 'io-runs') ||
+            changed.kind === 'integrations' && topic.kind === 'session-summary' ||
+            changed.kind === 'io' && topic.kind === 'io-runs' ||
+            foldersChanged && (topic.kind === 'folders' || topic.kind === 'io-runs') ||
+            nodesChanged && (topic.kind === 'nodes' || topic.kind === 'folder-devices' || topic.kind === 'io-runs')) {
+            void refreshProjection(topic)
+          }
+        }
       },
       removeProject: projectId => availability(projectId, 'project-removed', true),
     }
@@ -310,6 +390,7 @@ export class RealtimeHub {
         const projects = [...this.projects.values()]
         const ack: RealtimeSubscriptionAck = {
           type: 'subscribed', id: lastId, cursor: this.cursor, added: [], removed: [], rejected: [],
+          ...(projects.some(project => project.projection) ? { projectionSnapshots: true } : {}),
           ...(projects.some(project => project.conversation) ? { conversationOpen: true } : {}),
           ...(projects.some(project => project.presence) ? { socketPresence: true } : {}),
         }
@@ -321,6 +402,7 @@ export class RealtimeHub {
           } else desired.set(realtimeTopicKey(topic), entry)
         }
         const opening = new Set<string>()
+        let conversationMutation = this.mutation
         if ('conversations' in command && command.conversations) {
           updating = true
           const topics = command.conversations
@@ -350,8 +432,37 @@ export class RealtimeHub {
             break
           }
           ack.conversations ??= topics.map(topic => ({ topic, error: 'conversation_changed' }))
+          conversationMutation = this.mutation
           updating = false
         }
+        const projectionReads: Array<{ topic: ProjectionTopic; value: { revision: string; data: unknown } }> = []
+        const projectionTopics = [...desired].flatMap(([key, { topic, snapshot }]) =>
+          isProjection(topic) && (!active.has(key) || snapshot) ? [topic] : [])
+        updating = true
+        // Read a batch once in the common case. A single watermark covers all
+        // results, so an earlier topic cannot become stale while a later awaits.
+        for (let attempt = 0; projectionTopics.length && attempt < 3; attempt++) {
+          const before = this.mutation
+          const reads = await Promise.all(projectionTopics.map(async topic => {
+            try { return { topic, value: await readProjection(topic) } }
+            catch { return { topic, error: 'projection_unavailable' } }
+          }))
+          if (before !== this.mutation) {
+            if (attempt === 2) throw new Error('Projection batch changed')
+            continue
+          }
+          for (const entry of reads) {
+            if (entry.value) projectionReads.push({ topic: entry.topic, value: entry.value })
+            else { ack.projections ??= []; ack.projections.push({ topic: entry.topic, error: entry.error }) }
+          }
+          break
+        }
+        if (ended) return
+        if (ack.conversations && conversationMutation !== this.mutation) {
+          ack.conversations = ack.conversations.map(({ topic }) => ({ topic, error: 'conversation_changed' }))
+          opening.clear()
+        }
+        updating = false
         for (const [key, entry] of active) if (!desired.has(key)) {
           ack.removed.push(entry.topic)
           remove(key)
@@ -360,7 +471,7 @@ export class RealtimeHub {
         for (const [key, { topic, cursor, conversation }] of desired) {
           if (conversation) client.conversationTopics!.add(key)
           if (active.has(key)) continue
-          const { reason, after } = this.resume([topic], opening.has(key) ? this.cursor : cursor)
+          const { reason, after } = this.resume([topic], opening.has(key) || isProjection(topic) ? this.cursor : cursor)
           const unavailable = topic.kind !== 'projects' && !this.projects.has(topic.projectId)
           active.set(key, { topic, release: this.subscribeTelemetry(topic) })
           client.keys.add(key)
@@ -373,8 +484,18 @@ export class RealtimeHub {
           const after = replayAfter.get(event.key)
           if (after !== undefined && event.sequence > after && (!event.conversationOnly || client.conversationTopics?.has(event.key)) && !client.send(event.frame)) return
         }
+        for (const { topic, value } of projectionReads) {
+          if (!authorizeTopic(topic)) throw new Error('Projection access revoked')
+          projected.set(realtimeTopicKey(topic), value)
+          ack.projections ??= []
+          ack.projections.push({ topic, snapshot: { event: 'snapshot', ...value } })
+        }
         ack.cursor = this.cursor
         send(JSON.stringify(ack))
+        for (const key of dirty) {
+          const topic = active.get(key)?.topic
+          if (topic && isProjection(topic)) void refreshProjection(topic)
+        }
       } catch { client.close(new Error('Realtime subscription failed')) }
     }
     const heartbeat = setInterval(() => send(JSON.stringify({ type: 'heartbeat', cursor: this.cursor })), this.options.heartbeatMs)

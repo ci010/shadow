@@ -83,20 +83,31 @@
 </template>
 
 <script setup lang="ts">
+import { useCatalogResourceStore } from '../stores/catalog.ts'
+import { requireResourcePinia } from '../stores/app.ts'
+import { useLiveClientPool, liveProjectId } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
-import { computed, nextTick, onDeactivated, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onDeactivated, onUnmounted, ref, watch, shallowRef } from 'vue'
 import { createCloneController, type CloneView, type FolderRecord, type FoldersClient } from '../folders-client.ts'
 import { isAbsoluteFolderPath, suggestCloneDirectory } from '../folders-sidebar.ts'
 import OverlayTransition from './OverlayTransition.vue'
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 
-const props = defineProps<{ mode: 'open' | 'remote' | 'clone' | null; client: FoldersClient }>()
+const props = defineProps<{ mode: 'open' | 'remote' | 'clone' | null; client: FoldersClient; apiBase?: string }>()
 const emit = defineEmits<{
   close: []
   registered: [folder: FolderRecord]
   status: [view: CloneView]
 }>()
 const installation = useInstallationContext()
+const catalogOwner = useCatalogResourceStore(requireResourcePinia()).owner
+const livePool = useLiveClientPool()
+const deviceLease = shallowRef<ReturnType<typeof catalogOwner.pickerDevices>>()
+watch(() => [props.mode, props.apiBase] as const, () => {
+  deviceLease.value?.release(); deviceLease.value = undefined
+  if (props.mode && props.apiBase) deviceLease.value = catalogOwner.pickerDevices(props.apiBase, liveProjectId(props.apiBase), livePool)
+}, { immediate: true })
+onUnmounted(() => deviceLease.value?.release())
 const dialog = ref<HTMLElement>()
 const urlInput = ref<HTMLInputElement>()
 const pathInput = ref<HTMLInputElement>()
@@ -109,6 +120,7 @@ const error = ref('')
 const cloneView = ref<CloneView>({ state: 'idle' })
 const devices = ref<Awaited<ReturnType<FoldersClient['pickerDevices']>>>([])
 const nodeId = ref('')
+watch(() => deviceLease.value?.state.value.value, value => { if (value) devices.value = value })
 const selectedDevice = computed(() => devices.value.find(d => d.nodeId === nodeId.value))
 const listing = ref<Awaited<ReturnType<FoldersClient['browseDirectory']>>>()
 const cloneActive = computed(() => props.mode === 'clone' && ['starting', 'running', 'cancelling', 'unknown'].includes(cloneView.value.state))
@@ -154,7 +166,12 @@ async function loadDevices() {
   busy.value = true
   error.value = ''
   try {
-    const result = await props.client.pickerDevices(abort.signal)
+    let result: Awaited<ReturnType<FoldersClient['pickerDevices']>>
+    if (deviceLease.value) {
+      await deviceLease.value.read()
+      if (deviceLease.value.state.value.error) throw new Error(deviceLease.value.state.value.error)
+      result = deviceLease.value.state.value.value ?? []
+    } else result = await props.client.pickerDevices(abort.signal)
     if (request !== abort || abort.signal.aborted) return
     devices.value = result
     if (!nodeId.value) {

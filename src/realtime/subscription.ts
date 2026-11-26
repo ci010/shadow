@@ -1,7 +1,8 @@
+import type { ProjectionTopic, ProjectionSnapshot } from './projection-wire.ts'
 import { isRealtimeTopic, realtimeTopicKey, REALTIME_MAX_TOPICS, REALTIME_MAX_TOPICS_BYTES, type RealtimeEnvelope, type RealtimeTopic } from './protocol.ts'
 
 export const REALTIME_SUBSCRIBE_BYTES = REALTIME_MAX_TOPICS_BYTES * 2
-export type RealtimeSubscription = { topic: RealtimeTopic; cursor?: string; conversation?: true }
+export type RealtimeSubscription = { topic: RealtimeTopic; cursor?: string; conversation?: true; snapshot?: true }
 export type RealtimeSubscriptionCommand = { type: 'subscribe'; id: number; subscriptions: RealtimeSubscription[] }
 export function parseRealtimeSocketCommand(text: string) {
   if (Buffer.byteLength(text) > REALTIME_SUBSCRIBE_BYTES) throw new TypeError('Subscription frame too large')
@@ -29,6 +30,8 @@ export type RealtimeSubscriptionAck = {
     reason?: Extract<RealtimeEnvelope, { type: 'reset' }>['reason']
     unavailable?: true
   }>
+  projectionSnapshots?: true
+  projections?: Array<{ topic: ProjectionTopic; snapshot?: ProjectionSnapshot; error?: string }>
   conversationOpen?: true
   socketPresence?: true
   conversations?: Array<{ topic: RealtimeTopic; data?: unknown; error?: string }>
@@ -49,6 +52,7 @@ export function parseRealtimeSubscription(text: string): { id: number; subscript
   const keys = new Set<string>()
   for (const entry of value.subscriptions as unknown[]) {
     if (!record(entry) || !isRealtimeTopic(entry.topic) ||
+      (entry.snapshot !== undefined && entry.snapshot !== true) ||
       (entry.conversation !== undefined && (entry.conversation !== true || entry.topic.kind !== 'chat')) ||
       (entry.cursor !== undefined && (typeof entry.cursor !== 'string' || entry.cursor.length > 128))) {
       throw new TypeError('Invalid subscription')
@@ -56,7 +60,7 @@ export function parseRealtimeSubscription(text: string): { id: number; subscript
     const key = realtimeTopicKey(entry.topic)
     if (keys.has(key)) throw new TypeError('Duplicate subscription topic')
     keys.add(key)
-    subscriptions.push({ topic: entry.topic, cursor: entry.cursor, ...(entry.conversation ? { conversation: true } : {}) })
+    subscriptions.push({ topic: entry.topic, cursor: entry.cursor, ...(entry.conversation ? { conversation: true } : {}), ...(entry.snapshot ? { snapshot: true } : {}) })
   }
   if (Buffer.byteLength(JSON.stringify(subscriptions.map(entry => entry.topic))) > REALTIME_MAX_TOPICS_BYTES) {
     throw new TypeError('Subscription topic set too large')

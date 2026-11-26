@@ -1030,3 +1030,48 @@ test('socket ACK queued during older HTTP paging applies after that page without
   assert.equal(f.requests.filter(request => request.path.endsWith('/chat/session')).length, 2)
   assert.equal(f.refreshRequests(), 1)
 })
+
+
+test('background direct refresh reopens the existing socket instead of immediately reading HTTP', async t => {
+  const f = fixture(t, false, true)
+  const state = f.mount('a').state()
+  const initial = state.loadDirectChat()
+  const sub = f.subscriptions.find(item => item.kind === 'chat' && !item.closed)!
+  const snapshot = (content: string) => sub.observer.conversationSnapshot!({
+    chat: { chatId: root.slice(4), currentPhysicalId: 'segment', historyStart: 0,
+      history: [{ role: 'assistant', content }] }, inputDelivery: [],
+  })
+  snapshot('Initial')
+  await initial
+  const refreshed = state.loadDirectChat(true)
+  await settle()
+  assert.equal(f.refreshRequests(), 1)
+  assert.equal(f.requests.filter(request => /\/(chat\/session|input-delivery)$/.test(request.path)).length, 0)
+  snapshot('Socket refresh')
+  await refreshed
+  assert.deepEqual(state.messages.map((message: { content: string }) => message.content), ['Socket refresh'])
+  assert.equal(f.requests.filter(request => /\/(chat\/session|input-delivery)$/.test(request.path)).length, 0)
+})
+
+test('expanded socket history retains HTTP window but reuses socket input delivery', async t => {
+  const f = fixture(t, false, true)
+  const state = f.mount('a').state()
+  const initial = state.loadDirectChat()
+  const sub = f.subscriptions.find(item => item.kind === 'chat' && !item.closed)!
+  const body = (historyStart: number, contents: string[]) => ({ chatId: root.slice(4), currentPhysicalId: 'segment',
+    previousPhysicalId: null, segmentIndex: 0, systemPrompt: '', tools: [], commandResults: [], decisionRecords: [],
+    historyStart, history: contents.map(content => ({ role: 'assistant', content })) })
+  sub.observer.conversationSnapshot!({ chat: body(0, ['Earlier', 'Recent']), inputDelivery: [] })
+  await initial
+  sub.observer.conversationSnapshot!({ chat: body(1, ['Updated tail']), inputDelivery: [] })
+  const deadline = Date.now() + 2000
+  while (!f.requests.some(request => request.path.endsWith('/chat/session')) && Date.now() < deadline) await settle()
+  const read = f.requests.find(request => request.path.endsWith('/chat/session'))
+  assert.ok(read)
+  read.finish({ revision: 'a'.repeat(64), historyRevision: 'b'.repeat(64),
+    metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
+    data: body(0, ['Earlier', 'Updated tail']) })
+  await settle()
+  assert.deepEqual(state.messages.map((message: { content: string }) => message.content), ['Earlier', 'Updated tail'])
+  assert.equal(f.requests.filter(request => request.path.endsWith('/input-delivery')).length, 0)
+})

@@ -2,7 +2,8 @@ import { createResource } from './resources/engine.ts'
 import { createSnapshotReader } from './snapshot-reader.ts'
 import { unkeyedWork } from '../../src/shared/snapshot-wire.ts'
 import { affectsSessionResource, affectsSessionSummary } from './session-invalidation.ts'
-import { createSessionSummaryLoader } from './session-summary-snapshot.ts'
+import { createLiveProjection } from './live-projection.ts'
+import { createSessionSummaryLoader, parseSessionSummary } from './session-summary-snapshot.ts'
 import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { t } from './i18n.ts'
 import { shallowReactive, shallowReadonly } from 'vue'
@@ -64,7 +65,8 @@ export function createProjectLiveState(
       }
       return next
     }
-    const sessions = createSnapshot(signal => summaryLoader.load(signal), delay, { initialLoading: true, reconcile(value) {
+    const sessions = createLiveProjection(pool, { base, topic: { kind: 'session-summary', projectId, scope: summaryScope },
+      legacy: false, parse: value => parseSessionSummary(value, projectId), load: signal => summaryLoader.load(signal), field: 'sessions', key: 'sessionId', reconcile(value) {
       directory = new Set(value.map(session => session.sessionId))
       if ([...unknownActivity].some(id => !directory!.has(id))) sessions.invalidate()
       unknownActivity.clear()
@@ -84,10 +86,10 @@ export function createProjectLiveState(
       return next
     }
     const activityReader = createConditionalProjectJson<Activity>(scope, '/api/sessions/stages', parseSessionActivity, request)
-    const activity = createSnapshot<Activity>(async signal => {
+    const activity = createLiveProjection<Activity>(pool, { base, topic: { kind: 'session-stages', projectId }, legacy: false, parse: parseSessionActivity, load: async signal => {
       overlay = new Map()
       return activityReader.load(signal)
-    }, delay, { initialLoading: true, reconcile(result: Activity) {
+    }, reconcile(result: Activity) {
       for (const [id, model] of overlay) result = applyActivity(result, id, model)
       overlay.clear()
       latestActivity = result
@@ -109,16 +111,18 @@ export function createProjectLiveState(
     let started = false
     const gate = createInitialLiveSnapshot({ refresh() {
       started = true
-      sessions.reset(); activity.reset()
+      if (!sessions.hasSnapshot) sessions.reset()
+      if (!activity.hasSnapshot) activity.reset()
       if (usage.work) work.reset()
     } })
     const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId }, {
       event: event => {
         for (const observer of observers) observer.event?.(event)
-        // Events before readiness are covered by the initial snapshot.
-        if (!started) return
+        // An applied WS snapshot is already authoritative, even before the
+        // gate's ready Promise continuation runs. Do not lose later activity.
+        if (!started && !activity.hasSnapshot) return
         if (affectsSessionSummary(event.payload)) {
-          sessions.invalidate()
+          if (!sessions.hasSnapshot) sessions.invalidate()
         }
         const payload = event.payload
         const model = isRecord(payload) && payload.event === 'activity'
@@ -136,7 +140,11 @@ export function createProjectLiveState(
           if (!directory && sessions.state.loading) unknownActivity.add(id)
           else if (!directory?.has(id)) sessions.invalidate()
         } else if (!isRecord(payload) || payload.event !== 'invalidate'
-          || affectsSessionResource(payload, undefined, 'activity')) activity.invalidate()
+          || affectsSessionResource(payload, undefined, 'activity')) {
+          // Model-less/malformed activity is an explicit recovery notice. A
+          // complete replacement above remains the zero-reread fast path.
+          if (isRecord(payload) && payload.event === 'activity' || !activity.hasSnapshot) activity.invalidate()
+        }
         if (usage.work && (isRecord(event.payload) && event.payload.event === 'activity'
           || affectsSessionResource(event.payload, undefined, 'work')
           || affectsSessionResource(event.payload, undefined, 'activity'))) work.invalidate()
@@ -145,7 +153,7 @@ export function createProjectLiveState(
       reconnected: () => reset('reconnect'),
     })
     gate.attach(subscription)
-    const gated = <T>(snapshot: ReturnType<typeof createSnapshot<T>>) => ({ ...snapshot,
+    const gated = <T extends { read(): Promise<void> }>(snapshot: T) => ({ ...snapshot,
       async read() { await gate.getPromise(); await snapshot.read() },
     })
     return { sessions: gated(sessions), activity: gated(activity), ready: gate.getPromise, work, usage, observers, users: 0,

@@ -1,3 +1,5 @@
+import type { LiveObserver } from '../live-client.ts'
+import type { RealtimeTopic } from '../../../src/realtime/protocol.ts'
 import { createApp, defineComponent, h, ref } from 'vue'
 import IoHost from '../components/io/IoHost.vue'
 import IoRequestCard from '../components/io/IoRequestCard.vue'
@@ -6,6 +8,7 @@ import { useIoConversation } from './conversation.ts'
 import '../styles.css'
 document.documentElement.classList.add('dark')
 
+const inventoryObservers = new Set<LiveObserver>()
 const streams: MediaStream[] = []
 const acquire = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
 const enumerate = navigator.mediaDevices.enumerateDevices.bind(navigator.mediaDevices)
@@ -32,6 +35,7 @@ navigator.mediaDevices.getUserMedia = async constraints => {
   return stream
 }
 Object.defineProperty(window, '__ioSmoke', { value: {
+  notifyInventory() { for (const observer of inventoryObservers) observer.event({ type: 'event', cursor: 'fixture:1', topic: { kind: 'io', projectId: 'default' }, payload: { event: 'invalidate' } }) },
   get acquired() { return streams.length },
   get liveTracks() { return streams.flatMap(stream => stream.getTracks()).filter(track => track.readyState === 'live').length },
 } })
@@ -64,5 +68,5 @@ const app = createApp({ render: () => [
   h(Conversation, { key: session.value, sessionId: session.value }),
 ] })
 app.provide(ioBridgeKey, bridge)
-app.provide(Symbol.for('shadow.live-client-pool'), { client: () => ({ subscribe: () => ({ close() {}, ready: async () => {} }) }) })
+app.provide(Symbol.for('shadow.live-client-pool'), { observeHost: (_base: string, callback: (status: { phase: 'live' }) => void) => { callback({ phase: 'live' }); return () => {} }, client: () => ({ isLive: () => true, retry() {}, subscribe: (topic: RealtimeTopic, observer: LiveObserver) => { if (topic.kind === 'io') inventoryObservers.add(observer); return { close() { inventoryObservers.delete(observer) }, ready: async () => {} } } }) })
 app.mount('#app')

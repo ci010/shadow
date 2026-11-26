@@ -11,7 +11,7 @@
 
 <script setup lang="ts">
 import { t } from '../../i18n.ts'
-import { createInitialLiveSnapshot } from '../../initial-live-snapshot.ts'
+import { createLiveProjection } from '../../live-projection.ts'
 import { computed, onBeforeUnmount, onMounted, triggerRef, watch } from 'vue'
 import { parseIoDefinition, type IoRun } from '../../../../src/io/contracts.ts'
 import { apiUrl } from '../../api-url.ts'
@@ -38,7 +38,7 @@ const statusText = computed(() => execution.value?.phase === 'recording' ? t('Re
   : execution.value?.phase === 'draining' ? t('Finishing input') : t('Preparing input'))
 const livePool = useLiveClientPool()
 const subscriptions = new Map<string, LiveSubscription>()
-const initialSnapshots = new Map<string, ReturnType<typeof createInitialLiveSnapshot>>()
+const initialSnapshots = new Map<string, ReturnType<typeof createLiveProjection<{ runs: IoRun[] }>>>()
 const hostObservers = new Map<string, () => void>()
 const hostPhases = new Map<string, LiveStatus['phase']>()
 const clients = new Map<string, { clientId: string; clientToken: string }>()
@@ -46,8 +46,6 @@ const registrations = new Map<string, { promise: Promise<{ clientId: string; cli
 const attempted = new Set<string>()
 const capabilities = browserIoCapabilities()
 let disposed = false
-const polling = new Map<string, AbortController>()
-const pendingPoll = new Set<string>()
 let leaseBusy = false
 let generation = 0
 let preparingBase: string | undefined
@@ -64,7 +62,9 @@ function setError(key: string, message = '') {
   else errors.delete(key)
   bridge.errors.value = errors
 }
+const revokedBases = new Set<string>()
 function putRun(base: string, run: IoRun) {
+  if (revokedBases.has(base)) return
   const all = new Map(bridge.runs.value)
   const runs = [...all.get(base) ?? []]
   const index = runs.findIndex(item => item.id === run.id)
@@ -100,46 +100,42 @@ function forgetClient(base: string) {
   registrations.get(base)?.controller.abort()
   registrations.delete(base)
 }
+function applyRuns(base: string, result: { runs: IoRun[] } | undefined) {
+  if (disposed || !bases.value.has(base)) return
+  if (!result) {
+    // Revocation must clear the presentation cache too. Do not retain an
+    // owned run or let an in-flight prepare/change callback restore it.
+    revokedBases.add(base)
+    if (preparingBase === base) { generation++; preparingBase = undefined; bridge.busy.value = undefined }
+    if (bridge.executionBase.value === base) {
+      execution.value?.dispose(); execution.value = undefined
+      bridge.executionBase.value = ''
+    }
+    forgetClient(base)
+    const all = new Map(bridge.runs.value); all.delete(base); bridge.runs.value = all
+    return
+  }
+  revokedBases.delete(base)
+  const counts = new Map<string, number>()
+  const runs = result.runs.toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).filter(run => {
+    const count = counts.get(run.sessionId) ?? 0; counts.set(run.sessionId, count + 1)
+    return count < 32 || ['awaiting_consent', 'running', 'stopping'].includes(run.status)
+  })
+  const active = execution.value
+  if (active && bridge.executionBase.value === base && active.phase !== 'closed') {
+    const index = runs.findIndex(run => run.id === active.run.id)
+    if (index < 0) runs.push(active.run); else runs[index] = active.run
+  }
+  const all = new Map(bridge.runs.value); all.set(base, runs); bridge.runs.value = all
+  setError(base); prepareVisibleRequest()
+}
 async function poll(fallback = false, requestedBases: Iterable<string> = bases.value) {
   if (disposed || (document.hidden && !owned.value)) return
   await Promise.all([...requestedBases].map(async base => {
     if (!bases.value.has(base)) return
-    if (polling.has(base)) { if (!fallback) pendingPoll.add(base); return }
     if (fallback && !['connecting', 'reconnecting', 'error'].includes(hostPhases.get(base) ?? 'connecting')) return
-    const controller = new AbortController()
-    polling.set(base, controller)
-    try {
-      const result = await ioRequest<{ runs: IoRun[] }>(base, '/runs', undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]))
-      if (disposed || controller.signal.aborted || !bases.value.has(base)) return
-      // /runs is already a Project inventory (bounded to 100 by Main). Keep
-      // other sessions' metadata so switching the visible chat is a projection,
-      // not another HTTP read. Keep at most 32 historical rows per session.
-      const counts = new Map<string, number>()
-      const runs = result.runs.toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).filter(run => {
-        const count = counts.get(run.sessionId) ?? 0
-        counts.set(run.sessionId, count + 1)
-        return count < 32 || ['awaiting_consent', 'running', 'stopping'].includes(run.status)
-      })
-      const active = execution.value
-      if (active && bridge.executionBase.value === base && active.phase !== 'closed') {
-        const index = runs.findIndex(run => run.id === active.run.id)
-        if (index < 0) runs.push(active.run)
-        else runs[index] = active.run
-      }
-      const all = new Map(bridge.runs.value)
-      all.set(base, runs); bridge.runs.value = all
-      setError(base)
-    } catch (cause) {
-      if (disposed || controller.signal.aborted || !bases.value.has(base) || (cause instanceof DOMException && cause.name === 'AbortError')) return
-      setError(base, cause instanceof Error ? cause.message : t('Could not load capture requests.'))
-    } finally {
-      if (polling.get(base) === controller) {
-        polling.delete(base)
-        if (pendingPoll.delete(base)) void poll(false, [base])
-      }
-    }
+    await initialSnapshots.get(base)?.refresh()
   }))
-  prepareVisibleRequest()
 }
 function prepareVisibleRequest() {
   if (!disposed && !document.hidden && !owned.value && !bridge.busy.value) {
@@ -151,8 +147,9 @@ function prepareVisibleRequest() {
   }
 }
 async function prepare(run: IoRun, base: string) {
-  if (owned.value || bridge.busy.value || disposed) return
+  if (owned.value || bridge.busy.value || disposed || revokedBases.has(base)) return
   const token = ++generation
+  preparingBase = base
   const key = ioRunKey(base, run.id)
   bridge.busy.value = key; attempted.add(key); setError(key)
   execution.value?.dispose(); execution.value = undefined
@@ -171,7 +168,6 @@ async function prepare(run: IoRun, base: string) {
     // after preflight, immediately before prepare; never replace an owned grant.
     forgetClient(base)
     const credentials = await client(base)
-    preparingBase = base
     const result = await ioRequest<{ leaseToken: string; run: IoRun }>(base, `/runs/${encodeURIComponent(run.id)}/prepare`, { ...credentials, revision: snapshot.revision }, AbortSignal.timeout(20_000))
     if (token !== generation || disposed) {
       await ioRequest(base, `/runs/${encodeURIComponent(run.id)}/stop`, { status: 'cancelled' })
@@ -188,8 +184,7 @@ async function prepare(run: IoRun, base: string) {
     current.connect()
   } catch (cause) { setError(key, cause instanceof Error ? cause.message : t('Could not prepare input. Retry the connection.')) }
   finally {
-    preparingBase = undefined
-    if (token === generation) bridge.busy.value = undefined
+    if (token === generation) { preparingBase = undefined; bridge.busy.value = undefined }
   }
 }
 function current(id: string, base: string) {
@@ -246,7 +241,6 @@ const discovery = computed(() => {
 })
 watch(discovery, visible => {
   const values = new Set(visible.keys())
-  for (const [base, controller] of polling) if (!values.has(base)) { controller.abort(); polling.delete(base); pendingPoll.delete(base) }
   for (const base of new Set([...clients.keys(), ...registrations.keys()])) {
     if (!values.has(base)) { forgetClient(base); setError(base) }
   }
@@ -256,24 +250,35 @@ watch(discovery, visible => {
   for (const [base, subscription] of subscriptions) if (!values.has(base)) { subscription.close(); subscriptions.delete(base); initialSnapshots.get(base)?.dispose(); initialSnapshots.delete(base); hostObservers.get(base)?.(); hostObservers.delete(base); hostPhases.delete(base) }
   for (const base of values) {
     if (subscriptions.has(base)) continue
-    const initial = createInitialLiveSnapshot({ refresh: () => { void poll(false, [base]) } })
+    const initial = createLiveProjection(livePool, { base, topic: { kind: 'io-runs', projectId: liveProjectId(base) }, legacy: false, field: 'runs', key: 'id',
+      load: signal => document.hidden && !owned.value ? Promise.resolve({ runs: bridge.runs.value.get(base) ?? [] }) : ioRequest<{ runs: IoRun[] }>(base, '/runs', undefined, AbortSignal.any([signal, AbortSignal.timeout(10_000)])),
+      parse(value) {
+        if (!value || typeof value !== 'object' || !('runs' in value) || !Array.isArray(value.runs)) throw new Error('Invalid capture inventory')
+        const ids = new Set<string>()
+        for (const run of value.runs) {
+          if (!run || typeof run !== 'object' || typeof run.id !== 'string' || ids.has(run.id) || typeof run.sessionId !== 'string' || typeof run.createdAt !== 'string' || typeof run.status !== 'string') throw new Error('Invalid capture run')
+          ids.add(run.id)
+        }
+        return value as { runs: IoRun[] }
+      }, changed: result => applyRuns(base, result), failed: cause => setError(base, cause instanceof Error ? cause.message : t('Could not load capture requests.')),
+    })
     initialSnapshots.set(base, initial)
     const invalidateExecution = () => { if (bridge.executionBase.value === base) execution.value?.invalidate() }
     hostObservers.set(base, livePool.observeHost(base, status => { hostPhases.set(base, status.phase) }))
     const subscription = livePool.client(base).subscribe({ kind: 'io', projectId: liveProjectId(base) }, {
-      event() { initial.invalidate(); invalidateExecution() },
-      reset() { initial.reset(); invalidateExecution() },
-      reconnected() { initial.reconnected(); invalidateExecution() },
+      event() { if (!initial.hasSnapshot) initial.invalidate(); invalidateExecution() },
+      reset() { if (!initial.hasSnapshot) initial.reset(); invalidateExecution() },
+      reconnected() { if (!initial.hasSnapshot) initial.invalidate(); invalidateExecution() },
     })
     subscriptions.set(base, subscription)
-    initial.attach(subscription)
+    void initial.read()
   }
   prepareVisibleRequest()
 }, { immediate: true })
 const pageHide = () => { void execution.value?.cancel('cancelled', t('The capture page was closed.')); execution.value?.dispose() }
 const visibilityChanged = () => {
   if (!document.hidden) void pulseClients().then(() => {
-    for (const initial of initialSnapshots.values()) initial.invalidate()
+    for (const base of bases.value) if (!livePool.client(base).isLive()) livePool.client(base).retry()
   })
 }
 onMounted(() => {
@@ -287,8 +292,6 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   disposed = true; generation++
-  for (const controller of polling.values()) controller.abort()
-  pendingPoll.clear()
   clearInterval(pollTimer); clearInterval(leaseTimer)
   window.removeEventListener('pagehide', pageHide)
   document.removeEventListener('visibilitychange', visibilityChanged)

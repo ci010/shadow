@@ -1,3 +1,5 @@
+import { sessionActivitySnapshot } from '../../sessions/activity-snapshot.ts'
+import type { ProjectionReader } from '../../realtime/projections.ts'
 import { readConversationSnapshot } from '../../sessions/conversation-snapshot.ts'
 import { StatsIndex } from '../../sessions/stats-index.ts'
 import { DEVICE_HOME_OPERATIONS, DEVICE_HOME_WORKDIR } from '../../execution/device-home.ts'
@@ -249,7 +251,7 @@ import { InputClassifier } from '../../events/input-classifier.ts'
 import { parseModelSpec } from '../../providers/aggregated.ts'
 import { MODEL_CONTEXT_WINDOWS, resolveContextWindow } from '../../providers/model-registry.ts'
 import { providerPlugin } from '../../providers/routes.ts'
-import { sessionsApiPlugin } from '../../sessions/routes.ts'
+import { sessionsApiPlugin, createSessionInventoryReader } from '../../sessions/routes.ts'
 import { sessionDiagnosisPlugin } from '../../sessions/diagnosis-routes.ts'
 import { SearchTool } from '../../tools/search.ts'
 import { createLiveWebSearchTool } from '../../tools/web-provider.ts'
@@ -345,6 +347,7 @@ export async function createProjectRuntime(
   // Reuse UI telemetry, but never export historical rows from an earlier runtime.
   const runtimeLogStartId = otelStore.getLatestLogId()
   const realtimeHub = dependencies.realtimeHub ?? new RealtimeHub()
+  let projectionReader: ProjectionReader | undefined
   let activitySource: SessionManager | undefined
   let readConversationSummary: ((sessionId: string) => object) | undefined
   let publishActiveConversationSummaries: (sessionId?: string, details?: boolean) => void = () => {}
@@ -362,13 +365,19 @@ export async function createProjectRuntime(
   }, report => {
     const allowed = config.channels.web?.allowFrom
     if (!allowed?.length || allowed.includes('web-user')) activitySource?.presence.report('web:web-user', report)
+  }, topic => {
+    if (!projectionReader) throw new Error('Project projections are initializing')
+    return projectionReader(topic)
   })
   const closeRealtime = () => {
     realtime.close()
     if (!dependencies.realtimeHub) realtimeHub.close()
   }
   cleanup.push(closeRealtime)
-  cleanup.push(dependencies.catalog.observeFolders(project.id, () => realtime.invalidateResource?.('folders')))
+  cleanup.push(dependencies.catalog.observeFolders(project.id, () => {
+    realtime.invalidateResource?.('folders')
+    realtimeHub.invalidateNodeInventory()
+  }))
   cleanup.push(mainCluster.observeInventory(() => realtime.invalidateResource?.('nodes')))
   cleanup.push(observeSessionInvalidations(bus, realtime))
   const deliverySubscription = bus.on('session.web-input.changed', ({ sessionId }) => {
@@ -2144,6 +2153,19 @@ export async function createProjectRuntime(
   cleanup.push(() => channels.stopAll())
   await startup.measure('channels', () => channels.init())
   for (const tool of channelTools(channels)) importTool.registerBuiltin(tool.name, tool)
+  const readSessionInventory = createSessionInventoryReader(sessions, { backgroundTasks, cron: cronService,
+    sidebarConnections: () => botStore.list() })
+  projectionReader = topic => {
+    switch (topic.kind) {
+      case 'session-summary': return readSessionInventory(true, topic.scope)
+      case 'session-stages': return sessionActivitySnapshot(sessions.listSessions().map(row =>
+        [row.sessionId, sessionActivityReadModel(sessions, row.sessionId)] as const))
+      case 'io-runs': return { runs: io.list() }
+      case 'folders': return { folders: folderRegistry.list() }
+      case 'nodes': return mainCluster.getNodeInventory()
+      case 'folder-devices': return folders.pickerDevices()
+    }
+  }
   const folders = new FolderService({
     registry: folderRegistry,
     picker: folderPicker,

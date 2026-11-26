@@ -122,7 +122,7 @@
         <HoverInfo v-else :text="cloneStatus.error"><template #default="{ triggerProps }"><button class="rail-status-button" v-bind="triggerProps" :aria-label="t('Review clone error')" @click="dialogMode = 'clone'"><span class="i-lucide-circle-alert w-4 h-4" aria-hidden="true" /></button></template></HoverInfo>
       </div>
     </div>
-    <FolderDialog :mode="dialogMode" :client="client" @close="dialogMode = null" @registered="folderRegistered" @status="cloneStatus = $event" />
+    <FolderDialog :mode="dialogMode" :client="client" :api-base="apiBase" @close="dialogMode = null" @registered="folderRegistered" @status="cloneStatus = $event" />
     <Teleport to="body">
       <OverlayTransition>
       <div v-if="menuOpen" class="folder-menu-backdrop" @click.self="closeMenu(false)" @keydown.esc.prevent.stop="closeMenu(true)">

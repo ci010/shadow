@@ -1,3 +1,4 @@
+import { projectionKinds, type ProjectionTopic } from '../../src/realtime/projection-wire.ts'
 import type { PresenceReport } from '../../src/sessions/presence.ts'
 import { t } from './i18n.ts'
 import {
@@ -5,6 +6,8 @@ import {
   type RealtimeEnvelope, type RealtimeTopic,
 } from '../../src/realtime/protocol.ts'
 import { apiUrl, hostBase } from './api-url.ts'
+
+const projectionTopic = (topic: RealtimeTopic): topic is ProjectionTopic => (projectionKinds as readonly string[]).includes(topic.kind)
 
 export type LiveEvent = Extract<RealtimeEnvelope, { type: 'event' }>
 export type LiveResetReason = Extract<RealtimeEnvelope, { type: 'reset' }>['reason'] | 'subscription' | 'reconnect'
@@ -16,12 +19,15 @@ export interface LiveObserver {
   event: (event: LiveEvent) => void
   reset: (reason: LiveResetReason) => void
   reconnected?: () => void
+  projectionSnapshot?: (data: unknown) => void
+  projectionUnavailable?: () => void
   conversationSnapshot?: (data: unknown) => void
   conversationRefreshFailed?: () => void
 }
 export interface LiveSubscription {
   ready: (signal?: AbortSignal) => Promise<void>
   close: () => void
+  refreshProjection?: () => boolean
   refreshConversation?: () => boolean
 }
 type Socket = { addEventListener(type: string, listener: EventListener): void; send(data: string): void; close(): void }
@@ -66,6 +72,7 @@ export function createLiveClient(base: string, options: {
   let socket: Socket | undefined
   let socketOpened = false
   let requestId = 0
+  let supportsProjections = false
   let supportsConversationOpen = false
   let socketPresence = false
   let everSocketPresence = false
@@ -98,6 +105,7 @@ export function createLiveClient(base: string, options: {
     const previousSocket = socket
     socket = undefined
     socketOpened = false
+    supportsProjections = false
     supportsConversationOpen = false
     socketPresence = false
     // A disconnected socket cannot acknowledge the refresh it took.
@@ -123,6 +131,11 @@ export function createLiveClient(base: string, options: {
     const unique = new Map<string, RealtimeTopic>()
     for (const subscriber of subscribers) unique.set(realtimeTopicKey(subscriber.topic), subscriber.topic)
     for (const [key, entry] of retained) unique.set(key, entry.topic)
+    for (const [key, topic] of unique) if (projectionTopic(topic) && !(useSocket && supportsProjections)) {
+      unique.delete(key)
+      const bootstrap: RealtimeTopic = { kind: 'resources', projectId: topic.projectId }
+      unique.set(realtimeTopicKey(bootstrap), bootstrap)
+    }
     return [...unique.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, topic]) => topic)
   }
   function heartbeat() {
@@ -223,15 +236,17 @@ export function createLiveClient(base: string, options: {
       // already be queued when the current snapshot arrives.
       subscriber.refreshRequested = false
     }
-    if (!opening.size && desired.size === acknowledged.size && [...desired].every(key => acknowledged.has(key)) && ready) return
+    const projecting = new Set([...subscribers].filter(s => !s.closed && supportsProjections && projectionTopic(s.topic) && (!s.initialized || s.refreshRequested)).map(s => realtimeTopicKey(s.topic)))
+    if (!opening.size && !projecting.size && desired.size === acknowledged.size && [...desired].every(key => acknowledged.has(key)) && ready) return
     pending = { id: ++requestId, desired, opening, capabilitiesKnown: supportsConversationOpen }
     acknowledgementTimer = setTimeout(reconnect, options.readyTimeoutMs ?? 10_000)
     try {
       socket.send(JSON.stringify({ type: opening.size ? 'openConversation' : 'subscribe', id: requestId,
         ...(opening.size ? { conversations: selected.filter(topic => opening.has(realtimeTopicKey(topic))) } : {}),
-        subscriptions: selected.map(topic => ({ topic, cursor: topicCursors.get(realtimeTopicKey(topic)),
+        subscriptions: selected.map(topic => ({ topic, ...(projectionTopic(topic) && projecting.has(realtimeTopicKey(topic)) ? { snapshot: true } : {}), cursor: topicCursors.get(realtimeTopicKey(topic)),
           ...([...subscribers].some(subscriber => subscriber.opened && realtimeTopicKey(subscriber.topic) === realtimeTopicKey(topic)) ? { conversation: true } : {}),
         })) }))
+      for (const subscriber of subscribers) if (projecting.has(realtimeTopicKey(subscriber.topic))) subscriber.refreshRequested = false
     } catch { reconnect() }
   }
   const topicArray = (value: unknown): RealtimeTopic[] => {
@@ -264,6 +279,9 @@ export function createLiveClient(base: string, options: {
     if (frame.type === 'subscribed') {
       if (!pending || pending.id !== frame.id) throw new Error('Unexpected live acknowledgement')
       const { desired, opening, capabilitiesKnown } = pending
+      const hadProjections = supportsProjections
+      supportsProjections = frame.projectionSnapshots === true
+      if (supportsProjections && !hadProjections && [...subscribers].some(s => projectionTopic(s.topic))) needsUpdate = true
       supportsConversationOpen = frame.conversationOpen === true
       socketPresence = frame.socketPresence === true
       everSocketPresence ||= socketPresence
@@ -306,9 +324,19 @@ export function createLiveClient(base: string, options: {
           }
         }
       }
+      const receivedProjections = new Set<Subscriber>()
+      if (Array.isArray(frame.projections)) for (const entry of frame.projections) {
+        if (!entry || typeof entry !== 'object' || !isRealtimeTopic(entry.topic) || !projectionTopic(entry.topic) || !desired.has(realtimeTopicKey(entry.topic))) throw new Error('Invalid projection acknowledgement')
+        for (const subscriber of subscribers) if (!subscriber.closed && realtimeTopicKey(subscriber.topic) === realtimeTopicKey(entry.topic)) {
+          subscriber.initialized = true
+          if (entry.snapshot !== undefined) { subscriber.observer.projectionSnapshot?.(entry.snapshot); receivedProjections.add(subscriber) }
+          else { subscriber.observer.projectionUnavailable?.(); receivedProjections.add(subscriber) }
+        }
+      }
       for (const subscriber of [...subscribers]) {
         const key = realtimeTopicKey(subscriber.topic)
         if (subscriber.closed || !connectedTopics.has(key) || unavailableTopics.has(key)) continue
+        if (receivedProjections.has(subscriber)) continue
         const reset = resets.get(key)
         const openingSubscriber = opening.get(key)?.includes(subscriber)
         const needsSnapshot = !subscriber.initialized && capabilitiesKnown || recovering && !!reset
@@ -341,7 +369,9 @@ export function createLiveClient(base: string, options: {
       }
       for (const subscriber of [...subscribers]) {
         if (subscriber.closed || !affected.has(realtimeTopicKey(subscriber.topic))) continue
-        if (frame.reason === 'project-restored' && supportsConversationOpen && subscriber.observer.conversationSnapshot) {
+        if (frame.reason === 'project-restored' && projectionTopic(subscriber.topic)) {
+          subscriber.refreshRequested = true; needsUpdate = true
+        } else if (frame.reason === 'project-restored' && supportsConversationOpen && subscriber.observer.conversationSnapshot) {
           subscriber.initialized = false
           needsUpdate = true
         } else initialize(subscriber, frame.reason)
@@ -484,8 +514,9 @@ export function createLiveClient(base: string, options: {
     const subscriber: Subscriber = { topic, observer, closed: false, initialized: false }
     forget(realtimeTopicKey(topic))
     subscribers.add(subscriber)
+    if (projectionTopic(topic)) subscriber.refreshRequested = true
     changed()
-    if (!(supportsConversationOpen && observer.conversationSnapshot) && ready && connectedTopics.has(realtimeTopicKey(topic)) && !unavailableTopics.has(realtimeTopicKey(topic)) &&
+    if (!projectionTopic(topic) && !(supportsConversationOpen && observer.conversationSnapshot) && ready && connectedTopics.has(realtimeTopicKey(topic)) && !unavailableTopics.has(realtimeTopicKey(topic)) &&
       (!pending || pending.desired.has(realtimeTopicKey(topic)))) {
       queueMicrotask(() => {
         if (subscriber.closed) return
@@ -494,6 +525,11 @@ export function createLiveClient(base: string, options: {
       })
     }
     return {
+      refreshProjection() {
+        if (subscriber.closed || !supportsProjections || !ready || !projectionTopic(topic)
+          || rejectedTopics.has(realtimeTopicKey(topic)) || unavailableTopics.has(realtimeTopicKey(topic))) return false
+        subscriber.refreshRequested = true; changed(); return true
+      },
       refreshConversation() {
         if (subscriber.closed || !subscriber.opened || !supportsConversationOpen || !ready) return false
         // The current topic remains live while its replacement snapshot is read.
@@ -506,7 +542,7 @@ export function createLiveClient(base: string, options: {
         if (signal?.aborted) return Promise.reject(signal.reason)
         if (ready && rejectedTopics.has(realtimeTopicKey(topic))) return Promise.reject(denied())
         if (ready && unavailableTopics.has(realtimeTopicKey(topic))) return Promise.reject(projectUnavailable())
-        if (!(supportsConversationOpen && observer.conversationSnapshot && !subscriber.initialized) && ready && connectedTopics.has(realtimeTopicKey(topic)) && (!pending || pending.desired.has(realtimeTopicKey(topic)))) return Promise.resolve()
+        if ((!projectionTopic(topic) || subscriber.initialized) && !(supportsConversationOpen && observer.conversationSnapshot && !subscriber.initialized) && ready && connectedTopics.has(realtimeTopicKey(topic)) && (!pending || pending.desired.has(realtimeTopicKey(topic)))) return Promise.resolve()
         if (status.phase === 'error') return Promise.reject(new Error(status.error))
         return new Promise<void>((resolve, reject) => {
           const deadline = AbortSignal.timeout(options.readyTimeoutMs ?? 10_000)

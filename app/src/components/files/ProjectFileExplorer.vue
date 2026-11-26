@@ -17,14 +17,15 @@
 </template>
 <script setup lang="ts">
 import GltfOutlineDock from './GltfOutlineDock.vue'
-import { computed, inject, onUnmounted, ref, watch } from 'vue'
+import { computed, inject, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useMobileChrome } from '../../composables/useMobileChrome.ts'
 import { EditorGroupsKey, type EditorDescriptor } from '../../editor-groups.ts'
-import { createFoldersClient, type FolderRecord } from '../../folders-client.ts'
+import { type FolderRecord } from '../../folders-client.ts'
 import { fileTabKey, type OpenFile } from '../../file-workbench.ts'
 import { t } from '../../i18n.ts'
 import { useLiveClientPool } from '../../composables/useLiveClient.ts'
-import { createLiveResourceRefresh } from '../../live-resource-refresh.ts'
+import { useCatalogResourceStore } from '../../stores/catalog.ts'
+import { requireResourcePinia } from '../../stores/app.ts'
 import EditorViewHost from '../EditorViewHost.vue'
 import SidebarResizer from '../SidebarResizer.vue'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
@@ -81,34 +82,29 @@ function folderHint(folder: FolderRecord) {
   const node = folder.kind === 'remote' ? ` (${folder.workdir.nodeId})` : ''
   return `${t('Project files')}: ${folder.name} — ${folderSource(folder)}${node}\n${folder.path}`
 }
-let controller: AbortController | undefined
-async function load() {
-  controller?.abort()
-  const request = new AbortController(); controller = request
-  try {
-    const client = createFoldersClient(props.apiBase)
-    // Friendly device metadata is optional; catalog availability must not depend on it.
-    const [next, deviceList] = await Promise.all([client.list(request.signal), client.pickerDevices(request.signal).catch(() => [])])
-    if (!request.signal.aborted) {
-      devices.value = Object.fromEntries(deviceList.map(device => [device.nodeId, device.name.trim()]))
-      mainDeviceName.value = deviceList.find(device => device.role === 'main')?.name.trim() ?? ''
-    }
-    if (!request.signal.aborted) {
-      // Filter by exact catalog bindings before physical-root deduplication:
-      // an unbound alias must never hide a bound remote catalog ID.
-      folders.value = next
-      error.value = ''
-    }
-  } catch (cause) { if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Retry folders') }
-}
-watch(() => [props.active, props.folderRevision, props.apiBase, props.open], () => { if (props.active) void load() }, { immediate: true })
-let catalog: ReturnType<typeof createLiveResourceRefresh> | undefined
-watch(() => [props.active, props.apiBase, props.projectId] as const, () => {
-  catalog?.dispose()
-  catalog = props.active ? createLiveResourceRefresh(livePool, { base: props.apiBase, projectId: props.projectId, resource: 'folders', refresh: () => { void load() } }) : undefined
-  if (!props.active) controller?.abort()
+const owner = useCatalogResourceStore(requireResourcePinia()).owner
+let folderLease: ReturnType<typeof owner.folders> | undefined
+let deviceLease: ReturnType<typeof owner.pickerDevices> | undefined
+async function load() { await Promise.all([folderLease?.refresh(), deviceLease?.refresh()]) }
+watch(() => [props.active, props.apiBase, props.projectId] as const, (_value, _old, cleanup) => {
+  folderLease?.release(); deviceLease?.release(); folderLease = undefined; deviceLease = undefined
+  folders.value = []; devices.value = {}; mainDeviceName.value = ''; error.value = ''
+  if (!props.active) return
+  const catalog = folderLease = owner.folders(props.apiBase, props.projectId, livePool)
+  const metadata = deviceLease = owner.pickerDevices(props.apiBase, props.projectId, livePool)
+  const stop = watchEffect(() => {
+    folders.value = catalog.state.value.value ?? []
+    error.value = catalog.state.value.error
+    const list = metadata.state.value.value ?? []
+    devices.value = Object.fromEntries(list.map(device => [device.nodeId, device.name.trim()]))
+    mainDeviceName.value = list.find(device => device.role === 'main')?.name.trim() ?? ''
+  })
+  cleanup(stop)
+  void catalog.read(); void metadata.read()
 }, { immediate: true })
-onUnmounted(() => { catalog?.dispose(); controller?.abort() })
+// Registration commands already update the shared catalog. A local render or
+// opening the explorer is not an independent reason to read the inventory.
+onUnmounted(() => { folderLease?.release(); deviceLease?.release() })
 const files = ref<OpenFile[]>([])
 const sessionEditor = computed(() => {
   const editor = groups.active(props.projectId)

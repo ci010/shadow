@@ -92,14 +92,17 @@ export class FolderService {
     this.#options = options
   }
 
-  readonly plugin: GatewayPlugin = (app) => {
-    app.get('/api/folders/picker/devices', c => {
+  /** Shared HTTP/socket DTO; never includes paths, workdir grants or credentials. */
+  pickerDevices() {
       const nodes = this.#options.picker?.inventory().nodes ?? []
-      return c.json({ devices: nodes.map(node => ({ nodeId: node.nodeId, name: node.displayName,
+      return { devices: nodes.map(node => ({ nodeId: node.nodeId, name: node.displayName,
         role: node.role, online: node.connection === 'connected',
         supported: node.role === 'main' || node.executionProtocol === 'compatible' && node.support.operations.includes(FOLDER_BROWSE_OPERATION) && node.support.operations.includes(FOLDER_SELECT_OPERATION),
-      })) }, 200, { 'Cache-Control': 'no-store' })
-    })
+      })) }
+  }
+
+  readonly plugin: GatewayPlugin = (app) => {
+    app.get('/api/folders/picker/devices', c => c.json(this.pickerDevices(), 200, { 'Cache-Control': 'no-store' }))
     for (const action of ['browse', 'select'] as const) {
       app.post(`/api/folders/picker/${action}`, bodyLimit({ maxSize: 8192, onError: c => c.json({ error: 'body_too_large' }, 413) }), async c => {
         try {

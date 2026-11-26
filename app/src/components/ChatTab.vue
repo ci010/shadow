@@ -546,6 +546,7 @@ import { conversationStartKey, type ConversationStartState, type ConversationSta
 import { parseSessionDetails } from '../session-details.ts'
 import { parseWorkView } from '../work-alignment.ts'
 import { createInitialLiveSnapshot } from '../initial-live-snapshot'
+import { canUseConversationHistory, createConversationSnapshotRefresh } from '../conversation-snapshot-refresh.ts'
 import { createMarkdown } from '../markdown.ts'
 import { t, formatNumber } from '../i18n.ts'
 import { formatUsageCost, validCostUsage, type CostUsage } from '../usage-cost.ts'
@@ -1212,6 +1213,7 @@ function startData(value: Record<string, unknown>, sessionId: string): Conversat
 }
 let firstSocketSnapshot: { chat: Record<string, unknown>; inputDelivery: ChatInputDelivery[] } | undefined
 let socketHistoryFallback = false
+const socketSnapshotRefresh = createConversationSnapshotRefresh()
 let historySnapshot: ReturnType<typeof createInitialLiveSnapshot> | undefined
 let eventStreamKey = ''
 let bgStreamState: StreamState = { accumulated: '' }
@@ -1244,15 +1246,18 @@ function drainSocketHistory(): boolean {
   return true
 }
 
+async function refreshSocketHistory(signal: AbortSignal, from?: number): Promise<void> {
+  // Pagination is an explicit wider-window read, not a conversation reopen.
+  // A queued snapshot (or explicit refresh failure) already owns this read.
+  if (from !== undefined || firstSocketSnapshot || socketHistoryFallback) return
+  await socketSnapshotRefresh.wait(() => eventStream?.refreshConversation?.() === true, signal)
+}
+
 function takeSocketHistory(from?: number): typeof firstSocketSnapshot {
   if (from !== undefined) return undefined
   const snapshot = firstSocketSnapshot
   firstSocketSnapshot = undefined
   socketHistoryFallback = false
-  // Socket snapshots use the recent window. If paging has expanded the same
-  // segment, request that expanded window rather than replacing it with a tail.
-  if (snapshot && currentTimelinePhysicalId && snapshot.chat.currentPhysicalId === currentTimelinePhysicalId
-    && typeof snapshot.chat.historyStart === 'number' && snapshot.chat.historyStart > currentHistoryStart.value) return undefined
   return snapshot
 }
 
@@ -1290,12 +1295,14 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
       if (!isRecord(data) || !isRecord(data.chat) || data.chat.chatId !== chatId || !Array.isArray(data.chat.history)
         || !Array.isArray(data.inputDelivery) || !data.inputDelivery.every(isChatInputDelivery)) return
       firstSocketSnapshot = { chat: data.chat, inputDelivery: data.inputDelivery }
+      socketSnapshotRefresh.received()
       conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'socket', data: startData(data, sessionId) }
       drainSocketHistory()
     },
     conversationRefreshFailed() {
       if (eventStream !== subscription || activeSessionId.value !== sessionId) return
       socketHistoryFallback = true
+      socketSnapshotRefresh.failed()
       drainSocketHistory()
     },
     reset() {
@@ -1400,6 +1407,7 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
 }
 
 function closeEventStream(): void {
+  socketSnapshotRefresh.failed()
   firstSocketSnapshot = undefined
   socketHistoryFallback = false
   conversationStart.value = undefined
@@ -2558,7 +2566,11 @@ async function loadDirectChat(background = false, from?: number, signal?: AbortS
     connectEventStream(chatId, true)
     await historySnapshot?.getPromise()
     if (controller.signal.aborted) return
-    const initial = takeSocketHistory(from)
+    await refreshSocketHistory(controller.signal, from)
+    if (controller.signal.aborted) return
+    const socketSnapshot = takeSocketHistory(from)
+    const initial = socketSnapshot && canUseConversationHistory(socketSnapshot.chat, currentTimelinePhysicalId, currentHistoryStart.value, from)
+      ? socketSnapshot : undefined
     if (!initial && !background && from === undefined && conversationStart.value?.phase !== 'socket') {
       conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'http' }
     }
@@ -2580,7 +2592,9 @@ async function loadDirectChat(background = false, from?: number, signal?: AbortS
     if (!res.ok) throw new Error(t('Could not load conversation. Refresh to retry.'))
     // Read scheduling after history so a saved row cannot race ahead of
     // its pending state. Overlapping rows reconcile by request ID.
-    const delivery = initial?.inputDelivery ?? await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/input-delivery`), {
+    // A wider history window does not invalidate the socket's independent
+    // delivery projection. Explicit older-page reads retain HTTP recovery.
+    const delivery = socketSnapshot?.inputDelivery ?? await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/input-delivery`), {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
     }).then(async response => {
       const entries: unknown = response.ok ? await response.json() : undefined
@@ -2656,7 +2670,11 @@ async function loadReadonlySession(background = false, from?: number, signal?: A
       await historySnapshot?.getPromise()
       if (controller.signal.aborted) return
     }
-    const initial = takeSocketHistory(from)
+    await refreshSocketHistory(controller.signal, from)
+    if (controller.signal.aborted) return
+    const socketSnapshot = takeSocketHistory(from)
+    const initial = socketSnapshot && canUseConversationHistory(socketSnapshot.chat, currentTimelinePhysicalId, currentHistoryStart.value, from)
+      ? socketSnapshot : undefined
     if (!initial && !background && from === undefined && conversationStart.value?.phase !== 'socket') {
       conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'http' }
     }

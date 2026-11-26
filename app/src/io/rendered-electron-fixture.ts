@@ -28,7 +28,7 @@ async function main() {
     assert.equal(await execute(`!!${button(label)} && !${button(label)}.disabled`), true, `${label} is enabled`)
     await execute(`${button(label)}.click()`, true)
   }
-  const control = async (command: string) => { assert.equal((await fetch(`${base}/__smoke/${command}`, { method: 'POST' })).ok, true) }
+  const control = async (command: string) => { assert.equal((await fetch(`${base}/__smoke/${command}`, { method: 'POST' })).ok, true); if (command === 'new') await execute(`window.__ioSmoke.notifyInventory()`) }
   const capture = async (name: string) => {
     if (process.env.IO_SCREENSHOT_DIR) await writeFile(join(process.env.IO_SCREENSHOT_DIR, name), (await window.webContents.capturePage()).toPNG())
   }

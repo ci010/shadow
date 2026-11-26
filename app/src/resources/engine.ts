@@ -122,6 +122,15 @@ export function createResource<T>(load: (signal: AbortSignal) => Promise<T>, del
     get state() { return state },
     subscribe(listener: (state: ResourceState<T>) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
     read, invalidate,
+    /** Authoritative push supersedes every older in-flight HTTP generation. */
+    replace(value: T) {
+      if (closed) return
+      const next = candidate(value)
+      cancel(); recovered = false
+      publish({ value: next, version: options.version?.(next), error: '', status: 'ready', loading: false,
+        generation: state.generation + 1, revision: state.revision + (Object.is(next, state.value) ? 0 : 1) })
+      settle()
+    },
     update(transform: (value: T) => T) {
       if (closed || state.value === undefined) return false
       const next = transform(state.value)

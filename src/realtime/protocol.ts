@@ -1,3 +1,4 @@
+import { projectionKinds, type ProjectionTopic } from './projection-wire.ts'
 import type { SessionActivityReadModel } from '../sessions/activity-read-model.ts'
 
 /** Optional for older publishers. A present activity is a complete replacement,
@@ -16,6 +17,7 @@ export type RealtimeResource = 'interactions' | 'service-groups' | 'automations'
  * snapshots even when the connection cursor can be replayed. Persisted history,
  * not token deltas, is authoritative after a reset or completed turn. */
 export type RealtimeTopic =
+  | ProjectionTopic
   | { kind: 'projects'; projectId?: never }
   | { kind: 'chat'; projectId: string; sessionId: string }
   | { kind: 'sessions' | 'logs' | 'spans' | 'io' | 'integrations' | 'resources'; projectId: string }
@@ -49,6 +51,9 @@ export function isRealtimeTopic(value: unknown): value is RealtimeTopic {
   if (!record(value)) return false
   if (value.kind === 'projects') return Object.keys(value).every(key => key === 'kind')
   if (!identifier(value.projectId, 128)) return false
+  if (value.kind === 'session-summary') return ['navigation', 'full'].includes(value.scope as string) &&
+    Object.keys(value).every(key => ['kind', 'projectId', 'scope'].includes(key))
+  if ((projectionKinds as readonly unknown[]).includes(value.kind)) return Object.keys(value).every(key => ['kind', 'projectId'].includes(key))
   if (value.kind === 'chat') return identifier(value.sessionId, 512) &&
     Object.keys(value).every(key => ['kind', 'projectId', 'sessionId'].includes(key))
   return ['sessions', 'logs', 'spans', 'io', 'integrations', 'resources'].includes(value.kind as string) &&
@@ -57,7 +62,7 @@ export function isRealtimeTopic(value: unknown): value is RealtimeTopic {
 
 export function realtimeTopicKey(topic: RealtimeTopic): string {
   if (topic.kind === 'projects') return JSON.stringify(['projects'])
-  return JSON.stringify([topic.projectId, topic.kind, topic.kind === 'chat' ? topic.sessionId : ''])
+  return JSON.stringify([topic.projectId, topic.kind, topic.kind === 'chat' ? topic.sessionId : topic.kind === 'session-summary' ? topic.scope : ''])
 }
 
 export function parseRealtimeTopics(input: string | undefined): RealtimeTopic[] {

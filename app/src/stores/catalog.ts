@@ -1,11 +1,13 @@
 import { defineStore } from 'pinia'
-import { markRaw, onScopeDispose } from 'vue'
+import { computed, markRaw, onScopeDispose } from 'vue'
 import { canonicalResourceKey } from '../resources/engine.ts'
 import { resourceViews } from '../resources/vue-resource.ts'
 import { parseProjects } from '../projects.ts'
 import { apiUrl } from '../api-url.ts'
-import { createFoldersClient } from '../folders-client.ts'
-import { fetchNodeInventory } from '../node-inventory.ts'
+import { createLiveProjection, type ProjectionPool } from '../live-projection.ts'
+import type { ProjectionTopic } from '../../../src/realtime/projection-wire.ts'
+import { createFoldersClient, parseFolder } from '../folders-client.ts'
+import { fetchNodeInventory, parseNodeInventory } from '../node-inventory.ts'
 import { fetchAutomations } from '../automations.ts'
 import { createLiveResourceRefresh, type ResourceLivePool } from '../live-resource-refresh.ts'
 import { liveProjectId } from '../composables/useLiveClient.ts'
@@ -29,19 +31,44 @@ export function createCatalogResources(request: typeof fetch = fetch) {
     if (result.projectId !== projectId) throw new Error('Project mismatch')
     return result
   }
+  const projected = new Map<string, { users: number; owner: ReturnType<typeof createLiveProjection<unknown>> }>()
+  function acquireProjection<T>(base: string, projectId: string, pool: ProjectionPool, topic: ProjectionTopic,
+    parse: (value: unknown) => T, load: (signal: AbortSignal) => Promise<T>) {
+    const id = key(base, projectId, topic.kind)
+    let entry = projected.get(id)
+    if (!entry) {
+      entry = { users: 0, owner: createLiveProjection(pool, { base, topic, parse, load }) as ReturnType<typeof createLiveProjection<unknown>> }
+      projected.set(id, entry)
+    }
+    const current = entry
+    current.users++
+    const owner = current.owner as ReturnType<typeof createLiveProjection<T>>
+    let released = false
+    return { state: computed(() => owner.state), read: owner.read, refresh: owner.refresh, invalidate: owner.invalidate,
+      commit(transform: (value: T) => T) { return !released && owner.update(transform) },
+      release() { if (released) return; released = true; if (--current.users === 0) { owner.dispose(); projected.delete(id) } },
+    }
+  }
   return {
-    folders(base: string, projectId: string, pool: ResourceLivePool) {
-      return views.acquire(key(base, projectId, 'folders'), signal => createFoldersClient(base, request).list(signal), {}, invalidate => {
-        const live = createLiveResourceRefresh(pool, { base, projectId, resource: 'folders', refresh: invalidate })
-        return live.dispose
-      })
+    folders(base: string, projectId: string, pool: ProjectionPool) {
+      return acquireProjection(base, projectId, pool, { kind: 'folders', projectId }, value => {
+        if (!value || typeof value !== 'object' || !('folders' in value) || !Array.isArray(value.folders)) throw new Error('Invalid folders snapshot')
+        const folders = value.folders.map(parseFolder)
+        if (new Set(folders.map(row => row.id)).size !== folders.length) throw new Error('Duplicate folders')
+        return folders
+      }, signal => createFoldersClient(base, request).list(signal))
     },
-    nodes(base: string, projectId: string, pool: ResourceLivePool) {
-      return views.acquire(key(base, projectId, 'node-inventory'), signal => fetchNodeInventory(base, 'main',
-        AbortSignal.any([signal, AbortSignal.timeout(5_000)]), request), {}, invalidate => {
-        const live = createLiveResourceRefresh(pool, { base, projectId, resource: 'nodes', refresh: invalidate })
-        return live.dispose
-      })
+    pickerDevices(base: string, projectId: string, pool: ProjectionPool) {
+      return acquireProjection(base, projectId, pool, { kind: 'folder-devices', projectId }, value => {
+        if (!value || typeof value !== 'object' || !('devices' in value) || !Array.isArray(value.devices) || value.devices.some(d =>
+          !d || typeof d !== 'object' || typeof d.nodeId !== 'string' || !d.nodeId || typeof d.name !== 'string' ||
+          !['main', 'child'].includes(d.role) || typeof d.online !== 'boolean' || typeof d.supported !== 'boolean')) throw new Error('Invalid folder devices')
+        return value.devices as Awaited<ReturnType<ReturnType<typeof createFoldersClient>['pickerDevices']>>
+      }, signal => createFoldersClient(base, request).pickerDevices(signal))
+    },
+    nodes(base: string, projectId: string, pool: ProjectionPool) {
+      return acquireProjection(base, projectId, pool, { kind: 'nodes', projectId }, parseNodeInventory, signal => fetchNodeInventory(base, 'main',
+        AbortSignal.any([signal, AbortSignal.timeout(5_000)]), request))
     },
     automations(base: string, pool: ResourceLivePool) {
       const projectId = liveProjectId(base)
@@ -89,7 +116,7 @@ export function createCatalogResources(request: typeof fetch = fetch) {
       if (!lease.state.value.loading) void lease.refresh()
       return lease
     },
-    dispose() { views.dispose(); usageViews.dispose() },
+    dispose() { for (const entry of projected.values()) entry.owner.dispose(); projected.clear(); views.dispose(); usageViews.dispose() },
   }
 }
 export const useCatalogResourceStore = defineStore('resource-catalog', () => {

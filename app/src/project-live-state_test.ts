@@ -52,7 +52,7 @@ test('workbench overview shares one live reader and stops reading when the surfa
   f.requests.find(request => request.path.endsWith('/stages'))!.finish({ activity: {} })
   await flush()
   assert.equal(first.work.state.value, second.work.state.value)
-  assert.equal(f.observers.size, 1)
+  assert.equal(f.observers.size, 3)
   first.release(); second.release()
   f.event({ kind: 'sessions', projectId: 'a' })
   await f.tick()
@@ -76,10 +76,10 @@ test('chat, sidebar and sound consumers share snapshots and produce zero idle HT
   ]
   await f.tick()
   assert.equal(f.requests.length, 3)
-  assert.equal(f.observers.size, 2)
-  f.requests[0].finish({ projects: [{ id: 'a', name: 'A', createdAt: '' }] })
-  f.requests[1].finish(graph('One'))
-  f.requests[2].finish({ activity: { 'web:one': { stage: 'idle' } } })
+  assert.equal(f.observers.size, 4)
+  f.requests.find(r => r.path.endsWith('/projects'))!.finish({ projects: [{ id: 'a', name: 'A', createdAt: '' }] })
+  f.requests.find(r => r.path.endsWith('/summary'))!.finish(graph('One'))
+  f.requests.find(r => r.path.endsWith('/stages'))!.finish({ activity: { 'web:one': { stage: 'idle' } } })
   await flush()
   assert.equal(leases[0].sessions.state.value, leases[1].sessions.state.value)
   assert.equal(catalogs[0].state.value, catalogs[1].state.value)
@@ -96,7 +96,7 @@ test('chat, sidebar and sound consumers share snapshots and produce zero idle HT
   assert.equal(leases[2].activity.state.value?.activeRequestIds['web:one'], 'request-2')
   leases[0].release()
   leases[1].release()
-  assert.equal(f.observers.size, 2, 'sound monitoring remains when panes close')
+  assert.equal(f.observers.size, 4, 'sound monitoring remains when panes close')
   leases[2].release()
   for (const catalog of catalogs) catalog.release()
   assert.equal(f.observers.size, 0)
@@ -198,9 +198,9 @@ test('reconnection retries failed snapshots even when replay has no new invalida
   await f.tick()
   assert.equal(resets, previousResets + 1)
   assert.equal(f.requests.length, 6)
-  f.requests[3].finish({ projects: [{ id: 'a', name: 'A', createdAt: '' }] })
-  f.requests[4].finish(graph('Recovered'))
-  f.requests[5].finish({ activity: { 'web:one': { stage: 'idle' } } })
+  f.requests.slice(3).find(r => r.path.endsWith('/projects'))!.finish({ projects: [{ id: 'a', name: 'A', createdAt: '' }] })
+  f.requests.slice(3).find(r => r.path.endsWith('/summary'))!.finish(graph('Recovered'))
+  f.requests.slice(3).find(r => r.path.endsWith('/stages'))!.finish({ activity: { 'web:one': { stage: 'idle' } } })
   await lease.activity.read()
   assert.equal(catalog.state.error, '')
   assert.equal(lease.sessions.state.error, '')
@@ -218,6 +218,8 @@ test('project initialization waits for ready; activation reuses shared applied g
   await f.tick()
   assert.equal(f.requests.length, 0)
   f.ready.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!()
+  f.ready.get(realtimeTopicKey({ kind: 'session-summary', projectId: 'a', scope: 'navigation' }))!()
+  f.ready.get(realtimeTopicKey({ kind: 'session-stages', projectId: 'a' }))!()
   await f.tick()
   assert.equal(f.requests.length, 2)
   f.requests[0].finish(graph('Initial'))
@@ -417,6 +419,7 @@ test('real live topic changes reuse project snapshots; transport recovery still 
     await flush()
   }
   await ready()
+  t.mock.timers.tick(750); await flush(); t.mock.timers.tick(50); await flush()
   await lease.read()
   assert.equal(requests.length, 2)
   const chat = client.subscribe({ kind: 'chat', projectId: 'a', sessionId: 'web:one' }, {
@@ -583,7 +586,7 @@ test('shared recovery inventory remains single-owner when chat readiness reads a
   const chatRead = lease.activity.read()
   await f.tick()
   assert.equal(f.requests.filter(r => r.path.endsWith('/stages')).length, 2)
-  assert.equal(lease.activity.state.readReason, 'recovery')
+  assert.equal(lease.activity.state.readReason, 'projection-reset')
   f.requests.filter(r => r.path.endsWith('/stages')).at(-1)!.finish({ activity: {} })
   f.requests.filter(r => r.path.endsWith('/summary')).at(-1)!.finish(graph('One'))
   await chatRead
@@ -800,4 +803,59 @@ test('Work live reader requests compact initial state then keyed deltas across i
   await flush()
   assert.deepEqual(lease.work.state.value?.sessions, [])
   lease.release()
+})
+
+
+function pushedActivityFixture(t: TestContext) {
+  const observers = new Map<string, LiveObserver>()
+  const ready: Array<() => void> = []
+  let requests = 0, activitySnapshots = 0
+  const store = createProjectLiveState({ client: () => ({ subscribe(topic, observer) {
+    observers.set(topic.kind, observer)
+    const promise = new Promise<void>(resolve => ready.push(resolve))
+    return { close() {}, ready: () => promise, refreshProjection() {
+      if (topic.kind === 'session-stages') activitySnapshots++
+      return true
+    } }
+  } }) }, { request: async () => { requests++; throw new Error('Unexpected ordinary GET') } })
+  t.after(() => store.dispose())
+  const lease = store.acquireProject('http://fixture', 'a')
+  const stages = observers.get('session-stages')!
+  observers.get('session-summary')!.projectionSnapshot!({ event: 'snapshot', revision: 'summary', data: graph('One') })
+  stages.projectionSnapshot!({ event: 'snapshot', revision: 'stages', data: { activity: {} } })
+  return { lease, requests: () => requests, snapshots: () => activitySnapshots,
+    ready() { for (const resolve of ready) resolve() },
+    snapshot() { stages.projectionSnapshot!({ event: 'snapshot', revision: 'recovered', data: { activity: { 'web:one': { stage: 'tool', activeRequestId: 'recovered' } } } }) },
+    event(activity?: unknown) { observers.get('sessions')!.event({ type: 'event', cursor: 'fixture:1', topic: activityTopic,
+      payload: { event: 'activity', sessionId: 'web:one', ...(activity === undefined ? {} : { activity }) } }) },
+  }
+}
+
+test('model-less and malformed activity recover an existing stages snapshot over WS, valid replacements do not reread', async t => {
+  const f = pushedActivityFixture(t)
+  f.ready(); await flush()
+  f.event(model('llm'))
+  assert.equal(f.snapshots(), 0)
+  assert.equal(f.lease.activity.state.value?.stages['web:one'], 'llm')
+  for (const activity of [undefined, { stage: 'not-a-stage' }]) {
+    const before = f.snapshots()
+    f.event(activity)
+    assert.equal(f.snapshots(), before + 1, 'recovery requests snapshot:true on the stages subscription')
+    f.snapshot()
+    await flush()
+    assert.equal(f.lease.activity.state.value?.activeRequestIds['web:one'], 'recovered')
+  }
+  assert.equal(f.requests(), 0)
+})
+
+test('activity decoded immediately after snapshot ACK and ready resolve survives the gate continuation', async t => {
+  const f = pushedActivityFixture(t)
+  f.ready()
+  // Deliberately no await: a socket can decode this next frame in the same turn.
+  f.event(model('tool', { activeRequestId: 'after-ack' }))
+  await flush()
+  assert.equal(f.lease.activity.state.value?.stages['web:one'], 'tool')
+  assert.equal(f.lease.activity.state.value?.activeRequestIds['web:one'], 'after-ack')
+  assert.equal(f.snapshots(), 0)
+  assert.equal(f.requests(), 0)
 })

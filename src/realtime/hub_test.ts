@@ -32,7 +32,7 @@ test('topics and envelopes enforce bounded runtime wire validation', () => {
   assert.deepEqual(parseRealtimeTopics(JSON.stringify([chat(), chat()])), [chat()])
   for (const value of [
     undefined, '{}', 'null', 'bad', JSON.stringify([{ ...chat(), forged: true }]),
-    JSON.stringify([{ ...chat(), sessionId: '' }]), JSON.stringify([{ kind: 'nodes', projectId: 'one' }]),
+    JSON.stringify([{ ...chat(), sessionId: '' }]), JSON.stringify([{ kind: 'nodes', projectId: 'one', forged: true }]),
     JSON.stringify(Array.from({ length: 129 }, () => chat())),
     JSON.stringify([{ ...chat(), sessionId: 'a'.repeat(513) }]), ' '.repeat(32769),
     JSON.stringify([{ ...chat(), projectId: 'bad\nid' }]),
