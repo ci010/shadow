@@ -102,7 +102,7 @@
     </EditorViewHost>
     <template v-for="[projectId, state] in projectDocuments.projects" :key="projectId">
       <EditorViewHost v-for="tab in state.tabs" :key="tab" :descriptor="projectDescriptor(projectId, tab)" :selected="state.selected === projectTabKey(tab)" :active="visible && !appTab && selectedProjectId === projectId">
-        <div class="project-document-host">
+        <div class="project-document-host" :class="{ 'project-settings-document': tab === 'settings' }">
           <WorkflowManager v-if="tab === 'workflows'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId" :active="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" @clear-selection="workflowQueries.delete(projectId)" />
           <ProjectWorkbench v-else-if="tab === 'board'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId"
             :visible="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))"
@@ -973,4 +973,5 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--c-blue); ou
 @media (max-width: 1000px) { .project-secondary-editor { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; max-width: calc(100% - 32px); box-shadow: -8px 0 24px var(--c-shadow-soft); } }
 .app-settings-document { flex: 1; min-height: 0; min-width: 0; overflow: auto; scrollbar-gutter: stable; container: app-settings / inline-size; }
 .project-document-host { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.project-settings-document { overflow-y: auto; }
 </style>
