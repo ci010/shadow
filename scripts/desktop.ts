@@ -51,15 +51,13 @@ if (target) {
   ], {
     cwd: 'app',
     stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-    env: { ...process.env, SHADOW_DESKTOP_DEV_IPC: '1',
-      SHADOW_BROWSER_PIN_FILE: resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin') },
+    env: { ...process.env, SHADOW_DESKTOP_DEV_IPC: '1' },
     shell: false,
   })
   const require = createRequire(new URL('../desktop/package.json', import.meta.url))
   const executable: string = require('electron')
   const environment: NodeJS.ProcessEnv = {
     ...process.env, NODE_ENV: process.env.NODE_ENV ?? 'development', VITE_DEV_URL: url, SHADOW_DESKTOP_DEV_IPC: '1',
-    SHADOW_BROWSER_PIN_FILE: resolve(process.env.SHADOW_BROWSER_PIN_FILE ?? '.pin'),
     SHADOW_DESKTOP_DEV_NODE: process.execPath,
   }
   // Consume a local one-shot marker only on a fresh manual dev launch.

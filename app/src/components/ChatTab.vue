@@ -300,7 +300,7 @@
         <BotChatSetup :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && chatRouteActive"
           :can-submit="true" />
-        <CredentialRequest v-if="isDirectChat && !isExecution" :api-base="apiBase"
+        <CredentialRequest v-if="isDirectChat && !isExecution && installation.mode !== 'child'" :api-base="apiBase"
           :project-id="projectId || liveProjectId(apiBase)" :session-id="activeSessionId"
           :active="visible && composerVisible && !viewingPhysicalId && chatRouteActive"
           :stage="sessionStage" :can-submit="true" />

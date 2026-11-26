@@ -16,7 +16,7 @@ import {
   type SidecarSpawn,
 } from './supervisor.js'
 import {
-  normalizeLoopbackOrigin,
+  normalizeLoopbackOrigin, normalizePairedEndpoint,
   type RuntimeAuthorizationChanged,
 } from '../runtime-authorization.js'
 
@@ -71,23 +71,21 @@ export function resolveRuntimePaths(input: RuntimePathsInput): RuntimePaths {
   }
 }
 
-// Apply only at the runtime boundary: saved launch profiles remain portable to
-// packaged production, and wizard-supplied ports cannot override dev isolation.
+// Migrate old saved ports at the runtime boundary without rewriting profiles.
+// Child never binds a port; an isolated dev Main can override the shared default.
 export function resolveRuntimeLaunchOptions(
   options: RuntimeLaunchOptions,
   packaged: boolean,
   environment: Readonly<Record<string, string | undefined>>,
 ): RuntimeLaunchOptions {
-  if (packaged || environment.SHADOW_DESKTOP_DEV_IPC !== '1') return options
-  const configured = environment.SHADOW_DESKTOP_DEV_PORT
-  const port = configured === undefined ? 43124 : Number(configured)
-  if (
-    (configured !== undefined && !/^\d+$/.test(configured)) ||
-    !Number.isInteger(port) || port < 1 || port > 65535 || port === 43123
-  ) {
-    throw new Error('SHADOW_DESKTOP_DEV_PORT must be an integer from 1 to 65535 other than production port 43123')
+  if (options.role === 'child') return { ...options, port: 0 }
+  const configured = !packaged && environment.SHADOW_DESKTOP_DEV_IPC === '1' ? environment.SHADOW_DESKTOP_DEV_PORT : undefined
+  const port = configured === undefined ? 3124 : Number(configured)
+  if ((configured !== undefined && !/^\d+$/.test(configured)) || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('SHADOW_DESKTOP_DEV_PORT must be an integer from 1 to 65535')
   }
   return { ...options, port }
+
 }
 
 export function createRuntimeLaunchToken(): string {
@@ -141,7 +139,7 @@ export class RuntimeHost {
       executablePath: this.paths.executablePath,
       entryPath: this.developmentEntry ?? this.paths.entryPath,
       configPath: this.paths.configPath,
-      launchToken: this.tokenFactory(),
+      launchToken: options.role === 'main' ? this.tokenFactory() : '',
       port: options.port,
       ...(options.localExecutor === undefined
         ? {}
@@ -157,14 +155,17 @@ export class RuntimeHost {
         this.clearFailedStart(request)
         return status
       }
-      const apiBase = normalizeLoopbackOrigin(status.apiBase)
+      if (status.role !== request.role) throw new Error('Runtime returned a mismatched role')
+      const apiBase = status.role === 'child' ? normalizePairedEndpoint(status.apiBase) : normalizeLoopbackOrigin(status.apiBase)
       if (apiBase === null) {
         throw new Error('Runtime returned an invalid API origin')
       }
-      this.options.onAuthorizationChanged?.({
-        apiBase,
-        launchToken: request.launchToken,
-      })
+      this.options.onAuthorizationChanged?.(status.role === 'child' ? {
+        apiBase, launchToken: '', deviceGrant: async () => {
+          const token = await supervisor.requestChildControl?.('grant')
+          return typeof token === 'string' && /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null
+        },
+      } : { apiBase, launchToken: request.launchToken })
       return { ...status, apiBase }
     }).catch(async (error: unknown) => {
       await supervisor.stop()
@@ -174,6 +175,12 @@ export class RuntimeHost {
       if (this.options.revalidateOnStart) this.startPromise = undefined
     })
     return this.startPromise
+  }
+
+  invalidateChildGrant(): void { void this.supervisor?.requestChildControl?.('invalidateGrant') }
+
+  requestChildLocal(operation: 'status' | 'inventory'): Promise<unknown> {
+    return this.supervisor?.requestChildControl?.(operation) ?? Promise.resolve(null)
   }
 
   /** Called inside the bootstrap coordinator's serialized lifecycle. */

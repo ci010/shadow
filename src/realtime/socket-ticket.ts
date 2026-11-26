@@ -33,7 +33,7 @@ export function registerRealtimeSocketTicket(app: Hono, access: {
     if (upgrade && proof) {
       const ticket = tickets.get(proof)
       const origin = request.headers.get('Origin')
-      const sameOrigin = ticket && (ticket.origin === origin || (ticket.origin === null && origin === 'file://'))
+      const sameOrigin = ticket && (ticket.origin === origin || ((ticket.origin === null || ticket.origin === 'null') && origin === 'file://'))
       if (!ticket || ticket.expires <= now() || ticket.signal?.aborted || !offered.includes(REALTIME_SOCKET_PROTOCOL) ||
         !sameOrigin || ticket.audience !== new URL(request.url).origin) return c.json({ error: 'unauthorized' }, 401)
       tickets.delete(proof)

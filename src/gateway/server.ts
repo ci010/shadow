@@ -1,13 +1,12 @@
 import { GLTF_CAPTURE_HEADER } from '../gltf-capture-contract.ts'
-import { HtmlPreviewLeases, previewContext } from './html-preview.ts'
+import { HTML_PREVIEW_BASE_HEADER, HtmlPreviewLeases, previewContext } from './html-preview.ts'
 import type { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { env } from 'node:process'
-import type { AddressInfo } from 'node:net'
+import type { AddressInfo, Socket } from 'node:net'
 import { IncomingMessage } from 'node:http'
 import { gatewayWebSockets, normalizeGatewayUpgradeRequest } from './websocket.ts'
 import type { GatewayPlugin } from './types.ts'
-import type { BrowserAuth } from './web-auth.ts'
 
 export type { GatewayPlugin } from './types.ts'
 
@@ -44,8 +43,15 @@ export function isLoopbackGatewayRequest(request: Request, clientAddresses: Gate
 export interface GatewayRouteOptions {
   allowedOrigins?: string[]
   launchCredential?: string
-  browserAuth?: BrowserAuth
   authorizeClient?: (request: Request) => boolean
+  requireCredential?: boolean
+  delegatedViewer?: {
+    authorize(request: Request): boolean
+    hasCredential(request: Request): boolean
+    ownerSignal(request: Request): AbortSignal | undefined
+    allowsCaptureBinding?(request: Request): boolean
+    allowsCrossOrigin(path: string, method: string): boolean
+  }
   clientAddresses?: GatewayClientAddressRegistry
   localLiveSocketPath?: string
   launchCredentialExemptions?: readonly {
@@ -54,8 +60,8 @@ export interface GatewayRouteOptions {
   }[]
 }
 
-const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
-const CORS_HEADERS = ['Content-Type', 'Authorization', 'If-None-Match', GLTF_CAPTURE_HEADER] as const
+const CORS_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const
+const CORS_HEADERS = ['Content-Type', 'Authorization', 'If-None-Match', 'Range', 'Last-Event-ID', GLTF_CAPTURE_HEADER, HTML_PREVIEW_BASE_HEADER] as const
 
 // A 32 KiB live-topic JSON query can occupy 96 KiB after percent encoding.
 // Bound the parser while retaining room for the cursor and ordinary headers.
@@ -172,7 +178,6 @@ function registerGatewayRoutes(
   )
 
   app.use('*', async (c, next) => {
-    if (opts.browserAuth?.isAuthenticationRequest(c.req.raw)) c.header('Cache-Control', 'no-store')
     try {
       const original = c.req.raw
       normalizeGatewayUpgradeRequest(c)
@@ -185,10 +190,6 @@ function registerGatewayRoutes(
       return c.json({ error: 'invalid_websocket_host' }, 400)
     }
     const incoming: unknown = typeof c.env === 'object' && c.env !== null && 'incoming' in c.env ? c.env.incoming : undefined
-    if (incoming instanceof IncomingMessage && opts.browserAuth?.lanPorts.has(incoming.socket.localPort ?? -1)) {
-      const denied = opts.browserAuth.guardLanRequest(c.req.raw)
-      if (denied) return denied
-    }
     const previewResponse = await htmlPreviews.serve(c.req.raw)
     if (previewResponse) return previewResponse
     const requestOrigin = c.req.header('Origin')
@@ -204,7 +205,22 @@ function registerGatewayRoutes(
         c.req.header('Sec-WebSocket-Protocol')?.split(',').some(value => /^ticket\.[a-f0-9-]{36}$/.test(value.trim())) &&
         ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) && incoming instanceof IncomingMessage &&
         ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(incoming.socket.remoteAddress ?? '')
-      if ((requestOrigin === 'null' && launchCredential) || localLiveUpgrade) {
+      const viewer = opts.delegatedViewer
+      const requestedMethod = c.req.header('Access-Control-Request-Method')?.toUpperCase() ?? c.req.method
+      const loopbackOrigin = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?$/.test(requestOrigin)
+      const viewerPreflight = c.req.method === 'OPTIONS' && (requestOrigin === 'null' || loopbackOrigin) &&
+        viewer?.allowsCrossOrigin(url.pathname, requestedMethod)
+      const viewerRequest = (requestOrigin === 'null' || loopbackOrigin) && viewer?.hasCredential(c.req.raw) &&
+        viewer.allowsCrossOrigin(url.pathname, c.req.method)
+      const viewerFileUpgrade = requestOrigin === 'file://' && c.req.method === 'GET' && url.pathname === opts.localLiveSocketPath &&
+        c.req.header('Upgrade')?.toLowerCase() === 'websocket' &&
+        c.req.header('Sec-WebSocket-Protocol')?.split(',').some(value => /^ticket\.[a-f0-9-]{36}$/.test(value.trim())) && !!viewer
+      // The exact one-use live ticket also binds the renderer Origin at upgrade.
+      const viewerDevUpgrade = loopbackOrigin && url.pathname === opts.localLiveSocketPath &&
+        c.req.header('Upgrade')?.toLowerCase() === 'websocket' && !!viewer
+      if (viewerPreflight || viewerRequest || viewerDevUpgrade) {
+        normalizedRequestOrigin = requestOrigin
+      } else if ((requestOrigin === 'null' && launchCredential) || localLiveUpgrade || viewerFileUpgrade) {
         normalizedRequestOrigin = 'null'
       } else {
         try {
@@ -258,12 +274,18 @@ function registerGatewayRoutes(
     const launchCredentialExempt = launchCredentialExemptions.has(
       `${c.req.method.toUpperCase()}\u0000${new URL(c.req.url).pathname}`,
     )
-    const browserSession = opts.browserAuth?.session(c.req.raw)
+    const viewerSignal = opts.delegatedViewer?.ownerSignal(c.req.raw)
+    if (opts.delegatedViewer?.hasCredential(c.req.raw) && !viewerSignal) {
+      const invalid = opts.delegatedViewer.allowsCrossOrigin(new URL(c.req.url).pathname, c.req.method)
+      return c.json({ error: 'unauthorized' }, 401, {
+        'Cache-Control': 'no-store',
+        ...(invalid ? { 'X-Shadow-Device-Session': 'invalid' } : {}),
+        ...(normalizedRequestOrigin ? { 'Access-Control-Allow-Origin': normalizedRequestOrigin, Vary: 'Origin' } : {}),
+      })
+    }
     if (
-      c.req.method !== 'OPTIONS' && (launchCredential || opts.browserAuth?.required) &&
+      c.req.method !== 'OPTIONS' && (launchCredential || opts.requireCredential) &&
       !launchCredentialExempt &&
-      !opts.browserAuth?.isPublicRequest(c.req.raw) &&
-      !browserSession &&
       !opts.authorizeClient?.(c.req.raw) &&
       !(launchCredential && await validateLaunchCredential(
         c.req.header('Authorization'),
@@ -275,19 +297,27 @@ function registerGatewayRoutes(
       })
     }
 
-    if (browserSession) {
+    const ownerSignal = viewerSignal
+    if (ownerSignal) {
       const original = c.req.raw
+      const headers = viewerSignal && original.headers.has(GLTF_CAPTURE_HEADER) && !opts.delegatedViewer?.allowsCaptureBinding?.(original)
+        ? new Headers(original.headers) : undefined
+      headers?.delete(GLTF_CAPTURE_HEADER)
       c.req.raw = new Request(original, {
-        signal: AbortSignal.any([original.signal, browserSession.controller.signal]),
+        ...(headers ? { headers } : {}),
+        signal: AbortSignal.any([original.signal, ownerSignal]),
       })
       opts.clientAddresses?.inherit(original, c.req.raw)
     }
-    await previewContext.run({ store: htmlPreviews, origin: new URL(c.req.url).origin, owner: browserSession?.controller.signal }, next)
+    await previewContext.run({ store: htmlPreviews, origin: new URL(c.req.url).origin, owner: ownerSignal }, next)
     if (normalizedRequestOrigin) {
       c.header('Access-Control-Allow-Origin', normalizedRequestOrigin)
       const exposedHeaders = (c.res.headers.get('Access-Control-Expose-Headers') ?? '')
         .split(',').map(header => header.trim()).filter(Boolean)
-      if (!exposedHeaders.some(header => header.toLowerCase() === 'etag')) exposedHeaders.push('ETag')
+          if (!exposedHeaders.some(header => header.toLowerCase() === 'etag')) exposedHeaders.push('ETag')
+      for (const header of ['Content-Disposition', 'Content-Range', 'Accept-Ranges', 'X-Shadow-Source-Path']) {
+        if (c.res.headers.has(header) && !exposedHeaders.some(exposed => exposed.toLowerCase() === header.toLowerCase())) exposedHeaders.push(header)
+      }
       if (c.res.headers.has('X-Shadow-Request-Id') && !exposedHeaders.some(header => header.toLowerCase() === 'x-shadow-request-id')) exposedHeaders.push('X-Shadow-Request-Id')
       c.header('Access-Control-Expose-Headers', exposedHeaders.join(', '))
       const vary = (c.res.headers.get('Vary') ?? '').split(',').map(value => value.trim()).filter(Boolean)
@@ -344,6 +374,11 @@ export function serveGateway(
   })
   const sockets = gatewayWebSockets(app)
   sockets.injectWebSocket(server)
+  const upgrades = new Set<Socket>()
+  if (opts.sharedWebSockets) server.on('upgrade', (_request, socket: Socket) => {
+    upgrades.add(socket)
+    socket.once('close', () => upgrades.delete(socket))
+  })
   server.once('error', (error) => {
     ready.reject(error)
     finished.reject(error)
@@ -370,6 +405,8 @@ export function serveGateway(
         if (!opts.sharedWebSockets) {
           for (const socket of sockets.wss.clients) socket.terminate()
           sockets.wss.close()
+        } else {
+          for (const socket of upgrades) socket.destroy()
         }
         await new Promise<void>((resolve, reject) => {
           server.close((error) => {

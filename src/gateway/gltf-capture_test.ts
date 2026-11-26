@@ -169,20 +169,16 @@ test('tool cancellation and timed-out jobs reject late responses', async t => {
   assert.equal(f.bridge.available(scope.sessionId, id), false)
 })
 
-test('owner authorization separates revocable browser identity and trusted desktop launch from delegated and cross-site clients', async () => {
+test('owner authorization separates the trusted desktop launch from delegated and cross-site clients', async () => {
   const clientAddresses = new GatewayClientAddressRegistry()
   const origin = 'http://127.0.0.1:12345'
-  const browserSession = { origin, expiresAt: Date.now() + 1000, controller: new AbortController(), timer: setTimeout(() => {}, 1).unref() }
-  const browser = { required: true, session: (request: Request) => request.headers.get('x-fixture-session') === 'owner' ? browserSession : undefined }
-  const options = { browser, clientAddresses, delegated: (request: Request) => request.headers.has('x-fixture-delegated') }
+  const options = { clientAddresses, delegated: (request: Request) => request.headers.has('x-fixture-delegated') }
   const owner = createGltfCaptureOwner({ ...options, launchCredential: 'fixture-launch-token' })
   const request = (headers: Record<string, string>, hostname = '127.0.0.1') => {
     const req = new Request(`${origin}/api/gltf-capture/register`, { method: 'POST', headers })
     clientAddresses.capture(req, { transport: 'tcp', hostname })
     return req
   }
-  const cookie = request({ origin, 'x-fixture-session': 'owner' })
-  assert.equal(await owner(cookie), browserSession.controller.signal)
   const desktop = { origin: 'null', 'sec-fetch-site': 'cross-site', authorization: 'Bearer fixture-launch-token' }
   const desktopIdentity = await owner(request(desktop))
   assert(desktopIdentity)
@@ -191,10 +187,8 @@ test('owner authorization separates revocable browser identity and trusted deskt
   assert.equal(await owner(request({ ...desktop, origin: 'http://external.invalid' })), undefined)
   assert.equal(await owner(request({ ...desktop, 'x-fixture-delegated': '1' })), undefined)
   assert.equal(await owner(request(desktop, '192.168.1.12')), undefined)
-  browserSession.controller.abort()
-  assert.equal(await owner(cookie), undefined)
-  const local = createGltfCaptureOwner({ ...options, browser: { ...browser, required: false } })
-  assert(await local(request({ origin })))
+  const local = createGltfCaptureOwner(options)
+  assert.equal(await local(request({ origin })), undefined)
   assert.equal(await local(request({ origin, 'sec-fetch-site': 'cross-site' })), undefined)
   assert.equal(await local(request({})), undefined)
 })

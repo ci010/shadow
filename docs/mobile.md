@@ -124,7 +124,7 @@ Revocation and shutdown abort associated live streams and invalidate resource
 tickets; shutdown does not expire the paired authorization. File access tickets
 remain short-lived (one minute), even for a permanently paired phone. Listing
 sessions does not return their secrets. Browser
-cookies, browser PINs, launch credentials and Child keys cannot authenticate
+desktop launch credentials and Child keys cannot authenticate
 at the mobile gateway.
 
 ## Project and workspace navigation on phones

@@ -171,20 +171,16 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal(deviceNetwork.enabled, false)
       assert.equal(deviceNetwork.state, 'disabled')
       assert.equal(deviceNetwork.endpoint, null)
-      assert.equal((await fetch(base + '/')).status, 200)
-      assert.equal((await fetch(base + '/projects/default/chat')).status, 200)
-      assert.equal((await fetch(base + '/assets/fixture.js')).status, 200)
-      assert.deepEqual(await (await fetch(base + '/api/web-auth/session')).json(), { version: 1, required: true, authenticated: false })
-      const offer = await json<{ code: string; url: string }>('/local/v1/web-pairing', 'POST')
-      assert.equal(offer.url, base + '/')
-      const paired = await fetch(base + '/api/web-auth/pair', {
-        method: 'POST', headers: { origin: base, 'content-type': 'application/json' }, body: JSON.stringify({ code: offer.code }),
-      })
-      assert.equal(paired.status, 200)
-      const browserHeaders = { origin: base, cookie: paired.headers.get('set-cookie')!.split(';')[0]!, 'content-type': 'application/json' }
-      assert.equal((await fetch(base + '/api/projects', { headers: browserHeaders })).status, 200)
-      assert.equal((await fetch(base + '/local/v1/readiness', { headers: browserHeaders })).status, 401)
-      assert.equal((await fetch(base + '/nodes/v1/network', { headers: browserHeaders })).status, 401)
+      for (const path of ['/', '/projects/default/chat', '/assets/fixture.js', '/api/web-auth/session']) {
+        assert.equal((await fetch(base + path)).status, 401)
+        assert.equal((await request(path)).status, 404, 'Even the desktop credential does not enable a browser UI')
+      }
+      assert.equal((await request('/local/v1/web-pairing', 'POST')).status, 404)
+      assert.equal((await request('/api/web-auth/pair', 'POST', { code: 'retired' })).status, 404)
+      const browserHeaders = { origin: base, cookie: 'shadow-session=retired', 'content-type': 'application/json' }
+      for (const path of ['/api/projects', '/local/v1/readiness', '/nodes/v1/network']) {
+        assert.equal((await fetch(base + path, { headers: browserHeaders })).status, 401)
+      }
       const initial = await json<{ projects: ProjectRecord[] }>('/api/projects')
       assert.deepEqual(initial.projects.map(org => org.id), ['default'])
       const created = await json<{ project: ProjectRecord; runtime: { state: string } }>(
@@ -200,7 +196,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal(discordB.projectId, created.project.id)
       assert.deepEqual(discordA.bindings, [])
       assert.deepEqual(discordA.learning, [])
-      const coordinator = await json<{ sessionId: string }>(a + '/api/sessions', 'POST', { title: 'Administrator session' })
+      const coordinator = await json<{ sessionId: string }>(a + '/api/sessions', 'POST', { topic: 'Administrator session' })
       const coordinatorContext = await json<{ tools: Array<{ name: string }>; systemPrompt: string }>(
         a + `/api/sessions/${encodeURIComponent(coordinator.sessionId)}/context`)
       assert(!coordinatorContext.tools.some(tool => ['channel_config', 'project_config', 'authoring_change'].includes(tool.name)))
@@ -280,9 +276,9 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       const mobileToken = (await mobileLogin.json()).accessToken
       const mobileHeaders = { origin: 'capacitor://localhost', authorization: `Bearer ${mobileToken}` }
       assert.equal((await fetch(`http://127.0.0.1:${mobilePort}/api/projects`, { headers: mobileHeaders })).status, 200)
-      assert.equal((await fetch(base + aSession + '/context', { headers: browserHeaders })).status, 200)
+      assert.equal((await request(aSession + '/context')).status, 200)
       assert.equal((await fetch(base + b + '/api/config/model-defaults', {
-        method: 'PATCH', headers: browserHeaders, body: JSON.stringify({ model: null }),
+        method: 'PATCH', headers: { ...browserHeaders, authorization: `Bearer ${credential}` }, body: JSON.stringify({ model: null }),
       })).status, 200)
       assert.equal((await fetch(base + aSession + '/background-tasks')).status, 401)
       assert.deepEqual(await json(aSession + '/background-tasks'), { sessionId: sessionA.sessionId, total: 0, tasks: [] })
@@ -311,8 +307,7 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       assert.equal((await json<{ enabled: boolean }>(b + '/api/learning')).enabled, true)
       const automationsA = await json<{ automations: AutomationSummary[] }>(a + '/api/automations')
       const automationsB = await json<{ automations: AutomationSummary[] }>(b + '/api/automations')
-      assert.equal(automationsA.automations.length, 5)
-      assert.equal(automationsB.automations.length, 5)
+      assert.deepEqual(automationsA.automations.map(job => job.id).sort(), automationsB.automations.map(job => job.id).sort())
       assert(automationsA.automations.filter(job => job.source === 'learning').every(job => job.session === 'fresh' && !job.enabled))
       assert(automationsB.automations.filter(job => job.source === 'learning' || job.source === 'system').every(job => job.session === 'fresh' && job.enabled))
       assert(!automationsA.automations.some(job => job.id === 'system:work-observer'))
@@ -424,7 +419,8 @@ test('real Main concurrently isolates Project folders, Home prompts, defaults, b
       runtime = await startMainRuntime(ConfigSchema.parse(JSON.parse(await readFile(configPath, 'utf8'))), options)
       await runtime.ready
       assert.equal((await fetch(base + '/api/projects', { headers: browserHeaders })).status, 401)
-      assert.deepEqual(await (await fetch(base + '/api/web-auth/session')).json(), { version: 1, required: true, authenticated: false })
+      assert.equal((await fetch(base + '/api/web-auth/session')).status, 401)
+      assert.equal((await request('/api/web-auth/session')).status, 404)
       assert.equal((await json<{ projects: ProjectRecord[] }>('/api/projects')).projects.length, 2)
       const restoredDiscord = IntegrationOverviewSchema.parse(await json(a + discordPath))
       assert.deepEqual(restoredDiscord.agents, [])

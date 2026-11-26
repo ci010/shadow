@@ -12,6 +12,7 @@ test('only isolated loopback app URLs with one-use tickets reach the embedded pa
 test('desktop launch hands off only validated Project/app identifiers, not API origins or tickets', () => {
   const appId = '11111111-1111-4111-8111-111111111111'
   assert.deepEqual(nativeAppIdentity('http://127.0.0.1:43123/projects/p/', appId), { projectId: 'p', appId })
+  assert.deepEqual(nativeAppIdentity('https://paired.test/transport/child/projects/p/', appId), { projectId: 'p', appId })
   for (const base of ['http://127.0.0.1:43123/', 'http://127.0.0.1:43123/projects/p/api', 'http://127.0.0.1:43123/projects/p%2Fq']) {
     assert.throws(() => nativeAppIdentity(base, appId), /Project-scoped/)
   }

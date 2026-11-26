@@ -1,4 +1,4 @@
-import { loadPairConnection, parsePairArguments } from './web-pairing-cli.ts'
+import { loadPairConnection, parsePairArguments } from './local-connection.ts'
 import { mobilePublicOrigin } from '../gateway/mobile-access.ts'
 
 export async function manageMobileAccess(

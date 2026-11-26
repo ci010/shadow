@@ -6,12 +6,11 @@ import { measureStartupProfile, startupProjectOrdinal } from '../startup-profile
 import { appProxyPlugin } from '../../config/proxy-routes.ts'
 import { updateBackendNetwork } from '../../execution/network/backend.ts'
 import { Hono } from 'hono'
+import { IncomingMessage } from 'node:http'
 import { dirname, resolve } from 'node:path'
-import { stat } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
 import { appDataPaths } from '../../utils/data-paths.ts'
 import type { MainRuntimeHandle, MainRuntimeOptions } from './contracts.ts'
-import { resolveUiDistDirectory } from './paths.ts'
 import type { Config } from '../../config/schema.ts'
 import { CopilotAuthenticatorV2 } from '../../providers/copilot-v2.ts'
 import { ProviderSetup } from '../../providers/setup.ts'
@@ -23,8 +22,6 @@ import { AtomicFileRegistrySnapshotAdapter } from '../../cluster/persistence.ts'
 import { GatewayClientAddressRegistry, registerGatewayRoutes, resolveLaunchCredential, serveGateway, validateLaunchCredential } from '../../gateway/server.ts'
 import { authorizeMainNodeInventory, mainLocalNodeInventory } from '../node-inventory.ts'
 import { LocalRuntimeControl } from '../local-control.ts'
-import { devProxyPlugin } from '../../gateway/dev-proxy.ts'
-import { uiPlugin } from '../../gateway/ui.ts'
 import { createProjectScope } from '../../projects/scope.ts'
 import { ProjectCatalog } from '../../projects/catalog.ts'
 import { AppProviderConfigStore, ProjectConfigStore } from '../../projects/config-store.ts'
@@ -41,10 +38,8 @@ import { otelPlugin } from '../../otel/routes.ts'
 import { RealtimeHub, registerRealtimeRoute, REALTIME_SOCKET_PATH } from '../../realtime/hub.ts'
 import type { RealtimeTopic } from '../../realtime/protocol.ts'
 import { StartupTimings } from '../startup-timings.ts'
-import { privateLanAddresses } from '../../gateway/lan-browser.ts'
-import { BrowserAuth } from '../../gateway/web-auth.ts'
 import { createGltfCaptureOwner } from '../../gateway/gltf-capture-auth.ts'
-import { MainDeviceUi } from '../../cluster/device-ui.ts'
+import { DIRECT_DEVICE_UI_ROUTES, directDeviceCapturePath, directDeviceUiPath, DirectDeviceUi } from '../../cluster/direct-device-ui.ts'
 import { MainDeviceNetwork } from './device-network.ts'
 import { mobileGatewayConfig } from '../../gateway/mobile-access.ts'
 import { MainMobileNetwork } from './mobile-network.ts'
@@ -130,52 +125,20 @@ export async function startProjectHost(
   cleanup.push(closeTelemetry)
   const clientAddresses = new GatewayClientAddressRegistry()
   const launchCredential = resolveLaunchCredential(options.gateway?.launchCredential, process.env.GATEWAY_LAUNCH_CREDENTIAL, process.env.WINDOWS_USE_LAUNCH_TOKEN)
-  const lanGateways: ReturnType<typeof serveGateway>[] = []
-  let lanStart: Promise<string[]> | undefined
-  const enableLan = () => lanStart ??= (async () => {
-    await Promise.resolve() // Assign the in-flight promise before any rejection resets it.
-    const addresses = privateLanAddresses()
-    try {
-      if (!addresses.length) throw new Error('No private LAN interface')
-      for (const host of addresses) {
-        if (stopping) throw new Error('Main is stopping')
-        const listener = serveGateway(app, { host, port: 0, clientAddresses, sharedWebSockets: true, requestGuard: request => browserAuth.guardLanRequest(request) })
-        lanGateways.push(listener)
-        await listener.ready
-        if (stopping) throw new Error('Main is stopping')
-        browserAuth.lanPorts.add(listener.addr.port)
-      }
-      return lanGateways.map(listener => `http://${listener.addr.hostname}:${listener.addr.port}/`)
-    } catch (error) {
-      await Promise.all(lanGateways.splice(0).map(listener => listener.shutdown()))
-      browserAuth.lanPorts.clear()
-      lanStart = undefined
-      throw error
-    }
-  })()
-  cleanup.push(() => Promise.all(lanGateways.map(listener => listener.shutdown())))
-  const disableLan = async () => {
-    await Promise.all(lanGateways.splice(0).map(listener => listener.shutdown()))
-    browserAuth.lanPorts.clear()
-    lanStart = undefined
-  }
-  const browserAuth = new BrowserAuth({ enableLan, disableLan, launchCredential, pinHash: options.gateway?.browserPinHash, clientAddresses, developmentUrl: process.env.VITE_DEV_URL })
-  cleanup.push(() => browserAuth.close())
   const mobileAccess = new MainMobileNetwork({
     configPath: resolve(appPaths.devices, 'mobile-network.v1.json'),
     launchCredential: launchCredential ?? '', clientAddresses, main: app,
     environment: mobileGatewayConfig(process.env),
   })
   cleanup.push(() => mobileAccess.shutdown())
-  let deviceUi: MainDeviceUi | undefined
-  const authorizeOwner = (request: Request) => browserAuth.authorize(request)
-    || ((!browserAuth.required || !!launchCredential) && authorizeMainNodeInventory(request, launchCredential, clientAddresses))
-  const authorizeViewerCapture = createGltfCaptureOwner({ browser: browserAuth, clientAddresses, launchCredential,
+  let directUi: DirectDeviceUi | undefined
+  const authorizeOwner = (request: Request) => !!launchCredential && authorizeMainNodeInventory(request, launchCredential, clientAddresses)
+  const authorizeViewerCapture = createGltfCaptureOwner({ clientAddresses, launchCredential,
     developmentUrl: process.env.VITE_DEV_URL,
-    deviceViewer: request => deviceUi?.viewerCaptureOwner(request),
-    delegated: request => !!deviceUi?.authorize(request) || mobileAccess.authorizeMain(request),
+    deviceViewer: request => directUi?.captureSignal(request),
+    delegated: request => !!directUi?.authorize(request) || mobileAccess.authorizeMain(request),
   })
-  const authorize = (request: Request) => !!deviceUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeOwner(request)
+  const authorize = (request: Request) => !!directUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeOwner(request)
   const presence = new UserPresence()
   const runtimes = new Map<string, ProjectRuntime>()
   const scopes = new Map<string, ReturnType<typeof createProjectScope>>()
@@ -194,7 +157,9 @@ export async function startProjectHost(
   let activeConfig = config
   const copilotAuth = new CopilotAuthenticatorV2()
   let provider = createAggregatedProvider(config, copilotAuth, hostHome)
+  let deviceNetwork: MainDeviceNetwork | undefined
   const mainCluster = await startup.measure('cluster', () => createMainCluster({
+    acceptsConnection: () => deviceNetwork?.enabled === true,
     authorizeInventory: authorize,
     localNodeInventory: () => mainLocalNodeInventory({
       localNodeId: options.localNodeId ?? 'local', implementationVersion: '0.1.0', shellAvailable: options.localExecutor !== false,
@@ -217,20 +182,21 @@ export async function startProjectHost(
   cleanup.push(() => mainCluster.closeNodeConnections())
   const authorizeLiveTopic = (topic: RealtimeTopic) => topic.kind === 'projects' ||
     (!!catalog.get(topic.projectId) && !deletions.has(topic.projectId) && !catalog.isDeleting(topic.projectId))
-  deviceUi = new MainDeviceUi(mainCluster, clientAddresses, request => Promise.resolve(app.fetch(request)), process.env.VITE_DEV_URL, {
-    hub: realtimeHub,
-    authorizeTopic: authorizeLiveTopic,
-  })
-  cleanup.push(() => deviceUi?.close())
-  const deviceNetwork = new MainDeviceNetwork({
-    uiPlugin: deviceUi.plugin(),
+  const network = deviceNetwork = new MainDeviceNetwork({
+    sharedGateway: app,
+    sharedPort: options.gateway?.port ?? Number(process.env.GATEWAY_PORT ?? process.env.REST_API_PORT ?? 3124),
+    authorizeViewer: request => directUi?.authorize(request) ?? false,
+    hasViewerCredential: request => directUi?.hasCredential(request) ?? false,
+    invalidateUi: () => directUi?.reset(),
     configPath: resolve(options.clusterSnapshotPath ? dirname(options.clusterSnapshotPath) : appPaths.devices, 'device-network.v1.json'),
     cluster: mainCluster,
     clientAddresses,
     authorize: request => launchCredential ? validateLaunchCredential(request.headers.get('Authorization') ?? undefined, launchCredential) : false,
   })
-  cleanup.push(() => deviceNetwork.shutdown())
-  await deviceNetwork.init()
+  directUi = new DirectDeviceUi(mainCluster, () => network.enabled)
+  cleanup.push(() => directUi?.close())
+  cleanup.push(() => network.shutdown())
+  await network.init()
   const sharedConfigStore = new AppProviderConfigStore({
     configPath: options.configPath,
     getConfig: () => activeConfig,
@@ -295,7 +261,7 @@ export async function startProjectHost(
           startupSessionStates: startupStates,
           project, home: paths.home, scope, catalog, configStore: store, diagnostics,
           mainCluster, copilotAuth, accountHome: hostHome, authorize, authorizeViewerCapture, realtimeHub,
-          webClientDeviceName: request => deviceUi?.clientDeviceName(request),
+          webClientDeviceName: request => directUi?.displayName(request),
           localExecutor: options.localExecutor !== false,
         }))
         await runtime.ready
@@ -322,9 +288,28 @@ export async function startProjectHost(
   }
   let shutdown: () => Promise<void>
   const localControl = new LocalRuntimeControl('main', () => shutdown())
-  registerGatewayRoutes(app, [browserAuth.plugin(), mobileAccess.plugin(), ...mainCluster.plugins, deviceNetwork.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appAgentVersionDefaultsPlugin(sharedConfigStore, () => activeConfig), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
-    launchCredential, browserAuth, clientAddresses, authorizeClient: request => {
-      if (mobileAccess?.authorizeMain(request) || deviceUi?.authorize(request)) return true
+  app.use('*', async (c, next) => {
+    // The node-ws adapter dispatches upgrades through Hono directly, bypassing
+    // serveGateway's HTTP request guard. Apply the dedicated-listener policy here too.
+    const incoming: unknown = typeof c.env === 'object' && c.env !== null && 'incoming' in c.env ? c.env.incoming : undefined
+    if (incoming instanceof IncomingMessage && network.isDedicatedSocket(incoming.socket.localAddress, incoming.socket.localPort)) {
+      const denied = network.guardDedicatedRequest(c.req.raw)
+      if (denied) return denied
+    }
+    await next()
+  })
+  const deviceIngress = [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, ...DIRECT_DEVICE_UI_ROUTES]
+  for (const { method, path } of deviceIngress) app.on(method, path, async (c, next) => {
+    if (!network.enabled) return c.notFound()
+    if (c.req.header('Origin')) return c.json({ error: 'browser_access_not_allowed' }, 403)
+    await next()
+  })
+  registerGatewayRoutes(app, [mobileAccess.plugin(), ...mainCluster.plugins, directUi.plugin(), network.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appAgentVersionDefaultsPlugin(sharedConfigStore, () => activeConfig), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
+    launchCredential, requireCredential: true, clientAddresses,
+    delegatedViewer: { authorize: directUi.authorize, ownerSignal: directUi.ownerSignal,
+      hasCredential: request => directUi!.hasCredential(request), allowsCrossOrigin: directDeviceUiPath, allowsCaptureBinding: directDeviceCapturePath },
+    authorizeClient: request => {
+      if (mobileAccess?.authorizeMain(request) || directUi?.authorize(request)) return true
       const projectId = a2aRequestProject(request)
       return projectId && !deletions.has(projectId) && !catalog.isDeleting(projectId)
         ? runtimes.get(projectId)?.authorizeA2a?.(request) ?? false : false
@@ -332,14 +317,11 @@ export async function startProjectHost(
     // The exact GET route checks either the owner credential or a one-use
     // upgrade ticket issued by the non-exempt POST route.
     localLiveSocketPath: REALTIME_SOCKET_PATH,
-    launchCredentialExemptions: [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, { method: 'GET', path: REALTIME_SOCKET_PATH }],
+    launchCredentialExemptions: [...deviceIngress, { method: 'GET', path: REALTIME_SOCKET_PATH }],
   })
   registerRealtimeRoute(app, realtimeHub, authorize, {
-    // Only the Main owner principal can upgrade. Its Project grants must be
-    // checked at update time; browser-session revocation is bound to the socket.
-    // Device UI has a separate proof-bound socket; delegated mobile stays on SSE.
-    authorize: authorizeOwner,
-    ownerSignal: request => browserAuth.session(request)?.controller.signal,
+    authorize: request => !!directUi?.authorize(request) || authorizeOwner(request),
+    ownerSignal: request => directUi?.ownerSignal(request),
     authorizeTopic: (_request, topic) => authorizeLiveTopic(topic),
   })
   const hostDiagnostics = new Hono()
@@ -374,26 +356,12 @@ export async function startProjectHost(
       : runtimes.has(id) ? { state: 'ready' } : failures.has(id)
       ? { state: 'failed', error: failures.get(id) } : { state: 'starting' },
   })
-  if (process.env.VITE_DEV_URL) devProxyPlugin(process.env.VITE_DEV_URL)(app)
-  else {
-    const candidates = [process.env.UI_DIST_DIR, resolve(process.cwd(), 'app', 'dist'),
-      resolveUiDistDirectory(import.meta.dirname)]
-    for (const candidate of candidates) {
-      if (!candidate) continue
-      try {
-        if ((await stat(candidate)).isDirectory()) { uiPlugin(candidate)(app); break }
-      } catch (error) {
-        if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
-      }
-    }
-  }
-  const gateway = serveGateway(app, { ...options.gateway, clientAddresses })
-  cleanup.push(() => gateway.shutdown())
+  const businessGateway = serveGateway(app, { ...options.gateway, port: network.sharedPort, clientAddresses })
+  cleanup.push(() => businessGateway.shutdown())
   let shutdownPromise: Promise<void> | undefined
   shutdown = () => shutdownPromise ??= (async () => {
     stopping = true
-    browserAuth.close()
-    deviceUi?.close()
+    directUi?.close()
     realtimeHub.close()
     localControl.markStopping()
     const errors: unknown[] = []
@@ -413,17 +381,15 @@ export async function startProjectHost(
     runtimes.clear()
     stores.clear()
     await clean(() => providerSetup.dispose())
-    await clean(() => deviceNetwork.shutdown())
+    await clean(() => network.shutdown())
     await clean(() => mainCluster.closeNodeConnections())
-    await clean(() => lanStart?.catch(() => {}))
-    await clean(() => Promise.all(lanGateways.map(listener => listener.shutdown())))
-    await clean(() => gateway.shutdown())
+    await clean(() => businessGateway.shutdown())
     await clean(() => mainCluster.save())
     await clean(closeTelemetry)
     if (errors.length) throw new AggregateError(errors, 'Main shutdown failed')
   })()
   try {
-    await startup.measure('gateway', () => gateway.ready)
+    await startup.measure('gateway', () => businessGateway.ready)
     await mobileAccess.init()
     await startup.measure('projects', async () => {
       // Bound disk/watcher pressure while avoiding one slow Project delaying every other start.
@@ -442,6 +408,6 @@ export async function startProjectHost(
     await shutdown().catch(cleanup => console.error('[projects] Host cleanup failed', cleanup))
     throw error
   }
-  return { ready: Promise.resolve(), finished: gateway.finished, shutdown }
+  return { ready: Promise.resolve(), finished: businessGateway.finished, shutdown }
   }
 }

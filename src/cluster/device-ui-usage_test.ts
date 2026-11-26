@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Hono } from 'hono'
-import { GatewayClientAddressRegistry } from '../gateway/server.ts'
 import { sessionsApiPlugin } from '../sessions/routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
-import { MainDeviceUi, DEVICE_UI_REQUEST } from './device-ui.ts'
+import { DirectDeviceUi, DEVICE_UI_SESSION } from './direct-device-ui.ts'
 import type { MainCluster } from './main-cluster.ts'
 import { encodeDeviceChallengeProtocol } from './device-challenge.ts'
 
@@ -13,20 +12,13 @@ test('Project usage authorization covers recall for owner, mobile and approved C
   let revoked = false
   const cluster = {
     authority: { verify: async () => authentication },
+    observeInventory: () => () => {},
     registry: { authenticate: () => { if (revoked) throw new Error('revoked'); return authentication } },
   } as unknown as MainCluster
-  const addresses = new GatewayClientAddressRegistry()
   const project = new Hono()
-  const bridge = new MainDeviceUi(cluster, addresses, async request => {
-    const url = new URL(request.url)
-    url.pathname = url.pathname.replace(/^\/projects\/p1/, '')
-    const forwarded = new Request(url, request)
-    addresses.inherit(request, forwarded)
-    return project.fetch(forwarded)
-  })
+  const bridge = new DirectDeviceUi(cluster, () => true)
   t.after(() => bridge.close())
-  const ingress = new Hono()
-  bridge.plugin()(ingress)
+  bridge.plugin()(project)
   const owner = (request: Request) => request.headers.get('authorization') === 'Bearer main-private'
   const mobile = (request: Request) => request.headers.get('authorization') === 'Bearer mobile-private'
   sessionsApiPlugin({
@@ -36,10 +28,12 @@ test('Project usage authorization covers recall for owner, mobile and approved C
     authorizeContext: request => owner(request) || mobile(request) || bridge.authorize(request),
     recall: () => ({ coverage: 'complete', skills: [{ entry: 'skill', reads: 4 }], memory: [] }),
   })(project)
-  const throughChild = (path: string) => ingress.request(DEVICE_UI_REQUEST, { method: 'POST', headers: {
+  const grant = await project.request(DEVICE_UI_SESSION, { method: 'POST', headers: {
     'X-Shadow-Device-Proof': encodeDeviceChallengeProtocol({ ...authentication, version: 1, challengeId: 'challenge', signature: 'stub' }),
-    'X-Shadow-Ui-Path': '/projects/p1' + path, 'X-Shadow-Ui-Method': 'GET',
   } })
+  assert.equal(grant.status, 200)
+  const { token } = await grant.json()
+  const throughChild = (path: string) => project.request(path, { headers: { Authorization: `ShadowDevice ${token}` } })
   const usage = '/api/project/usage'
   for (const suffix of ['', '/daily?page=2']) {
     const main = await project.request(usage + suffix, { headers: { Authorization: 'Bearer main-private' } })

@@ -52,9 +52,17 @@ export async function fetchNodeInventory(
   mode: 'main' | 'child' | 'client',
   signal: AbortSignal,
   request: typeof fetch = fetch,
+  childControl = globalThis.window?.shadowDesktop?.childLocal,
 ): Promise<NodeInventoryResponse> {
   if (mode === 'client') throw new Error(t('Device administration is not available to mobile clients.'))
-  const response = await request(apiUrl(hostBase(apiBase), mode === 'child' ? '/local/v1/nodes' : '/nodes/v1'), {
+  if (mode === 'child') {
+    signal.throwIfAborted()
+    if (!childControl) throw new Error(t('This backend does not provide device inventory. Restart Shadow after updating the backend.'))
+    const inventory = await childControl.inventory()
+    signal.throwIfAborted()
+    return parseNodeInventory(inventory)
+  }
+  const response = await request(apiUrl(hostBase(apiBase), '/nodes/v1'), {
     signal, cache: 'no-store',
   })
   if (response.status === 401 || response.status === 403) {

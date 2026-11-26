@@ -39,7 +39,7 @@ class DeferredSupervisor implements SidecarSupervisor {
     })
   }
 
-  ready(apiBase = 'http://127.0.0.1:43123'): void {
+  ready(apiBase = 'http://127.0.0.1:3124'): void {
     this.status = { phase: 'ready', role: this.starts[0]!.role, apiBase }
     this.resolveStart?.(this.status)
   }
@@ -92,13 +92,13 @@ test('creates unique base64url launch tokens with 256 bits of randomness', () =>
 test('a crashed Child can restart instead of returning a cached ready promise', async () => {
   const { host, supervisor, factoryCount } = createHost()
   const first = host.start({ role: 'child', port: 43124 })
-  supervisor.ready('http://127.0.0.1:43124')
+  supervisor.ready('https://paired-main.example.test')
   await first
   supervisor.status = { phase: 'failed', role: 'child', kind: 'crash', message: 'exited' }
   const retry = host.start({ role: 'child', port: 43124 })
   await new Promise(resolve => setImmediate(resolve))
   assert.equal(supervisor.starts.length, 2)
-  supervisor.ready('http://127.0.0.1:43124')
+  supervisor.ready('https://paired-main.example.test')
   assert.equal((await retry).phase, 'ready')
   assert.equal(factoryCount(), 2)
   await host.stop()
@@ -117,16 +117,16 @@ test('constructs one authenticated launch, publishes after ready, and clears on 
     entryPath: join(paths.resourcesPath, 'backend', 'dist', 'src', 'index.js'),
     configPath: join(paths.userDataPath, 'bootstrap', 'runtime-config.v1.json'),
     launchToken: 'launch-token',
-    port: 43123,
+    port: 3124,
     localExecutor: true,
   }])
   supervisor.ready()
   await starting
   assert.deepEqual(authorizations, [{
-    apiBase: 'http://127.0.0.1:43123',
+    apiBase: 'http://127.0.0.1:3124',
     launchToken: 'launch-token',
   }])
-  assert.equal(host.apiBase, 'http://127.0.0.1:43123')
+  assert.equal(host.apiBase, 'http://127.0.0.1:3124')
   await host.stop()
   assert.equal(supervisor.stopCount, 1)
   assert.equal(authorizations.at(-1), null)
@@ -147,7 +147,7 @@ test('development launch uses the repository backend and explicit user data dire
     entryPath: join(fixtureRoot, 'repo', 'dist', 'src', 'index.js'),
     configPath: join(paths.userDataPath, 'bootstrap', 'runtime-config.v1.json'),
     launchToken: 'launch-token',
-    port: 43123,
+    port: 3124,
   }])
   supervisor.ready()
   await starting
@@ -232,7 +232,7 @@ test('rejects role or configuration switching after launch starts', () => {
     /cannot change while active/,
   )
   assert.throws(
-    () => host.start({ role: 'main', port: 43124 }),
+    () => host.start({ role: 'main', port: 43124, localExecutor: true }),
     /cannot change while active/,
   )
 })
@@ -280,20 +280,23 @@ test('quit waits for one idempotent stop and does not recurse', async () => {
   assert.equal(stopCount, 1)
 })
 
-test('development port policy is gated, validates overrides, and never uses production port', async () => {
+test('legacy Main launch profiles use the shared port; Child ignores all legacy ports', async () => {
   const { resolveRuntimeLaunchOptions } = await import('./runtime-host.js')
   const launch = { role: 'main', port: 43123, localExecutor: true } as const
-  assert.equal(resolveRuntimeLaunchOptions(launch, false, {}), launch)
-  assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '0' }), launch)
-  assert.equal(resolveRuntimeLaunchOptions(launch, true, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: 'invalid' }), launch)
-  assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '1' }).port, 43124)
-  for (const port of ['1', '65535', '43210']) {
+  assert.equal(resolveRuntimeLaunchOptions(launch, false, {}).port, 3124)
+  assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '0' }).port, 3124)
+  assert.equal(resolveRuntimeLaunchOptions(launch, true, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: 'invalid' }).port, 3124)
+  assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '1' }).port, 3124)
+  for (const port of ['1', '65535', '43210', '43123']) {
     assert.equal(resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: port }).port, Number(port))
   }
-  for (const port of ['', '0', '65536', '-1', '1.5', 'NaN', '1e3', ' 43124', '43123']) {
+  for (const port of ['', '0', '65536', '-1', '1.5', 'NaN', '1e3', ' 43124']) {
     assert.throws(() => resolveRuntimeLaunchOptions(launch, false, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: port }), /SHADOW_DESKTOP_DEV_PORT/)
   }
-  assert.equal(resolveRuntimeLaunchOptions({ role: 'child', port: 43123 }, false, { SHADOW_DESKTOP_DEV_IPC: '1' }).port, 43124)
+  const { parseLaunchProfile } = await import('../bootstrap/launch-profile.js')
+  assert.deepEqual(parseLaunchProfile({ version: 1, role: 'child', port: 43124 }), { version: 1, role: 'child' })
+  assert.equal(resolveRuntimeLaunchOptions({ role: 'child', port: 43123 }, false, { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: 'invalid' }).port, 0)
+
 })
 
 test('development replacement stops the old supervisor and publishes fresh authorization only after readiness', async () => {
@@ -316,12 +319,12 @@ test('development replacement stops the old supervisor and publishes fresh autho
   await host.replaceDevelopmentBuild(entry)
   assert.equal(first.stopCount, 1)
   const replacement = host.start(options)
-  assert.deepEqual(auth, [{ apiBase: 'http://127.0.0.1:43123', launchToken: 'token-1' }, null])
+  assert.deepEqual(auth, [{ apiBase: 'http://127.0.0.1:3124', launchToken: 'token-1' }, null])
   assert.equal(second.starts[0]?.entryPath, entry)
   assert.equal(second.starts[0]?.role, options.role)
   second.ready()
   assert.equal((await replacement).phase, 'ready')
-  assert.deepEqual(auth.at(-1), { apiBase: 'http://127.0.0.1:43123', launchToken: 'token-2' })
+  assert.deepEqual(auth.at(-1), { apiBase: 'http://127.0.0.1:3124', launchToken: 'token-2' })
   await host.stop()
   assert.equal(second.stopCount, 1)
 })

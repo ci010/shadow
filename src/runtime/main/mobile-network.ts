@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { AtomicMobileAuthorizationStore } from '../../gateway/mobile-authorization-store.ts'
 import { MobileAccess, type MobileGatewayConfig } from '../../gateway/mobile-access.ts'
-import { privateLanAddresses } from '../../gateway/lan-browser.ts'
+import { privateLanAddresses } from '../../gateway/private-lan.ts'
 import { serveGateway, isLoopbackGatewayRequest, validateLaunchCredential, type GatewayClientAddressRegistry, type GatewayServer } from '../../gateway/server.ts'
 import type { GatewayPlugin } from '../../gateway/types.ts'
 

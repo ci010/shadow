@@ -1,3 +1,4 @@
+import { desktopFixturePreload } from './desktop-fixture-preload.ts'
 import { withComposerTestAdapter } from './composer-test-adapter.ts'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -70,7 +71,6 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify(value))
     }
     const status = { provider: 'copilot', model: 'gpt-5-mini@copilot', authMode: 'copilot', ready: true, hasApiKey: false }
-    if (path === '/api/web-auth/session') return json({ version: 1, required: false, authenticated: true })
     if (path === '/api/channels') return json({ channels: [] })
     if (path === '/api/agent-resources/credential-requests') return json({ request: null })
     if (path === '/api/agent-resources/publication-requests') return json({ request: null, requests: [] })
@@ -273,7 +273,7 @@ async function runViewport(origin: string, width: number, height: number) {
   isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   const window = new BrowserWindow({
     show: false, frame: false, width, height, useContentSize: true,
-    webPreferences: { session: isolated, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true },
+    webPreferences: { preload: await desktopFixturePreload(directory, origin), session: isolated, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, offscreen: true },
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event, url) => { if (!url.startsWith(`${origin}/`)) event.preventDefault() })

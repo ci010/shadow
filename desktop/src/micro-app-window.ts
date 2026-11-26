@@ -1,3 +1,4 @@
+import { CHILD_MICRO_APP_SCHEME } from './micro-app-contract.js'
 import type { BrowserWindow, BrowserWindowConstructorOptions } from 'electron'
 import type { MicroAppWindowHandle, MicroAppWindowInput } from './micro-apps.js'
 
@@ -21,14 +22,18 @@ export async function createMicroAppWindow(
   const window = create(microAppWindowOptions(input))
   const close = () => { if (!window.isDestroyed()) window.destroy() }
   const contents = window.webContents
-  const origin = new URL(input.url).origin
+  const appSession = contents.session
+  const launch = new URL(input.url)
+  const protocol = input.relay ? `${CHILD_MICRO_APP_SCHEME}:` : 'http:'
   const allowed = (value: string) => {
-    try { return new URL(value).origin === origin && new URL(value).protocol === 'http:' }
+    try { const url = new URL(value); return url.protocol === protocol && url.host === launch.host }
     catch { return false }
   }
+  if (!allowed(input.url)) { close(); throw new Error('Invalid Micro App origin') }
+  if (input.relay) appSession.protocol.handle(CHILD_MICRO_APP_SCHEME, input.relay)
   window.removeMenu()
-  contents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-  contents.session.setPermissionCheckHandler(() => false)
+  appSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  appSession.setPermissionCheckHandler(() => false)
   contents.setWindowOpenHandler(() => ({ action: 'deny' }))
   contents.on('will-navigate', (event, url) => { if (!allowed(url)) event.preventDefault() })
   contents.on('will-redirect', (event, url) => { if (!allowed(url)) event.preventDefault() })
@@ -36,6 +41,7 @@ export async function createMicroAppWindow(
   window.on('page-title-updated', event => event.preventDefault())
   input.signal.addEventListener('abort', close, { once: true })
   window.once('closed', () => {
+    if (input.relay) appSession.protocol.unhandle(CHILD_MICRO_APP_SCHEME)
     input.signal.removeEventListener('abort', close)
     input.onClosed()
   })

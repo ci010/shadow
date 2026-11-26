@@ -53,9 +53,9 @@ function loadComponent(url: URL): Component {
 }
 const flush = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 
-function mount(t: TestContext, name = 'DeviceAdministration', context?: InstallationContextV1) {
+function mount(t: TestContext, name = 'DeviceAdministration', context?: InstallationContextV1, fixtureWindow = {}) {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  Object.defineProperty(globalThis, 'window', { configurable: true, value: {} })
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: fixtureWindow })
   const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { hidden: false, addEventListener() {}, removeEventListener() {} } })
   const renderer = createRenderer<Element, Element>({
@@ -142,7 +142,7 @@ function backend(t: TestContext, network = disabledNetwork, devices: PendingDevi
     const method = init?.method ?? 'GET'
     const body = init?.body ? JSON.parse(String(init.body)) : undefined
     calls.push({ path, method, body, signal: init?.signal })
-    if (state.denied && path !== '/nodes/v1' && path !== '/local/v1/nodes') return Response.json({ error: 'unauthorized' }, { status: 401 })
+    if (state.denied && path !== '/nodes/v1') return Response.json({ error: 'unauthorized' }, { status: 401 })
     if (state.fail) return Response.json({ error: 'synthetic' }, { status: 503 })
     if (path === '/nodes/v1/network') {
       if (method === 'PUT') state.network = {
@@ -168,7 +168,7 @@ function backend(t: TestContext, network = disabledNetwork, devices: PendingDevi
       return state.failRemoval ? Response.json({ error: 'node_revocation_failed' }, { status: 503 })
         : Response.json({ version: 1, nodeId, state: 'revoked' })
     }
-    if (path === '/local/v1/nodes' || path === '/nodes/v1') return Response.json({ version: 1, nodes: state.nodes })
+    if (path === '/nodes/v1') return Response.json({ version: 1, nodes: state.nodes })
     throw new Error(`Unexpected request: ${method} ${path}`)
   })
   return { calls, state }
@@ -315,19 +315,25 @@ test('rendered expired invitation hides its PIN and disables copying while allow
   assert.equal(view.button('Create another invitation').props.disabled, false)
 })
 
-test('rendered Child and mobile client retain read-only inventory without admin requests', async t => {
+test('rendered Child inventory uses IPC and mobile has no device administration access', async t => {
+  const childIpc: string[] = []
+  const childWindow = { shadowDesktop: { bootstrap: {}, childLocal: { inventory: async () => {
+    childIpc.push('inventory')
+    return { version: 1, nodes: [] }
+  } } } }
   for (const context of [
     { ...createLocalMainAdminContext('http://127.0.0.1:3123'), mode: 'child' as const },
     { ...createLocalMainAdminContext('http://127.0.0.1:3123'), mode: 'client' as const },
   ]) {
     const { calls } = backend(t)
-    const view = mount(t, 'NodesView', context)
+    const view = mount(t, 'NodesView', context, childWindow)
     await flush()
     assert.match(view.text(), /Read only/)
     assert.doesNotMatch(view.text(), /Pair a Child|Create invitation|Enable device connection/)
-    assert.deepEqual(calls.map(call => call.path), [context.mode === 'child' ? '/local/v1/nodes' : '/nodes/v1'])
+    assert.deepEqual(calls.map(call => call.path), [])
     view.unmount()
   }
+  assert.deepEqual(childIpc, ['inventory'])
 })
 
 test('browser sign-in does not grant local device administration without the desktop launch credential', async t => {

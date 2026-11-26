@@ -8,7 +8,6 @@ import { test } from 'node:test'
 import { Hono } from 'hono'
 import WebSocket from 'ws'
 import { folderFixture } from '../folders/test-fixtures.ts'
-import { BrowserAuth } from './web-auth.ts'
 import { createHtmlPreview } from './html-preview.ts'
 import { GatewayClientAddressRegistry, registerGatewayRoutes, serveGateway } from './server.ts'
 
@@ -46,8 +45,6 @@ test('real sandbox browser loads relative HTML assets without business API autho
     });
   </script></body>`)
   const addresses = new GatewayClientAddressRegistry()
-  const auth = new BrowserAuth({ clientAddresses: addresses, launchCredential: 'browser-fixture-only' })
-  t.after(() => auth.close())
   let businessReads = 0
   const responses: Array<{ url: string; status: number; origin: string | null }> = []
   const app = new Hono()
@@ -55,12 +52,12 @@ test('real sandbox browser loads relative HTML assets without business API autho
     await next()
     responses.push({ url: c.req.url, status: c.res.status, origin: c.req.header('Origin') ?? null })
   })
-  registerGatewayRoutes(app, [auth.plugin(), gateway => {
+  registerGatewayRoutes(app, [gateway => {
     gateway.get('/', c => c.html('<!doctype html><body>Preview browser test</body>'))
     gateway.post('/api/files/html-preview', c => createHtmlPreview(c, async () => workspace))
     gateway.get('/api/private', c => { businessReads++; return c.text('private') })
     gateway.get('/api/files/static/secret.txt', c => { businessReads++; return c.text('secret') })
-  }], { browserAuth: auth, launchCredential: 'browser-fixture-only', clientAddresses: addresses }, {})
+  }], { launchCredential: 'browser-fixture-only', clientAddresses: addresses, launchCredentialExemptions: [{ method: 'GET', path: '/' }] }, {})
   const server = serveGateway(app, { host: '127.0.0.1', port: 0, clientAddresses: addresses })
   await server.ready
   t.after(() => server.shutdown())
@@ -116,12 +113,9 @@ test('real sandbox browser loads relative HTML assets without business API autho
     if (await evaluate(`location.origin === ${JSON.stringify(origin)} && document.readyState === 'complete'`)) break
     await delay(25)
   }
-  const offer = await (await fetch(origin + '/local/v1/web-pairing', { method: 'POST', headers: { Authorization: 'Bearer browser-fixture-only' } })).json() as { code: string }
+  const lease = await (await fetch(origin + '/api/files/html-preview?path=page/index.html', { method: 'POST', headers: { Authorization: 'Bearer browser-fixture-only' } })).json()
   await evaluate(`(async () => {
-    const offer = ${JSON.stringify(offer)};
-    const pairing = await fetch('/api/web-auth/pair', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({code:offer.code}) });
-    if (!pairing.ok) throw Error('pairing failed '+pairing.status);
-    window.lease = await (await fetch('/api/files/html-preview?path=page/index.html', {method:'POST'})).json();
+    window.lease = ${JSON.stringify(lease)};
     window.frame = document.createElement('iframe');
     frame.setAttribute('sandbox','allow-scripts allow-forms allow-popups');
     frame.referrerPolicy = 'no-referrer';
@@ -162,7 +156,7 @@ test('real sandbox browser loads relative HTML assets without business API autho
     const prefix = lease.url.slice(0,lease.url.lastIndexOf('/')+1);
     const statuses=[];
     for (const path of ['/api/private','/api/files/static/secret.txt',prefix+'secret.txt',prefix+'%2e%2e%2fsecret.txt']) statuses.push((await fetch(path,{credentials:'omit'})).status);
-    await fetch(lease.revokeUrl,{method:'DELETE'});
+    await fetch(lease.revokeUrl,{method:'DELETE',headers:{Authorization:'Bearer browser-fixture-only'}});
     statuses.push((await fetch(lease.url,{credentials:'omit'})).status);
     return statuses;
   })()`)

@@ -41,6 +41,7 @@ export interface MainNodeSession {
 }
 
 export interface NodeWebSocketApiOptions {
+  readonly acceptsConnection?: (() => boolean) | undefined
   readonly registry: InMemoryPairingNodeRegistry
   readonly localHello: VersionHelloV1
   readonly authorizeUpgrade: (
@@ -63,6 +64,7 @@ export interface NodeWebSocketApi extends RemoteNodeJobDispatcher {
   hasAdvertisedWorkdir(nodeId: string, workdirId: string): boolean
   supportsExecutionProtocol(nodeId: string): boolean
   closeNode(nodeId: string, reason: string): Promise<void>
+  disconnectAll(reason: string): Promise<void>
   closeAll(reason?: string): Promise<void>
 }
 
@@ -111,7 +113,7 @@ export function createNodeWebSocketApi(
 
   const plugin = (app: Hono): void => {
     app.get('/cluster/v1/node', async (context) => {
-      if (closing) return context.json({ error: 'cluster_stopping' }, 503)
+      if (closing || options.acceptsConnection?.() === false) return context.json({ error: 'cluster_stopping' }, 503)
       if (context.req.header('Upgrade')?.toLowerCase() !== 'websocket') {
         return context.json({ error: 'websocket_upgrade_required' }, 426, {
           'Upgrade': 'websocket',
@@ -123,7 +125,7 @@ export function createNodeWebSocketApi(
       }
 
       const attach = (socket: WebSocket) => {
-        if (closing || options.registry.getNodeState(verified.authentication.nodeId) === 'revoked') {
+        if (closing || options.acceptsConnection?.() === false || options.registry.getNodeState(verified.authentication.nodeId) === 'revoked') {
           socket.close(1001, 'Main node listener is shutting down')
           return
         }
@@ -195,6 +197,13 @@ export function createNodeWebSocketApi(
       await Promise.all([...sessions].filter(([, id]) => id === nodeId).map(async ([session]) => {
         disconnectSessionJobs(session, reason)
         await session.close({ code: 'revoked', reason, clean: true })
+      }))
+    },
+    async disconnectAll(reason): Promise<void> {
+      sessionsByNode.clear()
+      await Promise.all([...sessions.keys()].map(session => {
+        disconnectSessionJobs(session, reason)
+        return session.close(shutdownCloseInfo(reason))
       }))
     },
     closeAll(reason = 'Main node listener is shutting down'): Promise<void> {

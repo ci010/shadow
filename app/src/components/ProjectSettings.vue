@@ -26,8 +26,8 @@
         </section>
         <section v-if="config && modelsOpened" v-show="section === 'models'">
           <ModelDefaultsForm :api-base="apiBase" scope="project" :project-id="projectId" />
-          <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('Manage shared provider connections') }}</RouterLink>
-          <RouterLink class="settings-related" :to="{ name: 'settings', params: { section: 'models' } }">{{ t('App model defaults') }}</RouterLink>
+          <RouterLink v-if="installation.mode !== 'child'" class="settings-related" :to="{ name: 'settings', params: { section: 'providers' } }">{{ t('Manage shared provider connections') }}</RouterLink>
+          <RouterLink v-if="installation.mode !== 'child'" class="settings-related" :to="{ name: 'settings', params: { section: 'models' } }">{{ t('App model defaults') }}</RouterLink>
         </section>
         <ChannelsView v-if="botsOpened" v-show="section === 'bots' || section === 'connections'" :section="section === 'connections' ? 'connections' : 'bots'" :api-base="apiBase" :project-id="projectId" :available="available" :active="(section === 'bots' || section === 'connections') && route.name === 'project-settings' && route.params.projectId === projectId"
           :requested-connection-id="section === 'connections' && route.query.connectionId !== undefined ? (typeof route.query.connectionId === 'string' ? route.query.connectionId : '') : undefined"

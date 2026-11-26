@@ -3,10 +3,8 @@ import { test } from 'node:test'
 import { createServer } from 'node:net'
 import { on, once } from 'node:events'
 import WebSocket, { type RawData } from 'ws'
-import { DEVICE_UI_CHALLENGE, DEVICE_UI_LIVE, DEVICE_UI_LIVE_CHALLENGE } from '../../cluster/device-ui.ts'
 import { REALTIME_SOCKET_PROTOCOL } from '../../realtime/socket-ticket.ts'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { ChildLocalControlService } from '../child-local-control.ts'
 import { ConfigSchema } from '../../config/schema.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
 import { startMainRuntime } from './start.ts'
@@ -15,7 +13,7 @@ import { AtomicFileRegistrySnapshotAdapter } from '../../cluster/persistence.ts'
 import { devicePublicKeyFingerprint, encodeBase64Url } from '../../cluster/device-challenge.ts'
 import { DeviceCredentialProof } from '../../cluster/device-credentials.ts'
 import { requestDeviceChallengeProtocol } from '../../cluster/device-challenge-client.ts'
-import { childWorkspacePlugin } from '../child-workspace.ts'
+import { DEVICE_UI_SESSION, DEVICE_UI_SESSION_CHALLENGE } from '../../cluster/direct-device-ui.ts'
 
 import { join } from 'node:path'
 
@@ -25,7 +23,7 @@ async function freePort() {
   await new Promise<void>(resolve => server.close(() => resolve())); return port
 }
 
-test('Child Vite renderer reuses a proof-bound Main live socket until device approval is revoked', { timeout: 60_000 }, async t => {
+test('Child opens the shared Main live WebSocket directly; disable/re-enable and revoke invalidate grants and sockets', { timeout: 60_000 }, async t => {
   await withTempWorkspace(async root => {
     const keysToIsolate = ['GITHUB_COPILOT_TOKEN_DIR', 'GITHUB_COPILOT_ACCESS_TOKEN_FILE', 'GITHUB_COPILOT_API_KEY_FILE', 'GITHUB_COPILOT_MODELS_CACHE_FILE', 'VITE_DEV_URL', 'SHADOW_MOBILE_ORIGIN', 'SHADOW_MOBILE_PORT']
     const previous = new Map(keysToIsolate.map(key => [key, process.env[key]]))
@@ -50,7 +48,7 @@ test('Child Vite renderer reuses a proof-bound Main live socket until device app
       providers: { openai: { apiKey: 'fixture-unused', baseUrl: 'http://127.0.0.1:1/v1' } }, channels: {}, mcp: {} }
     const config = ConfigSchema.parse(rawConfig)
     const configPath = join(root, 'fixture.json'); await writeFile(configPath, JSON.stringify(rawConfig))
-    const port = await freePort(); const devicePort = await freePort()
+    const port = await freePort(); const devicePort = port
     const mainBase = `http://127.0.0.1:${port}`, deviceBase = `http://127.0.0.1:${devicePort}`
     const runtime = await startMainRuntime(config, { configPath, clusterSnapshotPath: registryPath, localNodeId: 'fixture-main', gateway: { host: '127.0.0.1', port, launchCredential: 'fixture-main-secret' } })
     try {
@@ -58,32 +56,30 @@ test('Child Vite renderer reuses a proof-bound Main live socket until device app
       const setup = await fetch(`${mainBase}/nodes/v1/network`, { method: 'PUT', headers: { Authorization: 'Bearer fixture-main-secret', 'Content-Type': 'application/json' },
         body: JSON.stringify({ version: 1, enabled: true, host: '127.0.0.1', port: devicePort, allowInsecureLocalTransport: true }) })
       assert.equal(setup.status, 200, await setup.text())
-      const proof = (signal: AbortSignal, path: string) => requestDeviceChallengeProtocol(deviceBase, auth,
-        new DeviceCredentialProof(async bytes => new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, new Uint8Array(bytes)))), fetch, signal, path)
-      const child = new ChildLocalControlService({ port: 0, launchCredential: 'fixture-child-secret', requestShutdown() {},
-        workspace: childWorkspacePlugin({ endpoint: deviceBase, proof }),
-      })
-      await child.start(new AbortController().signal)
-      t.after(() => child.shutdown())
-      const childBase = `http://127.0.0.1:${child.address!.port}`
-      const childRequest = (path: string, init: RequestInit = {}) => fetch(childBase + path, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), Authorization: 'Bearer fixture-child-secret' } })
+      const childBase = deviceBase // Same Main socket as desktop; no Child HTTP server is started.
+      const issue = async () => {
+        const proof = await requestDeviceChallengeProtocol(childBase, auth,
+          new DeviceCredentialProof(async bytes => new Uint8Array(await crypto.subtle.sign('Ed25519', keys.privateKey, new Uint8Array(bytes)))),
+          fetch, AbortSignal.timeout(5000), DEVICE_UI_SESSION_CHALLENGE)
+        const exchange = () => fetch(childBase + DEVICE_UI_SESSION, { method: 'POST', headers: { 'X-Shadow-Device-Proof': proof } })
+        const grant = await exchange()
+        assert.equal(grant.status, 200, await grant.clone().text())
+        assert.equal((await exchange()).status, 401, 'one-use proof')
+        return (await grant.json() as { token: string }).token
+      }
+      let token = await issue()
+      const childRequest = (path: string, init: RequestInit = {}) => fetch(childBase + path, { ...init, headers: { ...Object.fromEntries(new Headers(init.headers)), Authorization: `ShadowDevice ${token}` } })
       assert.equal((await fetch(childBase + '/api/projects')).status, 401)
-      assert.equal((await fetch(childBase + '/api/projects', { headers: { Authorization: 'Bearer fixture-main-secret' } })).status, 401)
       const ownerHeaders = { Authorization: 'Bearer fixture-main-secret' }
       const livePath = '/api/live/ws'
       const ticketRequest = { method: 'POST', headers: { Origin: viteOrigin }, signal: AbortSignal.timeout(6000) }
       assert.equal((await fetch(childBase + livePath, ticketRequest)).status, 401)
-      assert.equal((await fetch(childBase + livePath, { ...ticketRequest, headers: { ...ticketRequest.headers, ...ownerHeaders } })).status, 401)
-      assert.equal((await fetch(`${deviceBase}${livePath}`, { method: 'POST' })).status, 404)
-      assert.equal((await fetch(`${deviceBase}${DEVICE_UI_LIVE}`, { method: 'POST' })).status, 401)
-      const genericProof = await proof(AbortSignal.timeout(5000), DEVICE_UI_CHALLENGE)
-      assert.equal((await fetch(`${deviceBase}${DEVICE_UI_LIVE}`, { method: 'POST', headers: { 'X-Shadow-Device-Proof': genericProof } })).status, 401)
-      const tunnelProof = await proof(AbortSignal.timeout(5000), DEVICE_UI_CHALLENGE)
-      assert.equal((await fetch(`${deviceBase}/cluster/v1/ui/request`, { method: 'POST', headers: {
-        'X-Shadow-Device-Proof': tunnelProof, 'X-Shadow-Ui-Path': livePath, 'X-Shadow-Ui-Method': 'POST',
-      } })).status, 401)
-      const liveProof = await proof(AbortSignal.timeout(5000), DEVICE_UI_LIVE_CHALLENGE)
-      assert.equal((await fetch(`${deviceBase}${DEVICE_UI_LIVE}`, { method: 'POST', headers: { 'X-Shadow-Device-Proof': liveProof, Origin: viteOrigin } })).status, 403)
+      assert.equal((await fetch(childBase + livePath, { ...ticketRequest, headers: { ...ticketRequest.headers, ...ownerHeaders } })).status, 200)
+      for (const [path, method] of [
+        ['/local/v1/readiness', 'GET'], ['/nodes/v1/network', 'GET'], ['/api/provider/setup', 'POST'],
+        ['/projects/default/api/config', 'PATCH'], ['/projects/default/api/credential-requests', 'GET'],
+      ]) assert.equal((await childRequest(path, { method })).status, 401, path)
+      assert.equal((await fetch(childBase + '/cluster/v1/node')).status, 426)
       const ticket = await childRequest(livePath, ticketRequest)
       assert.equal(ticket.status, 200, await ticket.clone().text())
       assert.equal(ticket.headers.get('access-control-allow-origin'), viteOrigin)
@@ -164,10 +160,28 @@ test('Child Vite renderer reuses a proof-bound Main live socket until device app
         assert.deepEqual(update.topic, projectsTopic)
         const revokePath = `/nodes/v1/${auth.nodeId}/revoke`
         assert.equal((await childRequest(revokePath, { method: 'POST' })).status, 401)
+        const configure = (enabled: boolean) => fetch(mainBase + '/nodes/v1/network', { method: 'PUT',
+          headers: { ...ownerHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version: 1, enabled, host: '127.0.0.1', port: devicePort, allowInsecureLocalTransport: true }) })
         const closed = once(live, 'close', { signal: AbortSignal.timeout(4000) })
-        assert.equal((await fetch(mainBase + revokePath, { method: 'POST', headers: ownerHeaders })).status, 200)
+        assert.equal((await configure(false)).status, 200)
         await closed
-        assert.equal((await childRequest(livePath, { ...ticketRequest, signal: AbortSignal.timeout(5000) })).status, 503)
+        assert.equal((await fetch(mainBase + '/api/projects', { headers: ownerHeaders })).status, 200, 'desktop gateway survives device disable')
+        assert.equal((await fetch(mainBase + '/cluster/v1/node')).status, 404)
+        assert.equal((await childRequest('/api/projects')).status, 401)
+        assert.equal((await configure(true)).status, 200)
+        assert.equal((await childRequest('/api/projects')).status, 401, 'old grant never resurrects')
+        token = await issue()
+        const secondTicket = await (await childRequest(livePath, { method: 'POST', headers: { Origin: viteOrigin } })).json()
+        const secondSocket = new WebSocket(wsUrl, [secondTicket.protocol, secondTicket.proof], { origin: viteOrigin, handshakeTimeout: 5000 })
+        try {
+          await once(secondSocket, 'open')
+          const revoked = once(secondSocket, 'close', { signal: AbortSignal.timeout(4000) })
+          assert.equal((await fetch(mainBase + revokePath, { method: 'POST', headers: ownerHeaders })).status, 200)
+          await revoked
+          assert.equal((await childRequest('/api/projects')).status, 401)
+          assert.equal((await childRequest(livePath, { ...ticketRequest, signal: AbortSignal.timeout(5000) })).status, 401)
+        } finally { secondSocket.terminate() }
         await messages.return?.()
       } finally { live.terminate() }
     } finally { await runtime.shutdown() }

@@ -14,7 +14,6 @@ import { DOCUMENT_TAB_CHANNEL, receiveDocumentTabShortcuts } from './document-ta
 import { createMediaCaptureApi } from './media-capture-preload.js'
 import { observeComposerMicrophoneGesture } from './composer-microphone-gesture.js'
 import { createStartupDiagnosticsApi } from './startup-diagnostics-ipc.js'
-import { createWebPairingApi } from './web-pairing-preload.js'
 import type { ChildPairInput } from './bootstrap/child.js'
 import { MICRO_APP_CHANNELS, parseMicroAppIdentity, type MicroAppIdentity } from './micro-app-contract.js'
 import { createPasteClipboardFilesApi } from './clipboard-files-contract.js'
@@ -35,7 +34,10 @@ const api: ShadowDesktopApi = Object.freeze({
     open: (identity: MicroAppIdentity) => ipcRenderer.invoke(MICRO_APP_CHANNELS.open, parseMicroAppIdentity(identity)),
     refresh: () => ipcRenderer.invoke(MICRO_APP_CHANNELS.refresh),
   }),
-  webPairing: createWebPairingApi(ipcRenderer),
+  childLocal: {
+    status: () => ipcRenderer.invoke(IPC_CHANNELS.childLocalStatus),
+    inventory: () => ipcRenderer.invoke(IPC_CHANNELS.childLocalInventory),
+  },
   diagnostics: createStartupDiagnosticsApi(ipcRenderer),
   mediaCapture: createMediaCaptureApi(ipcRenderer, () => navigator.userActivation.isActive, observeComposerMicrophoneGesture(window, document).consume),
   windowControls: createWindowControlsApi(ipcRenderer),

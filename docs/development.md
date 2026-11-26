@@ -22,15 +22,17 @@ Development uses the same Main data directory as production: `~/.shadow`
 production data.** Set `SHADOW_DESKTOP_DEV_MAIN_DIRECTORY` to an absolute path
 before first-time setup to use isolated data instead. Existing saved Main directory
 selections are preserved; old development data is not migrated automatically.
-Electron's development UI profile/cache remains worktree-local. The development
-backend uses port `43124` rather than production's `43123`; existing saved dev
-launch ports are overridden at runtime, without rewriting the saved profile.
-Distinct ports do not bypass Main data ownership: stop production before using
-the same Main directory, or select isolated development data.
+Electron's development UI profile/cache remains worktree-local. Main uses
+`127.0.0.1:3124` by default in both modes. Use `SHADOW_DESKTOP_DEV_PORT` only
+for a separately isolated development Main; this overrides saved launch ports
+without rewriting profiles. Child has no backend port. Distinct Main ports do
+not bypass data ownership: stop production before using the same Main directory,
+or select isolated development data.
 For an isolated Windows dev data directory:
 
 ```powershell
 $env:SHADOW_DESKTOP_DEV_MAIN_DIRECTORY = Join-Path (Get-Location) '.shadow-test-dev'
+$env:SHADOW_DESKTOP_DEV_PORT = '43124' # optional isolated Main override
 pnpm dev
 ```
 
@@ -81,7 +83,7 @@ require version 4; startup rejects and does not rewrite older documents.
 `pnpm start` runs the backend without Electron or a development watcher; an
 optional argument selects another bot config: `pnpm start path-to-bot-config.json`.
 
-For a production web build:
+To build backend and desktop renderer assets:
 
 ```sh
 pnpm desktop:prepare-agent-desktop
@@ -89,8 +91,8 @@ pnpm build:all
 node --env-file-if-exists=.env dist/src/index.js
 ```
 
-The backend build emits `dist/src`; the web build emits `app/dist`. The
-gateway serves the built UI on `http://localhost:3123` when present.
+The backend build emits `dist/src`; the renderer build emits `app/dist`. Electron
+loads that UI; the gateway does not serve a standalone browser application.
 Keep the build outputs and installed runtime dependencies together when
 deploying headlessly.
 The backend build copies TypeScript (including its standard-library declarations)

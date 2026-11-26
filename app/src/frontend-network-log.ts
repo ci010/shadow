@@ -1,3 +1,5 @@
+import { hostBase } from './api-url.ts'
+
 /** Development metadata only: no headers, query, bodies or arbitrary paths.
  * Chromium's native error codes are not exposed by fetch/EventSource. */
 export function installFrontendNetworkLog(
@@ -7,6 +9,7 @@ export function installFrontendNetworkLog(
 ): () => void {
   const scope = new URL(base)
   const prefix = scope.pathname.replace(/\/$/, '')
+  const hostPrefix = new URL(hostBase(base)).pathname.replace(/\/$/, '')
   const label = (input: unknown): string | undefined => {
     try {
       const raw = typeof input === 'string' || input instanceof URL ? input : input instanceof Request ? input.url : undefined
@@ -15,7 +18,8 @@ export function installFrontendNetworkLog(
       if (url.origin !== scope.origin) return
       let path = url.pathname
       if (path.startsWith(`${prefix}/api/`)) path = path.slice(prefix.length)
-      else if (path.startsWith('/projects/')) return
+      else if (path.startsWith(`${hostPrefix}/api/`)) path = path.slice(hostPrefix.length)
+      else return
       // Only fixed endpoint identities; excludes diagnostic transport itself.
       const endpoint = /^\/api\/(live|projects|service-groups|agent-types|work\/history|background-tasks)(?:\/|$)/.exec(path)?.[1]
       return endpoint ? `API ${endpoint}` : undefined

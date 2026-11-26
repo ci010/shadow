@@ -27,26 +27,6 @@ async function main() {
   })()`)
   try {
     await window.loadURL(new URL('__connection', process.env.CONNECTION_SMOKE_URL).href)
-    await wait(`document.querySelector('#pairing-code')`)
-    for (const width of [1200, 390, 320]) {
-      window.setContentSize(width, 844)
-      for (const dark of [false, true]) {
-        await execute(`document.documentElement.classList.toggle('dark', ${dark})`)
-        await delay(50)
-        assert.equal(await execute(`(() => {
-          const input = document.querySelector('input').getBoundingClientRect();
-          const submit = document.querySelector('button[type=submit]').getBoundingClientRect();
-          const alternatives = [...document.querySelectorAll('.auth-alternatives button')];
-          const rects = alternatives.map(button => button.getBoundingClientRect());
-          return Math.abs(input.left - submit.left) < 1 && Math.abs(input.width - submit.width) < 1
-            && rects[0].top >= submit.bottom + 20 && rects[1].top >= rects[0].bottom
-            && [...document.querySelectorAll('button')].every(button => button.getBoundingClientRect().height >= 44 && getComputedStyle(button).borderRadius === '0px')
-            && document.documentElement.scrollWidth <= innerWidth;
-        })()`), true, 'Primary action aligns with the field; secondary actions have a stable vertical order')
-        if (width !== 320) await capture(`connection-auth-${width}-${dark ? 'dark' : 'light'}`)
-      }
-    }
-    await execute(`window.fixture.mode = 'app'`)
     await wait(`document.querySelector('#route')`)
     for (const width of [1200, 390, 320]) {
       window.setContentSize(width, 844)

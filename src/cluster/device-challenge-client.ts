@@ -36,7 +36,7 @@ export async function requestDeviceChallengeProtocol(
   url.search = ''
   url.hash = ''
   const response = await fetchChallenge(url, {
-    method: 'POST',
+    method: 'POST', redirect: 'error',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ version: 1, ...authentication }),
     signal,

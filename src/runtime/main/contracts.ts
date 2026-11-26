@@ -16,6 +16,5 @@ export interface MainRuntimeOptions {
     readonly port?: number
     readonly host?: string
     readonly launchCredential?: string
-    readonly browserPinHash?: string
   }
 }

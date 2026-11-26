@@ -5,66 +5,41 @@ and a second installation runs **Child**. Main owns projects, conversations and
 providers; Child supplies execution on its own machine. Use matching builds on
 both devices. This is not a production distributed-release certification.
 
-Browser access and device pairing are different. **Connect browser** authorizes
-a web UI; it does not register a Child or make that browser an execution node.
+Standalone browser access is not available. Use Electron for Main or Child, or
+[native mobile access](mobile.md) for Android/iOS.
 
 ## Main workspace on Child
 
-After the existing Child pairing and Main approval, Child opens the same Main
-projects, conversations and application settings automatically. No second
-invitation, browser login, role switch or separate HTTPS deployment is required.
-The Child runtime remains an execution node and does not start a second Main.
-The old Child-only status/inventory home and its navigation entry have been
-removed. While the workspace is unavailable, only a small connection recovery
-screen is shown, with automatic retry and a manual retry button. Execution-node
-`connected` only confirms the execution transport, not workspace HTTP admission.
-The recovery screen displays a bounded error code and HTTP status instead of assuming
-that every failure means approval is pending. For example, `unauthorized` (401)
-can indicate local gateway admission, `main_workspace_challenge_http_404` is a missing Main
-workspace challenge route, and `main_workspace_approval_unavailable` means Main
-explicitly reported that the credential is unavailable (not necessarily pending).
-Backend `[child-workspace]` diagnostics include only stage/code/status, never the
-endpoint, credential, signed proof or arbitrary upstream response body.
+After Main approves the existing pairing, Child opens Main's projects,
+conversations and shared workspace without a second invitation or login. The
+packaged Child uses its bundled renderer; development uses its local Vite
+renderer. Both send workspace HTTP and the shared realtime WebSocket directly
+to the paired Main address. Execution stays on its separate authenticated
+connection. Neither the Child sidecar nor its Micro Apps starts a loopback HTTP
+listener. Local status uses scoped IPC; application files, previews and uploads
+still refer to Main's workspace, not Child's home. If the paired endpoint has a
+reverse-proxy path prefix, previews and their assets and release requests use
+that same prefix.
 
-Device endpoints with a reverse-proxy path prefix retain that prefix for both
-challenge and workspace request URLs, matching the execution transport.
+The Child obtains a revocable device workspace grant with its existing protected
+signing key. This grant never enters Vue, does not authorize Main device/network
+administration, and does not permit editing Main application/provider credentials
+or broad Project configuration. Do that in the Main Electron window. Child can
+still read Project configuration and update that Project’s model defaults. Use
+Main Electron to enter or resolve private credential requests. Disable device
+networking to suspend all paired workspace grants and connections, or revoke a
+single device. Ordinary Main desktop access remains on the same gateway.
 
-To diagnose a connection failure without re-pairing, open the existing Child
-installation with Main online, record the recovery screen's code/HTTP status,
-and correlate it with backend `[child-workspace]` stage diagnostics. A local
-401 fails before the Main challenge; a challenge failure and a tunneled request
-failure are different stages. Do not create another invitation for an already
-approved identity solely because the workspace probe failed.
+Saved Child profiles, paired endpoints and credential references continue to
+work; any legacy Child launch port is ignored. Upgrade both ends together. If
+connection recovery reports an error, check the saved Main address and network
+state and wait for reconnect; don't re-pair an approved device merely because its
+workspace probe failed. Workspace HTTP availability and execution connection
+status are separate.
 
-In desktop development, `main_workspace_connection_failed` can also mean the
-browser could not read the loopback response, not that Main is offline. If local
-readiness succeeds but workspace requests fail with `TypeError: immutable` in
-the backend, rebuild and restart Child with the response-header fix: the proxy
-must copy upstream headers before the local gateway adds its CORS headers.
-
-Approval now explicitly describes workspace access: only approve a desktop you
-trust with the single-owner Main workspace. Existing approved public-key devices
-use the same verified identity; credentials without a registered signing public
-key cannot access this path. Revoking a device prevents subsequent workspace
-requests and aborts its active streams. No device secret is exposed to Vue or
-accepted as a general Main administrator bearer token.
-
-The Child renderer uses its existing launch-protected loopback gateway. Its
-backend signs a fresh single-use Main challenge for each proxied request; Main
-binds admitted requests to that registered device identity. This dedicated
-workspace tunnel shares the existing device listener and transport consent; it
-does not add a port or expose the ordinary unauthenticated gateway. Native mobile
-and ordinary browser authentication retain their separate authorization rules.
-Local runtime control, pairing/cluster ingress and browser/mobile credential
-endpoints cannot be tunneled; device enrollment still requires local Main access.
-
-**Transport limitation:** the built-in trusted-LAN/VPN device listener is HTTP.
-Workspace traffic has the same unencrypted transport limitation as execution
-traffic. Use a trusted encrypted VPN or an existing HTTPS device endpoint; do not
-expose this listener on an untrusted network. Device proof authenticates Child,
-not confidentiality or a general HTTP man-in-the-middle defense. Application
-files and uploads refer to Main's data, not Child's local home. Native local
-computer/capture helpers are not made remotely available by this feature.
+The built-in private LAN/VPN binding uses HTTP with explicit consent. Device
+proof does not encrypt data or guard against a network intermediary; use a
+trusted encrypted VPN or authenticated Dev Tunnel for non-local traffic.
 
 ## Before starting
 
@@ -95,8 +70,9 @@ computer/capture helpers are not made remotely available by this feature.
    **Main's network address** on the LAN/VPN the other device can reach.
    **Port settings** defaults to `3124` (allowed range `1024` through `65535`).
    Acknowledge the trusted-network HTTP warning, then select **Enable device
-   connection**. The regular app/admin gateway remains on its existing
-   address; this action opens a separate device-only listener.
+   connection**. Main's app gateway remains at `127.0.0.1:3124` and enables
+   authenticated device ingress there. A selected private LAN address keeps
+   its separate device-scoped listener; the Main owner APIs are not served there.
 2. Select **Create invitation** on Main, then **Copy pairing invitation**.
    Transfer this single value privately to Child before expiry. It contains
    Main's address, invitation ID, PIN and expiry; encoding does not encrypt it.
@@ -134,19 +110,16 @@ identity, protected key and home. The PIN clears after each attempt. A saved
 pairing or pending reference pins the endpoint/scope; retry resumes it rather
 than silently pairing a different Main.
 
-## Optional loopback ingress for an authenticated Dev Tunnel
+## Authenticated Dev Tunnel on the shared Main port
 
-In the Main desktop app, go to **Nodes > Pair a Child device** and select
-**Enable tunnel listener** while the LAN/VPN device listener is on. Main keeps
-its LAN/VPN endpoint and adds `127.0.0.1` on the same device port. The setting is
-saved across restarts and takes effect without restarting the LAN listener.
-**Turn off tunnel listener** stops only the loopback listener; **Turn off
-listener** stops both. LAN invitations and existing LAN pairings keep their
-original endpoint. If the loopback port is unavailable, the LAN listener stays
-up; free the local port and select **Retry tunnel listener**.
+Enable device connections on Main. The Dev Tunnel reaches the same Main
+loopback port as the Main desktop app (`127.0.0.1:3124`), even if a separate LAN
+address is selected. If you don't need LAN access, select **This device only**.
+The optional secondary loopback setting is only needed to keep an existing
+non-default device-only tunnel address alive. Turning off device connections
+revokes device ingress on both addresses without shutting down the desktop app.
 
-Use a separate, persistent, authenticated Dev Tunnel for the device port, so
-`connect` does not also claim the Child machine's local app port. On Main, with
+On Main, with
 the CLI signed in, create and configure the tunnel once, then host that same ID:
 
 ```powershell
@@ -156,8 +129,7 @@ devtunnel port create $deviceTunnel -p 3124 --protocol auto
 devtunnel host $deviceTunnel
 ```
 
-Replace `<device-tunnel-id>` with your tunnel ID and `3124` with the configured
-Shadow device port if different. Do not enable anonymous access. On Child, sign in
+Replace `<device-tunnel-id>` with your tunnel ID. Do not enable anonymous access. On Child, sign in
 with an authorized account and keep `devtunnel connect <device-tunnel-id>`
 running. Confirm the CLI forwards local `127.0.0.1:3124`, then select **Enter
 details manually** and use `http://127.0.0.1:3124` plus the ID and PIN from a
@@ -287,7 +259,7 @@ Removal is not a reset/re-pair flow; that recovery UI remains unimplemented.
 | PIN rejected or expired | Create a fresh invitation on Main and submit its matching offer ID and PIN. |
 | Pending approval | Compare the fingerprint on both devices and approve the correct request on Main. |
 | Approved but offline | Keep both apps running; check the listener and network. Approval is not an online signal. |
-| Device administration unavailable in a browser | Use the Main Electron window. Browser login cookies do not authorize device administration. |
+| Device administration unavailable in a browser | Use the Main Electron window. Ordinary browsers and paired Child workspaces cannot administer devices. |
 | UI still says Child setup is unavailable | Rebuild/update and restart Electron. Vite hot reload does not update the main process or backend. |
 
 ## Verification boundary
@@ -297,8 +269,8 @@ Electron invokes the compiled backend entry as
 The bounded pairing request, including the PIN, travels through stdin, never
 command-line arguments. Packaged builds use
 `resources/backend/dist/src/index.js`; source-only pairing scripts are not
-required. The Child status endpoint `/local/v1/child` is authenticated and
-loopback-only; it is not a remote chat proxy.
+required. Child readiness, status, inventory and shutdown use inherited IPC,
+not an HTTP endpoint.
 
 The automated integration uses real local TCP HTTP/WebSocket connections,
 production pairing and Child runtime code, persisted device references and

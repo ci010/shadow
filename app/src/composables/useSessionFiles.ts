@@ -1,7 +1,7 @@
 import { t } from '../i18n.ts'
 // Shared helpers for browsing session workdirs or registered Main-local folders.
 import { isTextEncoding, type DecodedTextEncoding, type TextEncoding } from '../../../src/execution/filesystem/text-encoding.ts'
-import { apiUrl } from '../api-url.ts'
+import { apiUrl, hostBase } from '../api-url.ts'
 import { nodeOfflineError, workdirUnavailableMessage } from '../workdir-request-error.ts'
 import type { ArchiveReference } from '../archive-format.ts'
 
@@ -113,16 +113,17 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
 
   async function htmlPreview(sessionId: string, path: string): Promise<{ url: string; expiresAt: number; release: () => void }> {
     const requestUrl = buildUrl(apiBase, `${root(sessionId)}/html-preview`, { path })
+    const gateway = hostBase(apiBase)
     const response = await fetch(requestUrl, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(30_000) })
     if (!response.ok) throw await fileRequestError(response)
     const data: unknown = await response.json()
-    if (!isRecord(data) || typeof data.url !== 'string' || typeof data.revokeUrl !== 'string' || typeof data.expiresAt !== 'number'
-      || !/^\/api\/html-preview\/[\w-]{43}\/[^/]+$/.test(data.url)
-      || !/^\/api\/html-preview-leases\/[\w-]{43}$/.test(data.revokeUrl)) throw new Error(t('Could not load preview. Retry.'))
-    const origin = new URL(requestUrl).origin
-    const revokeUrl = new URL(data.revokeUrl, origin).href
-    return { url: new URL(data.url, origin).href, expiresAt: data.expiresAt,
-      release: () => { void fetch(revokeUrl, { method: 'DELETE', keepalive: true }).catch(() => {}) } }
+    if (!isRecord(data) || typeof data.url !== 'string' || typeof data.revokeUrl !== 'string'
+      || typeof data.expiresAt !== 'number' || !Number.isFinite(data.expiresAt)) throw new Error(t('Could not load preview. Retry.'))
+    const lease = /^\/api\/html-preview\/([\w-]{43})\/[^/?#\\]+$/.exec(data.url)
+    if (!lease || data.revokeUrl !== `/api/html-preview-leases/${lease[1]}`) throw new Error(t('Could not load preview. Retry.'))
+    const revokeUrl = apiUrl(gateway, data.revokeUrl).href
+    return { url: apiUrl(gateway, data.url).href, expiresAt: data.expiresAt,
+      release: () => { void fetch(revokeUrl, { method: 'DELETE', redirect: 'error', keepalive: true }).catch(() => {}) } }
   }
 
   async function listDir(sessionId: string, path = '', signal?: AbortSignal): Promise<DirListing> {

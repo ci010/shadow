@@ -70,7 +70,7 @@ test('pairing is privileged, persists Child role and resumes local runtime witho
   const child = new FileChildBootstrap(join(directory, 'config.json'), async () => {})
   const launches: unknown[] = []
   const create = () => new BootstrapCoordinator(storage, { writeMain: async () => {} }, { initialize: async () => {} },
-    { start: async options => { launches.push(options); return { phase: 'ready', role: 'child', apiBase: 'http://127.0.0.1:43124' } } },
+    { start: async options => { launches.push(options); return { phase: 'ready', role: 'child', apiBase: input(directory).endpoint } } },
     profiles, { readMain: async () => { throw new Error('must not read Main config') } }, undefined, child)
   const coordinator = create()
   await coordinator.dispatch({ type: 'select-role', mode: 'child' })
@@ -85,7 +85,9 @@ test('pairing is privileged, persists Child role and resumes local runtime witho
   assert.equal(result.context.mode, 'child')
   assert.equal(result.context.mainConnection, 'connecting')
   assert.equal('uiScopes' in result.context, false)
-  assert.deepEqual(launches, [{ version: 1, role: 'child', port: 43124 }])
+  assert.deepEqual(launches, [{ role: 'child', port: 0 }])
+  assert.deepEqual(await profiles.load(), { version: 1, role: 'child' })
+  assert.equal(result.context.apiBase, input(directory).endpoint)
   await assert.rejects(coordinator.clear(), /identity is retained/)
   assert.equal((await coordinator.pairChild(input(directory))).ok, false)
 })

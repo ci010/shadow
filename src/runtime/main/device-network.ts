@@ -1,4 +1,5 @@
-import { DEVICE_UI_ROUTES } from '../../cluster/device-ui.ts'
+import { DIRECT_DEVICE_UI_ROUTES, directDeviceUiPath } from '../../cluster/direct-device-ui.ts'
+import { REALTIME_SOCKET_PATH } from '../../realtime/socket-ticket.ts'
 import { Hono } from 'hono'
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
@@ -39,10 +40,15 @@ export interface DeviceNetworkState extends DeviceNetworkConfig {
   readonly error: string | null
   readonly addresses: readonly DeviceNetworkAddress[]
   readonly loopbackEndpoint?: string
+  readonly sharedEndpoint?: string
 }
 
 interface DeviceNetworkOptions {
-  readonly uiPlugin?: GatewayPlugin
+  readonly sharedGateway?: Hono
+  readonly sharedPort?: number
+  readonly authorizeViewer?: (request: Request) => boolean
+  readonly hasViewerCredential?: (request: Request) => boolean
+  readonly invalidateUi?: () => void
   readonly configPath: string
   readonly cluster: MainCluster
   readonly clientAddresses: GatewayClientAddressRegistry
@@ -57,7 +63,7 @@ const DEFAULT_CONFIG: DeviceNetworkConfig = {
   allowInsecureLocalTransport: false,
 }
 const DEVICE_ROUTES = new Set(
-  [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, ...DEVICE_UI_ROUTES].map(({ method, path }) => `${method} ${path}`),
+  [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, ...DIRECT_DEVICE_UI_ROUTES].map(({ method, path }) => `${method} ${path}`),
 )
 
 export function isPrivateDeviceAddress(address: string): boolean {
@@ -109,11 +115,16 @@ export class MainDeviceNetwork {
   private config: DeviceNetworkConfig = DEFAULT_CONFIG
   private server: GatewayServer | undefined
   private loopbackServer: GatewayServer | undefined
+  private primaryShared = false
+  private loopbackShared = false
   private error: string | null = null
   private operation: Promise<unknown> = Promise.resolve()
   private closing = false
 
   constructor(private readonly options: DeviceNetworkOptions) {}
+
+  get sharedPort(): number | undefined { return this.options.sharedPort }
+  get enabled(): boolean { return !this.closing && this.config.enabled && !this.error && (!!this.server || this.primaryShared) }
 
   async init(): Promise<void> {
     try {
@@ -133,10 +144,11 @@ export class MainDeviceNetwork {
   getState(): DeviceNetworkState {
     return {
       ...this.config,
-      state: this.error ? 'error' : this.server ? 'listening' : 'disabled',
-      endpoint: this.server && !this.error ? `http://${this.config.host}:${this.config.port}` : null,
+      state: this.error ? 'error' : this.enabled ? 'listening' : 'disabled',
+      endpoint: this.enabled ? `http://${this.config.host}:${this.config.port}` : null,
       error: this.error,
-      ...(this.server && !this.error && this.loopbackServer ? { loopbackEndpoint: `http://${LOOPBACK_DEVICE_HOST}:${this.config.port}` } : {}),
+      ...(this.enabled && (this.loopbackServer || this.loopbackShared) ? { loopbackEndpoint: `http://${LOOPBACK_DEVICE_HOST}:${this.config.port}` } : {}),
+      ...(this.enabled && this.sharedPort ? { sharedEndpoint: `http://${LOOPBACK_DEVICE_HOST}:${this.sharedPort}` } : {}),
       addresses: (this.options.addresses ?? deviceNetworkAddresses)(),
     }
   }
@@ -147,7 +159,7 @@ export class MainDeviceNetwork {
       const config = parseDeviceNetworkConfig(value)
       if (config.enabled) this.requireAddress(config.host)
       await this.save(config)
-      if (config.enabled && this.server && !this.error && config.host === this.config.host && config.port === this.config.port) {
+      if (config.enabled && this.enabled && config.host === this.config.host && config.port === this.config.port) {
         this.config = config
         await this.syncLoopbackListener()
         return this.getState()
@@ -212,6 +224,7 @@ export class MainDeviceNetwork {
   private async startListener(): Promise<void> {
     const { host, port } = this.config
     this.requireAddress(host)
+    if (this.isShared(host, port)) { this.primaryShared = true; return }
     const primary = await this.bindListener(host, port)
     this.server = primary
     void primary.finished.catch(error => {
@@ -221,14 +234,20 @@ export class MainDeviceNetwork {
     await this.syncLoopbackListener()
   }
 
+  private isShared(host: string, port: number): boolean {
+    return !!this.options.sharedGateway && host === LOOPBACK_DEVICE_HOST && port === this.sharedPort
+  }
+
   private async syncLoopbackListener(): Promise<void> {
     const { host, port, enableLoopbackListener } = this.config
     if (!enableLoopbackListener || host === LOOPBACK_DEVICE_HOST) {
+      this.loopbackShared = false
       const existing = this.loopbackServer
       this.loopbackServer = undefined
       await existing?.shutdown()
       return
     }
+    if (this.isShared(LOOPBACK_DEVICE_HOST, port)) { this.loopbackShared = true; return }
     if (this.loopbackServer) return
     // A tunnel-side bind failure must not disconnect or hide the primary LAN listener.
     try {
@@ -245,23 +264,39 @@ export class MainDeviceNetwork {
     }
   }
 
-  private async bindListener(host: string, port: number): Promise<GatewayServer> {
-    // Use a separate app/WebSocket server per binding so cleanup is independent.
-    const app = new Hono()
-    // Only device protocol ingress is reachable here, including the proof-authenticated UI tunnel.
-    // Raw browser APIs and launch-token/local administration remain inaccessible.
-    app.use('*', async (context, next) => {
-      if (!DEVICE_ROUTES.has(`${context.req.method} ${new URL(context.req.url).pathname}`)) {
-        return context.json({ error: 'not_found' }, 404)
+  isDedicatedSocket(host: string | undefined, port: number | undefined): boolean {
+    const address = host?.replace(/^::ffff:/, '')
+    return [this.server, this.loopbackServer].some(listener => listener && listener.addr.hostname === address && listener.addr.port === port)
+  }
+
+  guardDedicatedRequest = (request: Request): Response | undefined => {
+    const path = new URL(request.url).pathname
+    if (DEVICE_ROUTES.has(`${request.method} ${path}`)) {
+      return request.headers.has('Origin') ? Response.json({ error: 'browser_access_not_allowed' }, { status: 403 }) : undefined
+    }
+    if (this.options.sharedGateway && this.enabled) {
+      if (this.options.authorizeViewer?.(request)) return
+      if (this.options.hasViewerCredential?.(request) && directDeviceUiPath(path, request.method)) {
+        return Response.json({ error: 'unauthorized' }, { status: 401,
+          headers: { 'X-Shadow-Device-Session': 'invalid', 'Cache-Control': 'no-store' } })
       }
-      if (context.req.header('Origin')) return context.json({ error: 'browser_access_not_allowed' }, 403)
-      await next()
-    })
-    registerGatewayRoutes(app, [...this.options.cluster.plugins, ...(this.options.uiPlugin ? [this.options.uiPlugin] : [])], {
+      if (request.method === 'OPTIONS' && directDeviceUiPath(path, request.headers.get('Access-Control-Request-Method') ?? 'GET')) return
+      if (path === REALTIME_SOCKET_PATH && request.method === 'GET' && request.headers.get('Upgrade')?.toLowerCase() === 'websocket'
+        && request.headers.get('Sec-WebSocket-Protocol')?.split(',').some(protocol => /^ticket\.[a-f0-9-]{36}$/.test(protocol.trim()))) return
+      if (['GET', 'HEAD'].includes(request.method) && /^\/api\/html-preview\/[\w-]{43}\//.test(path)) return
+    }
+    return Response.json({ error: 'not_found' }, { status: 404 })
+  }
+
+  private async bindListener(host: string, port: number): Promise<GatewayServer> {
+    const shared = this.options.sharedGateway
+    const app = shared ?? new Hono()
+    if (!shared) registerGatewayRoutes(app, [...this.options.cluster.plugins], {
       clientAddresses: this.options.clientAddresses,
-      launchCredentialExemptions: [...MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS, ...DEVICE_UI_ROUTES],
+      launchCredentialExemptions: MAIN_CLUSTER_LAUNCH_CREDENTIAL_EXEMPTIONS,
     })
-    const server = serveGateway(app, { host, port, clientAddresses: this.options.clientAddresses })
+    const server = serveGateway(app, { host, port, clientAddresses: this.options.clientAddresses,
+      sharedWebSockets: !!shared, requestGuard: this.guardDedicatedRequest })
     try { await server.ready }
     catch (error) {
       await server.shutdown()
@@ -272,9 +307,14 @@ export class MainDeviceNetwork {
 
   private async stopListener(): Promise<void> {
     const { server, loopbackServer } = this
+    const hadIngress = !!server || !!loopbackServer || this.primaryShared || this.loopbackShared
     this.server = undefined
     this.loopbackServer = undefined
-    await Promise.all([server?.shutdown(), loopbackServer?.shutdown()])
+    this.primaryShared = false
+    this.loopbackShared = false
+    this.options.invalidateUi?.()
+    await Promise.all([server?.shutdown(), loopbackServer?.shutdown(),
+      hadIngress ? this.options.cluster.disconnectNodeConnections('Device network configuration changed') : undefined])
   }
 
   private reportLoopbackFailure(port: number, error: unknown): void {

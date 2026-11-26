@@ -256,13 +256,13 @@ test('ensureRuntime returns only stable redacted failure codes', async () => {
   assert.equal(JSON.stringify(failure).includes('private'), false)
 })
 // Both entry points converge on RuntimeHost; profiles are deliberately not migrated.
-test('development overrides wizard and saved production ports without rewriting profiles', async () => {
+test('Main migration uses 3124 by default; isolated development overrides leave saved profiles unchanged', async () => {
   const { RuntimeHost } = await import('../sidecar/runtime-host.js')
   for (const packaged of [false, true]) {
     const starts: number[] = []
     const host = new RuntimeHost({
       paths: { executablePath: 'node', appPath: '.', resourcesPath: '.', userDataPath: '.', packaged },
-      environment: { SHADOW_DESKTOP_DEV_IPC: '1' },
+      environment: { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: '43124' },
       supervisorFactory: () => ({
         status: { phase: 'stopped' },
         start: async (request) => {
@@ -285,7 +285,7 @@ test('development overrides wizard and saved production ports without rewriting 
     await host.stop()
     const resumedHost = new RuntimeHost({
       paths: { executablePath: 'node', appPath: '.', resourcesPath: '.', userDataPath: '.', packaged },
-      environment: { SHADOW_DESKTOP_DEV_IPC: '1' },
+      environment: { SHADOW_DESKTOP_DEV_IPC: '1', SHADOW_DESKTOP_DEV_PORT: '43124' },
       supervisorFactory: () => ({
         status: { phase: 'stopped' },
         start: async (request) => {
@@ -298,8 +298,8 @@ test('development overrides wizard and saved production ports without rewriting 
     const resumed = createCoordinator(new MemoryStorage(mainLaunchState()), resumedHost, profiles)
     const result = await resumed.ensureRuntime()
     assert.equal(result.ok, true)
-    if (result.ok) assert.equal(result.context.apiBase, `http://127.0.0.1:${packaged ? 43123 : 43124}`)
-    assert.deepEqual(starts, packaged ? [43123, 43123] : [43124, 43124])
+    if (result.ok) assert.equal(result.context.apiBase, `http://127.0.0.1:${packaged ? 3124 : 43124}`)
+    assert.deepEqual(starts, packaged ? [3124, 3124] : [43124, 43124])
     assert.equal(saves, 1)
     assert.equal(profile.port, 43123)
     await resumedHost.stop()

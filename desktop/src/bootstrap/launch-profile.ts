@@ -12,7 +12,8 @@ export interface MainLaunchProfile {
 export interface ChildLaunchProfile {
   readonly version: 1
   readonly role: 'child'
-  readonly port: number
+  /** Accepted in legacy saved profiles but never used by Child. */
+  readonly port?: number
 }
 export type LaunchProfile = MainLaunchProfile | ChildLaunchProfile
 
@@ -59,9 +60,10 @@ export class AtomicLaunchProfileStore implements LaunchProfileStore {
 export function parseLaunchProfile(value: unknown): LaunchProfile {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const candidate = value as Record<string, unknown>
-    if (candidate.role === 'child' && candidate.version === 1 && Object.keys(candidate).length === 3
-      && Number.isSafeInteger(candidate.port) && (candidate.port as number) >= 1 && (candidate.port as number) <= 65_535) {
-      return { version: 1, role: 'child', port: candidate.port as number }
+    if (candidate.role === 'child' && candidate.version === 1 &&
+      Object.keys(candidate).every(key => ['role', 'version', 'port'].includes(key)) &&
+      (candidate.port === undefined || Number.isSafeInteger(candidate.port) && (candidate.port as number) >= 1 && (candidate.port as number) <= 65_535)) {
+      return { version: 1, role: 'child' }
     }
   }
   return parseMainLaunchProfile(value)

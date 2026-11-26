@@ -31,9 +31,15 @@ async function main() {
   }
   const locale = async (value: 'en' | 'zh-CN') => {
     await execute(`(() => {
-      const select = [...document.querySelectorAll('.language-selector select')].find(el => el.getClientRects().length);
-      if (!select) throw new Error('Missing visible language selector');
-      select.focus(); select.value = ${JSON.stringify(value)}; select.dispatchEvent(new Event('change', { bubbles: true }));
+      const trigger = [...document.querySelectorAll('.language-selector .ui-select-trigger')].find(el => el.getClientRects().length);
+      if (!trigger) throw new Error('Missing visible language selector');
+      trigger.focus(); trigger.click();
+      return new Promise(resolve => requestAnimationFrame(() => {
+        const list = document.getElementById(trigger.getAttribute('aria-controls'));
+        const option = list?.querySelectorAll('[role=option]')[${value === 'en' ? 1 : 2}];
+        if (!option) throw new Error('Missing language option');
+        option.click(); resolve(null);
+      }));
     })()`)
     await frame()
     assert.equal(await execute('document.documentElement.lang'), value)
@@ -49,14 +55,14 @@ async function main() {
     await frame()
     const bounds = await execute(`({
       width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
-      selectors: [...document.querySelectorAll('.language-selector select')].filter(el => el.getClientRects().length)
-        .map(el => ({ ...el.getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label') }))
+      selectors: [...document.querySelectorAll('.language-selector .ui-select-trigger')].filter(el => el.getClientRects().length)
+        .map(el => ({ ...el.closest('.ui-select').getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label') }))
     })`)
     assert.ok(bounds.scrollWidth <= bounds.width + 1, `${name}: ${JSON.stringify(bounds)}`)
     assert.ok(bounds.selectors.length > 0, name)
     for (const select of bounds.selectors) {
       assert.ok(select.x >= 0 && select.right <= bounds.width + 1 && select.width > 0, name)
-      assert.ok(select.height >= (bounds.width <= 700 ? 44 : 32), name)
+      assert.ok(select.height >= (bounds.width <= 700 ? 44 : 32), `${name}: ${JSON.stringify(select)}`)
       assert.ok(select.label, name)
     }
     if (process.env.I18N_SCREENSHOTS) {
@@ -76,19 +82,11 @@ async function main() {
     await window.loadURL(new URL('__localization', base).href)
     await wait('!!window.__localization')
     await locale('en')
-    assert.equal(await execute("document.querySelector('h1').textContent"), 'Connect this browser')
-    await execute(`(() => {
-      const input = document.querySelector('#pairing-code');
-      input.value = 'synthetic-unsent-code'; input.dispatchEvent(new Event('input', { bubbles: true }));
-    })()`)
     await locale('zh-CN')
-    assert.equal(await execute("document.querySelector('h1').textContent"), '连接此浏览器')
-    assert.equal(await execute("document.querySelector('#pairing-code').value"), 'synthetic-unsent-code')
-    await capture('browser-zh-desktop')
     const reloaded = once(window.webContents, 'did-finish-load')
     window.webContents.reload()
     await reloaded
-    await wait("!!window.__localization && document.querySelector('h1')?.textContent === '连接此浏览器'")
+    await wait("!!window.__localization && document.documentElement.lang === 'zh-CN'")
     assert.equal(await execute("document.querySelector('.language-selector select').value"), 'zh-CN')
     for (const width of [1200, 390]) {
       await resize(width)

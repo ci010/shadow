@@ -5,12 +5,14 @@ import { once } from 'node:events'
 import { writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { app, BrowserWindow, ipcMain, nativeImage, type Task } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeImage, protocol, type Task } from 'electron'
 import { DesktopMicroApps } from '../../src/micro-apps.ts'
 import { createMicroAppWindow } from '../../src/micro-app-window.ts'
 import { installMicroAppIpc } from '../../src/micro-app-ipc.ts'
-import { parseMicroAppArguments, type MicroAppIdentity } from '../../src/micro-app-contract.ts'
-import { installRuntimeRequestAuthorization } from '../../src/runtime-authorization.ts'
+import { CHILD_MICRO_APP_SCHEME, parseMicroAppArguments, type MicroAppIdentity } from '../../src/micro-app-contract.ts'
+import { installRuntimeRequestAuthorization, runtimeAuthorizationHeaders } from '../../src/runtime-authorization.ts'
+
+protocol.registerSchemesAsPrivileged([{ scheme: CHILD_MICRO_APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 
 const output = process.env.MICROAPPS_NATIVE_OUTPUT!
 const profile = join(output, 'profile')
@@ -33,12 +35,14 @@ else {
 
 async function main() {
   await app.whenReady()
+  if (process.env.MICROAPPS_NATIVE_CHILD_ID) console.log('Child fixture Electron ready')
   const cold = parseMicroAppArguments(process.argv)
   const window = new BrowserWindow({ show: false, width: 1200, height: 850, webPreferences: {
     preload: join(output, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
   } })
   const execute = (code: string) => window.webContents.executeJavaScript(code)
-  const authorization = { apiBase: new URL(process.env.MICROAPPS_NATIVE_URL!).origin, launchToken: process.env.MICROAPPS_NATIVE_CHILD_ID ? 'fixture-child-secret' : 'synthetic-owner' }
+  const authorization = { apiBase: new URL(process.env.MICROAPPS_NATIVE_URL!).origin, launchToken: process.env.MICROAPPS_NATIVE_CHILD_ID ? '' : 'synthetic-owner',
+    ...(process.env.MICROAPPS_NATIVE_CHILD_ID ? { deviceGrant: async () => process.env.MICROAPPS_NATIVE_CHILD_GRANT ?? null } : {}) }
   const update = installRuntimeRequestAuthorization(window.webContents.session, details => details.webContentsId === window.webContents.id)
   update(authorization)
   let appWindow: BrowserWindow | undefined
@@ -54,6 +58,7 @@ async function main() {
     },
     setUserTasks: value => {
       tasks = value
+      if (process.env.MICROAPPS_NATIVE_CHILD_ID) return true
       const ok = app.setUserTasks(value)
       actualTasks ||= ok && value.length > 0
       return ok
@@ -79,15 +84,19 @@ async function main() {
     if (process.env.MICROAPPS_NATIVE_CHILD_ID) {
       const identity = { projectId: 'default', appId: process.env.MICROAPPS_NATIVE_CHILD_ID }
       const base = `${authorization.apiBase}/projects/default/api/microapps/${identity.appId}`
-      const post = (action: string, body: unknown) => fetch(`${base}/${action}`, { method: 'POST', headers: { Authorization: `Bearer ${authorization.launchToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const post = async (action: string, body: unknown) => fetch(`${base}/${action}`, { method: 'POST', headers: { ...await runtimeAuthorizationHeaders(authorization), 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      console.log('Child fixture loading trusted launcher');
       await window.loadURL('data:text/html,<a id="message-app-link">Open published app</a><output></output>')
       await execute(`document.querySelector('a').onclick=()=>window.shadowDesktop.microApps.open(${JSON.stringify(identity)}).then(()=>document.querySelector('output').textContent='opened',()=>document.querySelector('output').textContent='review');void 0`)
       const messageOpen = () => execute(`document.querySelector('output').textContent='';document.querySelector('a').click()`)
-      const status = await (await fetch(base + '/status', { headers: { Authorization: `Bearer ${authorization.launchToken}` } })).json() as { revision: string }
+      const status = await (await fetch(base + '/status', { headers: { ...await runtimeAuthorizationHeaders(authorization) } })).json() as { revision: string }
       await messageOpen()
       await wait(() => execute(`document.querySelector('output').textContent==='opened'`), 'Child message IPC open')
+      console.log('Child fixture window opened')
       const native = appWindow!
-      const origin = new URL(native.webContents.getURL()).origin
+      const appUrl = new URL(native.webContents.getURL())
+      assert.equal(appUrl.protocol, `${CHILD_MICRO_APP_SCHEME}:`)
+      const origin = `${appUrl.protocol}//${appUrl.host}`
       assert.notEqual(origin, authorization.apiBase)
       // Main and Child share loopback in this fixture: explicitly reject accidentally loading Main's own origin.
       const mainLaunch = await fetch(`${process.env.MICROAPPS_NATIVE_MAIN_URL}/projects/default/api/microapps/${identity.appId}/open`, {
@@ -107,14 +116,14 @@ async function main() {
       await wait(() => native.isFocused(), 'Child native focus reuse')
       assert.equal(appWindow!.id, native.id)
       native.close()
-      await wait(async () => (await (await fetch(base + '/status', { headers: { Authorization: `Bearer ${authorization.launchToken}` } })).json()).status === 'stopped', 'Remote Main runtime stopped on close')
+      await wait(async () => (await (await fetch(base + '/status', { headers: { ...await runtimeAuthorizationHeaders(authorization) } })).json()).status === 'stopped', 'Remote Main runtime stopped on close')
       await messageOpen()
       await wait(() => execute(`document.querySelector('output').textContent==='opened'`), 'Child reopens')
-      const reopened = appWindow!, newOrigin = new URL(reopened.webContents.getURL()).origin
+      const reopened = appWindow!, reopenedUrl = new URL(reopened.webContents.getURL())
+      const newOrigin = `${reopenedUrl.protocol}//${reopenedUrl.host}`
       assert.notEqual(newOrigin, origin)
       await wait(() => reopened.webContents.executeJavaScript(`document.querySelector('output').textContent==='state:1'`), 'State persisted on Main across runs')
       assert.equal((await post('stop', {})).status, 200)
-      await assert.rejects(fetch(newOrigin), /fetch failed/)
       await manager.refresh()
       await wait(() => reopened.isDestroyed(), 'Revocation closes Child native window')
       await messageOpen()

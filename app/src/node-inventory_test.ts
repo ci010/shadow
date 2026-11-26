@@ -60,17 +60,24 @@ test('directory availability requires the exact online binding and compatible co
   assert.equal(workdirAvailability({ ...parsed, executionProtocol: 'upgrade-required' }, parsed.workdirs[0]), 'unavailable')
 })
 
-test('Main and Child request their respective authenticated backend inventory with cancellation', async () => {
+test('Main inventory uses authenticated HTTP; Child inventory uses only scoped native IPC', async () => {
   const controller = new AbortController()
-  for (const mode of ['main', 'child'] as const) {
-    const result = await fetchNodeInventory('http://127.0.0.1:43123', mode, controller.signal, async (url, options) => {
-      assert.equal(String(url), `http://127.0.0.1:43123${mode === 'main' ? '/nodes/v1' : '/local/v1/nodes'}`)
-      assert.equal(options?.signal, controller.signal)
-      assert.equal(options?.cache, 'no-store')
-      return Response.json(inventory())
-    })
-    assert.equal(result.nodes[0].nodeId, 'fixture-main')
-  }
+  const base = 'http://127.0.0.1:3124'
+  const main = await fetchNodeInventory(base, 'main', controller.signal, async (url, options) => {
+    assert.equal(String(url), `${base}/nodes/v1`)
+    assert.equal(options?.signal, controller.signal)
+    assert.equal(options?.cache, 'no-store')
+    return Response.json(inventory())
+  })
+  assert.equal(main.nodes[0].nodeId, 'fixture-main')
+  let requests = 0
+  const noFetch = () => assert.fail('Child inventory cannot hit the paired server or an old local gateway')
+  const childControl = { status: async () => null, inventory: async () => { requests++; return inventory() } }
+  assert.deepEqual(await fetchNodeInventory(base, 'child', controller.signal, noFetch, childControl), main)
+  controller.abort()
+  await assert.rejects(fetchNodeInventory(base, 'child', controller.signal, noFetch, childControl), { name: 'AbortError' })
+  assert.equal(requests, 1)
+
 })
 
 test('missing, forbidden, failed and malformed responses are explicit errors, never fixtures', async () => {

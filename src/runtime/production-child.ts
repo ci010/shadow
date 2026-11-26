@@ -10,7 +10,7 @@ import { assertExecutionSupported } from '../execution/workdir-contracts.ts'
 import { RemoteLayerFSService } from '../execution/layerfs/remote-service.ts'
 import { RemoteLayerFSRuntimes } from '../execution/layerfs/remote-runtime.ts'
 import { LAYERFS_REMOTE_OPERATION, LAYERFS_REMOTE_FEATURE } from '../execution/layerfs/remote-contract.ts'
-import { childWorkspacePlugin } from './child-workspace.ts'
+import { DEVICE_UI_SESSION, DEVICE_UI_SESSION_CHALLENGE } from '../cluster/direct-device-ui.ts'
 import { ProcessManager } from '../execution/processes/manager.ts'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -38,7 +38,7 @@ import type { RuntimeDerivedPaths } from './runtime-cli.ts'
 import type { ProtectedDeviceKeyStore } from '../cluster/device-credentials.ts'
 import type { DeviceCredentialReferenceStore } from '../cluster/device-credential-reference-store.ts'
 import type { ChallengeFetch } from '../cluster/device-challenge-client.ts'
-import { ChildLocalControlService } from './child-local-control.ts'
+import { ChildDesktopControl } from './child-desktop-ipc.ts'
 import { childLocalNodeInventory } from './node-inventory.ts'
 
 export interface ProductionChildOptions {
@@ -47,10 +47,7 @@ export interface ProductionChildOptions {
   readonly processManager?: ProcessManager
   readonly webSocketFactory?: NodeWebSocketFactory
   readonly fetchChallenge?: ChallengeFetch
-  readonly localControl?: {
-    readonly port: number
-    readonly launchCredential: string
-  }
+  readonly desktopChannel?: ConstructorParameters<typeof ChildDesktopControl>[0]
 }
 
 export async function startProductionChildRuntime(
@@ -193,22 +190,43 @@ export async function startProductionChildRuntime(
   let connection: 'connecting' | 'connected' | 'offline' = 'connecting'
   let connectionError: string | null = null
   let connectionEpoch = 0
-  const localControl = options.localControl
-    ? new ChildLocalControlService({
-      ...options.localControl,
-      workspace: childWorkspacePlugin({
-        endpoint: config.mainEndpoint,
-        proof: async (signal, path) => {
+  let grant: { token: string; expiresAt: number } | undefined
+  let grantRequest: Promise<unknown> | undefined
+  let lastInvalidation = 0
+  const desktop = options.desktopChannel ? new ChildDesktopControl(options.desktopChannel, {
+      endpoint: config.mainEndpoint,
+      invalidateGrant: () => {
+        const now = Date.now()
+        if (now - lastInvalidation < 1000) return
+        lastInvalidation = now
+        grant = undefined
+      },
+      grant: signal => {
+        if (grant && grant.expiresAt > Date.now() + 60_000) return Promise.resolve(grant.token)
+        return grantRequest ??= (async () => {
+          const capturedEpoch = connectionEpoch
+          const bounded = AbortSignal.any([signal, AbortSignal.timeout(8000)])
           const credential = await resolveDeviceCredentialForConnect(credentialProvider, reference,
-            { endpoint: config.mainEndpoint, localNodeId: config.localNodeId, signal })
-          return requestDeviceChallengeProtocol(config.mainEndpoint, {
+            { endpoint: config.mainEndpoint, localNodeId: config.localNodeId, signal: bounded })
+          const proof = await requestDeviceChallengeProtocol(config.mainEndpoint, {
             deviceId: reference.deviceId, nodeId: reference.nodeId, credentialId: reference.credentialId,
-          }, credential.proof, options.fetchChallenge, signal, path)
-        },
-      }),
-      requestShutdown: () => runtime?.shutdown(),
-      nodeInventory: () => childLocalNodeInventory(config, workdirs.workdirs, support(), '0.1.0', connection === 'connected' ? 'connected' : 'offline'),
-      childStatus: () => ({
+          }, credential.proof, options.fetchChallenge, bounded, DEVICE_UI_SESSION_CHALLENGE)
+          const endpoint = new URL(config.mainEndpoint)
+          endpoint.pathname = endpoint.pathname.replace(/\/+$/, '') + DEVICE_UI_SESSION
+          const response = await (options.fetchChallenge ?? fetch)(endpoint, { method: 'POST', redirect: 'error', signal: bounded,
+            headers: { 'X-Shadow-Device-Proof': proof } })
+          if (!response.ok) { await response.body?.cancel(); return null }
+          const value = await response.json() as { version?: unknown; token?: unknown; expiresAt?: unknown }
+          if (capturedEpoch !== connectionEpoch || value?.version !== 1 || typeof value.token !== 'string' ||
+            !/^[A-Za-z0-9_-]{43}$/.test(value.token) || typeof value.expiresAt !== 'number' ||
+            !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= Date.now() || value.expiresAt > Date.now() + 31 * 60_000) return null
+          grant = { token: value.token, expiresAt: value.expiresAt }
+          return grant.token
+        })().finally(() => { grantRequest = undefined })
+      },
+      stop: () => runtime?.shutdown(),
+      inventory: async () => ({ version: 1, nodes: [await childLocalNodeInventory(config, workdirs.workdirs, support(), '0.1.0', connection === 'connected' ? 'connected' : 'offline')] }),
+      status: () => ({
         version: 1, nodeId: config.localNodeId, mainEndpoint: config.mainEndpoint,
         connection, error: connectionError, fingerprint: reference.deviceIdentityFingerprint,
         dataDir: paths.dataDir, workdirs: config.workdirs ?? [],
@@ -220,16 +238,14 @@ export async function startProductionChildRuntime(
     nodeIdentity: new CredentialIdentityService(validateCredential),
     localExecutors: new LocalExecutorService(processManager, workdirs, async () => { await Promise.all([layerfsRuntimes.close(), mcp.reset(), ...[...browsers.values()].map(browser => browser.shutdown())]) }),
     mainConnector: connector,
-    localControl,
+    localControl: desktop,
   }, { connectionChanged: (state, error) => {
-    if (connection !== state) connectionEpoch++
+    if ((connection === 'connected') !== (state === 'connected')) { connectionEpoch++; grant = undefined }
     connection = state
     connectionError = error
     if (state !== 'connected') void mcp.reset().catch(() => console.error('[child] MCP disconnect cleanup failed'))
   } })
-  if (localControl) {
-    runtime.ready.then(() => localControl.markReady(), () => {})
-  }
+  if (desktop) runtime.ready.then(() => desktop.markReady(), () => {})
   return runtime
 }
 

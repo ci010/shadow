@@ -5,6 +5,7 @@ import type { ForkOptions } from 'electron'
 import type { SidecarChildProcess, SidecarSpawn } from './supervisor.js'
 
 interface UtilityChild {
+  postMessage?(message: unknown): void
   readonly pid: number | undefined
   readonly stdout: SidecarChildProcess['stdout']
   readonly stderr: SidecarChildProcess['stderr']
@@ -54,9 +55,14 @@ export function createUtilityProcessSpawn(
       if (isDevelopmentRestartMessage(message)) restart()
     })
     const events = new EventEmitter()
+    child.on('message', value => events.emit('message', value))
     child.once('error', () => events.emit('error', new Error('Backend utility process failed')))
     child.once('exit', code => events.emit('exit', code, null))
     return Object.assign(events, {
+      ...(child.postMessage ? { send: (value: object, callback: (error: Error | null) => void) => {
+        try { child.postMessage!(value); callback(null); return true }
+        catch { callback(new Error('Backend IPC unavailable')); return false }
+      } } : {}),
       stdout: child.stdout,
       stderr: child.stderr,
       kill: (signal?: NodeJS.Signals) => {

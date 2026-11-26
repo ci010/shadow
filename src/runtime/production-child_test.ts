@@ -1,7 +1,7 @@
 import { deepEqual as assertEquals, rejects as assertRejects } from 'node:assert/strict'
 import { test } from 'node:test'
-import { createServer } from 'node:net'
-import { once } from 'node:events'
+import { Server } from 'node:net'
+import { EventEmitter, once } from 'node:events'
 import type { DeviceCredentialReferenceStore } from '../cluster/device-credential-reference-store.ts'
 import {
   type ProtectedDeviceKeyStore,
@@ -91,14 +91,21 @@ test('production Child rejects non-loopback cleartext without explicit opt-in', 
 
 test('production Child starts with a correlated protected key and shuts down', async (t) => {
   const { workspace, folders } = await folderFixture(t)
-  const reservation = createServer().listen({ host: '127.0.0.1', port: 0 })
-  await once(reservation, 'listening')
-  const address = reservation.address()
-  if (!address || typeof address === 'string') throw new Error('Missing TCP address')
-  const localControlPort = address.port
-  await new Promise<void>((resolve, reject) => {
-    reservation.close((error) => error ? reject(error) : resolve())
+  const listen = t.mock.method(Server.prototype, 'listen', function (): never { throw new Error('Child attempted to listen') })
+  const emitter = new EventEmitter()
+  const ipc = Object.assign(emitter, {
+    connected: true,
+    send(value: object, callback: (error: Error | null) => void) { emitter.emit('reply', value); callback(null) },
+    disconnect() { this.connected = false; emitter.emit('disconnect') },
   })
+  let id = 0
+  const query = async (operation: string) => {
+    const result = once(ipc, 'reply')
+    ipc.emit('message', { type: 'shadow-child-control-v1', id: ++id, operation })
+    const [reply] = await result
+    assertEquals(reply.id, id)
+    return reply.result
+  }
   const keyStore = protectedStore()
   const provider = new ProtectedEd25519DeviceCredentialProvider(keyStore)
   const identity = await provider.loadOrCreateKey(
@@ -132,10 +139,7 @@ test('production Child starts with a correlated protected key and shuts down', a
     {
       keyStore,
       referenceStore,
-      localControl: {
-        port: localControlPort,
-        launchCredential: 'production-child-secret',
-      },
+      desktopChannel: ipc,
       fetchChallenge: () =>
         Promise.resolve(new Response(null, { status: 404 })),
     },
@@ -143,27 +147,12 @@ test('production Child starts with a correlated protected key and shuts down', a
 
   t.after(() => runtime.shutdown())
   await runtime.ready
-  const readiness = await fetch(
-    `http://127.0.0.1:${localControlPort}/local/v1/readiness`,
-    { headers: { Authorization: 'Bearer production-child-secret' } },
-  )
-  assertEquals(readiness.status, 200)
-  assertEquals(await readiness.json(), {
-    version: 1,
-    role: 'child',
-    status: 'ready',
-  })
-  const inventoryUrl = `http://127.0.0.1:${localControlPort}/local/v1/nodes`
-  assertEquals((await fetch(inventoryUrl)).status, 401)
-  assertEquals((await fetch(inventoryUrl, {
-    headers: { Authorization: 'Bearer incorrect' },
-  })).status, 401)
-  const inventory = await fetch(inventoryUrl, {
-    headers: { Authorization: 'Bearer production-child-secret' },
-  })
-  assertEquals(inventory.status, 200)
-  assertEquals(inventory.headers.get('Cache-Control'), 'no-store')
-  const body = await inventory.json()
+  assertEquals(await query('readiness'), { ready: true, endpoint: 'https://main.example.test' })
+  const status = await query('status')
+  assertEquals(status.nodeId, 'node-1')
+  assertEquals(status.mainEndpoint, 'https://main.example.test')
+  assertEquals(await query('/api/projects'), null, 'arbitrary HTTP or business commands are not IPC operations')
+  const body = await query('inventory')
   assertEquals(body.version, 1)
   assertEquals(body.nodes.length, 1)
   assertEquals(body.nodes[0].nodeId, 'node-1')
@@ -185,13 +174,8 @@ test('production Child starts with a correlated protected key and shuts down', a
   assertEquals('capabilities' in body.nodes[0], false)
   assertEquals(JSON.stringify(body).includes('credential'), false)
   assertEquals(JSON.stringify(body).includes('fingerprint'), false)
-  assertEquals((await fetch(
-    `http://127.0.0.1:${localControlPort}/nodes/v1`,
-    { headers: { Authorization: 'Bearer production-child-secret' } },
-  )).status, 503) // Main workspace proxy is explicit about an unavailable/unapproved Main.
-  assertEquals(await Promise.all([runtime.shutdown(), runtime.shutdown()]), [
-    undefined,
-    undefined,
-  ])
+  assertEquals(await query('grant'), null)
+  assertEquals(listen.mock.callCount(), 0)
+  ipc.emit('message', { type: 'shadow-child-control-v1', id: ++id, operation: 'shutdown' })
   await runtime.finished
 })
