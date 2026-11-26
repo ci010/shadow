@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { contentReference, workReference } from './content-references.ts'
+import { contentReference, workReference, workflowContentReference } from './content-references.ts'
 import { composerReferences } from './composer-references.ts'
 import { messageAttachments } from './message-attachments.ts'
 import { serializeAttachmentReferences, parseAttachmentReferences } from '../../src/utils/attachment-references.ts'
@@ -61,7 +61,7 @@ test('conversation link handler routes Work, retains Session selection and leave
     hasAttribute(name: string) { return name === 'download' && this.download }
   }
   const routes: unknown[] = [], sessions: string[] = []
-  const click = new Function('Element', 'imagePreviewFromEvent', 'contentReference', 'conversationLinkSession', 'conversationMicroAppLink', 'discordReviewLink', 'conversationFileLink', 'props', 'router', 'requestSession', handler + ';return openConversationLink')(Anchor, () => undefined, contentReference, conversationLinkSession, conversationMicroAppLink, () => undefined, () => undefined, { projectId: 'p' }, { push: (route: unknown) => routes.push(route) }, (id: string) => sessions.push(id))
+  const click = new Function('Element', 'imagePreviewFromEvent', 'workflowContentReference', 'contentReference', 'conversationLinkSession', 'conversationMicroAppLink', 'discordReviewLink', 'conversationFileLink', 'props', 'router', 'requestSession', handler + ';return openConversationLink')(Anchor, () => undefined, workflowContentReference, contentReference, conversationLinkSession, conversationMicroAppLink, () => undefined, () => undefined, { projectId: 'p' }, { push: (route: unknown) => routes.push(route) }, (id: string) => sessions.push(id))
   const event = (href: string, extra = {}, download = false) => ({ target: new Anchor(href, download), button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true }, ...extra })
   const work = event('/projects/p/dashboard?work=work%3Ac0a4d7f3-1966-50f2-8874-fea3c604b719')
   click(work)
@@ -75,4 +75,11 @@ test('conversation link handler routes Work, retains Session selection and leave
     assert.equal(untouched.defaultPrevented, false)
   }
   assert.equal(routes.length, 1)
+  const workflow = event('/projects/p/workflows?bot=connection%3Ac&node=receiver%3Ax')
+  click(workflow)
+  assert.equal(workflow.defaultPrevented, true)
+  assert.equal(routes[1], workflow.target.href)
+  const modified = event(workflow.target.href, { metaKey: true })
+  click(modified)
+  assert.equal(modified.defaultPrevented, false)
 })

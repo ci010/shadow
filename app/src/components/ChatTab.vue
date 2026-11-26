@@ -684,7 +684,8 @@ import { groupToolActivity } from '../tool-activity.ts'
 import { toolImages } from '../tool-images.ts'
 import { buildMediaUrl } from '../media-url.ts'
 import { createChatRequestControl, resumeChatRequest, type ChatRequestControl } from '../chat-request-control.ts'
-import { contentReference } from '../content-references.ts'
+import { contentReference, workflowContentReference } from '../content-references.ts'
+import { workflowReferenceDisplay } from '../workflow-reference-display.ts'
 import { conversationLinkSession, conversationMicroAppLink, isDirectConversation } from '../project-coordination.ts'
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import ConversationSearch from './ConversationSearch.vue'
@@ -707,6 +708,8 @@ function openConversationLink(event: MouseEvent) {
   const anchor = event.target instanceof Element ? event.target.closest('a') : null
   const reference = anchor && !anchor.hasAttribute('download') && contentReference(anchor.getAttribute('href') ?? '')
   if (reference && reference.kind === 'work') { event.preventDefault(); void router.push(reference.href); return }
+  const workflow = anchor && !anchor.hasAttribute('download') && workflowContentReference(anchor.getAttribute('href') ?? '')
+  if (workflow) { event.preventDefault(); void router.push(workflow); return }
   const app = anchor && !anchor.hasAttribute('download') &&
     conversationMicroAppLink(anchor.getAttribute('href') ?? '', props.projectId || liveProjectId(props.apiBase))
   if (app) { event.preventDefault(); void router.push(app); return }
@@ -3555,7 +3558,7 @@ function preprocessCustomXml(text: string): string {
 function renderMarkdown(text: string): string {
   if (!text) return ''
 
-  const src = preprocessCustomXml(text)
+  const src = preprocessCustomXml(workflowReferenceDisplay(text))
   const html = marked.render(src)
 
   return imagePreviewMarkup(mobileResources.html(DOMPurify.sanitize(sanitizeAnswerHtmlRoots(html), {

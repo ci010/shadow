@@ -809,6 +809,7 @@ watch(() => route.fullPath, () => {
     if (typeof route.query.bot === 'string') query.bot = route.query.bot
     if (typeof route.query.workflow === 'string') query.workflow = route.query.workflow
     if (typeof route.query.run === 'string') query.run = route.query.run
+    if (typeof route.query.node === 'string') query.node = route.query.node
     workflowQueries.set(projectId, query)
   }
 }, { flush: 'post', immediate: true })
