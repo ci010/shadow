@@ -1,6 +1,6 @@
 import { projectStoragePath } from '../utils/data-paths.ts'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { FolderError, type FolderRegistry } from '../folders/registry.ts'
@@ -21,6 +21,22 @@ export interface ActionRun {
   startedAt: string; finishedAt?: string; exitCode?: number; stdout: string; stderr: string
 }
 const MAX_LOG = 128_000
+
+/** Never interpolate package-supplied executable names or version strings into shell code. */
+async function scriptPackageManager(folder: string, declared: unknown): Promise<'npm' | 'pnpm' | 'yarn' | 'bun'> {
+  if (typeof declared === 'string') {
+    const match = /^(npm|pnpm|yarn|bun)@\d[0-9A-Za-z.+_-]*$/.exec(declared)
+    if (match) return match[1] as 'npm' | 'pnpm' | 'yarn' | 'bun'
+  }
+  const locks = [['pnpm-lock.yaml', 'pnpm'], ['yarn.lock', 'yarn'], ['bun.lock', 'bun'], ['bun.lockb', 'bun'], ['package-lock.json', 'npm']] as const
+  const found = new Set<'npm' | 'pnpm' | 'yarn' | 'bun'>()
+  for (const [file, manager] of locks) {
+    try { await access(join(folder, file)); found.add(manager) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  }
+  // Conflicting lockfiles are not enough evidence to choose a different runner.
+  return found.size === 1 ? [...found][0] : 'npm'
+}
 
 /** Definitions persist per project; process handles and bounded run history are ephemeral. */
 export class ProjectActions {
@@ -102,10 +118,11 @@ export class ProjectActions {
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { scripts: [], packageManager: 'npm' }; throw new FolderError('invalid_package_json', 'Unable to read package.json scripts.', 400) }
       const parsed = z.object({ scripts: z.record(z.string(), z.string()).optional() }).passthrough().safeParse(pkg)
       if (!parsed.success) throw new FolderError('invalid_package_json', 'Invalid package.json scripts.', 400)
-      // npm lifecycle/PATH semantics, with only shell-safe names accepted on all supported hosts.
+      // Keep the repository's runner/PATH semantics, not an unconditional npm fallback.
+      const packageManager = await scriptPackageManager(folder.path, parsed.data.packageManager)
       const entries = Object.entries(parsed.data.scripts ?? {})
       const safeName = (name: string) => /^[a-zA-Z0-9_][a-zA-Z0-9_:@./-]*$/.test(name)
-      return { packageManager: 'npm', scripts: entries.filter(([name]) => safeName(name)).map(([name, script]) => ({ name, command: `npm run ${name}`, script })), unsupportedScripts: entries.filter(([name]) => !safeName(name)).map(([name]) => name) }
+      return { packageManager, scripts: entries.filter(([name]) => safeName(name)).map(([name, script]) => ({ name, command: `${packageManager} run ${name}`, script })), unsupportedScripts: entries.filter(([name]) => !safeName(name)).map(([name]) => name) }
     } finally { release() }
   }
   runs() { return [...this.#runs.values()].map(v => structuredClone(v.run)).reverse() }

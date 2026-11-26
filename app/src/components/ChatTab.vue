@@ -41,10 +41,10 @@
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
     <template #mobile-actions="{ close }">
-      <button data-actions-trigger @click="close(); nextTick(toggleActions)">{{ t('Actions') }}</button>
+      <button data-actions-trigger @click="close(); nextTick(toggleActions)"><span class="i-lucide-terminal w-4 h-4" aria-hidden="true" />{{ t('Actions') }}</button>
       <template v-if="activeSessionId">
         <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">{{ t('Search conversation') }}</button>
-        <button @click="close(); workbench?.openDiagnosis()">{{ t('Diagnosis') }}</button>
+        <button @click="close(); workbench?.openDiagnosis()"><span class="i-lucide-activity w-4 h-4" aria-hidden="true" />{{ t('Diagnosis') }}</button>
         <button @click="close(); showMobileSessionDetails()">{{ t('Session details') }}</button>
         <button @click="close(); renameMobileSession()">{{ t('Rename session') }}</button>
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">{{ t('Back to owning execution') }}</button>
@@ -81,8 +81,8 @@
             @next="viewNextSegment" @current="goBackToCurrentSegment">
             <ConversationHistoryMenu :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId" :automation="automationConversation" @select="selectHistorySegment" />
           </SegmentNavigation>
-          <button class="conversation-actions conversation-diagnosis" type="button" @click="workbench?.openDiagnosis()">{{ t('Diagnosis') }}</button>
-          <button ref="actionsTrigger" data-actions-trigger class="conversation-actions" type="button" :aria-expanded="actionsOpen" @click="toggleActions">{{ t('Actions') }}</button>
+          <button class="conversation-actions conversation-diagnosis" type="button" @click="workbench?.openDiagnosis()"><span class="i-lucide-activity w-4 h-4" aria-hidden="true" />{{ t('Diagnosis') }}</button>
+          <button ref="actionsTrigger" data-actions-trigger class="conversation-actions" type="button" :aria-expanded="actionsOpen" @click="toggleActions"><span class="i-lucide-terminal w-4 h-4" aria-hidden="true" />{{ t('Actions') }}</button>
           <button class="conversation-find" type="button" :aria-label="t('Search conversation')" aria-keyshortcuts="Control+F Meta+F"
             :title="t('Search conversation (Ctrl+F / Cmd+F)')" @click="conversationSearch?.show()">
             <span class="i-lucide-search w-4 h-4" aria-hidden="true" />
@@ -3833,7 +3833,7 @@ function resendLastMessage() {
 }
 @media print { .chat-message-entry { content-visibility: visible; } }
 .conversation-find, .conversation-actions { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--c-text-secondary); cursor: pointer; }
-.conversation-actions { flex-basis: auto; width: auto; padding: 0 8px; margin-left: auto; font: inherit; font-size: 13px; }
+.conversation-actions { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-basis: auto; width: auto; padding: 0 8px; margin-left: auto; font: inherit; font-size: 13px; }
 .conversation-find { margin-left: 0; }
 .conversation-find:hover, .conversation-actions:hover { background: var(--c-bg-muted); color: var(--c-text); }
 .conversation-find:focus-visible, .conversation-actions:focus-visible { outline: 2px solid var(--c-blue); outline-offset: 2px; }

@@ -158,3 +158,82 @@ test('coordinator mode denies direct and gateway Quick Action runs but preserves
     assert.deepEqual(actions.list(), [])
   } finally { await actions.shutdown(); await f.close() }
 })
+
+
+test('script discovery respects declared package managers without interpolating metadata', async () => {
+  const f = await fixture()
+  try {
+    for (const manager of ['npm', 'pnpm', 'yarn', 'bun']) {
+      await writeFile(join(f.folder, 'package.json'), JSON.stringify({ packageManager: `${manager}@12.3.1`, scripts: { 'build:app': 'echo built' } }))
+      const discovery = await f.actions.scripts(f.record.id)
+      assert.equal(discovery.packageManager, manager)
+      assert.equal(discovery.scripts[0].command, `${manager} run build:app`)
+    }
+    await writeFile(join(f.folder, 'package.json'), JSON.stringify({ packageManager: 'pnpm@12.3.1;echo-untrusted', scripts: { check: 'echo checked' } }))
+    // Shell syntax in metadata is never interpreted or included in the command.
+    assert.equal((await f.actions.scripts(f.record.id)).scripts[0].command, 'npm run check')
+    await writeFile(join(f.folder, 'package.json'), JSON.stringify({ packageManager: 'evil@1.0.0', scripts: { check: 'echo checked' } }))
+    assert.equal((await f.actions.scripts(f.record.id)).scripts[0].command, 'npm run check')
+  } finally { await f.close() }
+})
+
+test('script discovery uses unambiguous local lockfiles, with declarations taking precedence', async () => {
+  const f = await fixture()
+  try {
+    await writeFile(join(f.folder, 'package.json'), JSON.stringify({ scripts: { dev: 'echo dev' } }))
+    await writeFile(join(f.folder, 'pnpm-lock.yaml'), '')
+    assert.equal((await f.actions.scripts(f.record.id)).scripts[0].command, 'pnpm run dev')
+    await writeFile(join(f.folder, 'yarn.lock'), '')
+    assert.equal((await f.actions.scripts(f.record.id)).packageManager, 'npm')
+    await writeFile(join(f.folder, 'package.json'), JSON.stringify({ packageManager: 'bun@1.3.0', scripts: { dev: 'echo dev' } }))
+    assert.equal((await f.actions.scripts(f.record.id)).scripts[0].command, 'bun run dev')
+    await rm(join(f.folder, 'pnpm-lock.yaml')); await rm(join(f.folder, 'yarn.lock'))
+    await writeFile(join(f.folder, 'package.json'), JSON.stringify({ scripts: { dev: 'echo dev' } }))
+    for (const [lock, manager] of [['yarn.lock', 'yarn'], ['bun.lock', 'bun'], ['bun.lockb', 'bun'], ['package-lock.json', 'npm']]) {
+      await writeFile(join(f.folder, lock), '')
+      assert.equal((await f.actions.scripts(f.record.id)).packageManager, manager)
+      await rm(join(f.folder, lock))
+    }
+  } finally { await f.close() }
+})
+
+test('ordinary CLI actions execute literal shell commands in the saved folder through the API', async () => {
+  const f = await fixture()
+  try {
+    await writeFile(join(f.folder, 'cli.cjs'), "console.log(JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2)}))")
+    const headers = { 'x-admin': 'yes', 'Content-Type': 'application/json' }
+    const created = await f.app.request('/api/actions', { method: 'POST', headers, body: JSON.stringify({ name: 'CLI', command: 'node cli.cjs "two words" --check', folderId: f.record.id }) })
+    assert.equal(created.status, 201)
+    const { action } = await created.json()
+    const started = await f.app.request(`/api/actions/${action.id}/run`, { method: 'POST', headers })
+    assert.equal(started.status, 202)
+    const run = await finished(f.actions, (await started.json()).run.id)
+    assert.equal(run.state, 'succeeded')
+    const output = JSON.parse(run.stdout)
+    // macOS may canonicalize /var to /private/var; the registered target is authoritative.
+    assert.equal(output.cwd, f.record.path)
+    assert.deepEqual(output.args, ['two words', '--check'])
+  } finally { await f.close() }
+})
+
+
+test('saved actions cannot run or discover on remote Windows or LayerFS targets via Main', async () => {
+  const f = await fixture()
+  try {
+    const action = await f.actions.create({ name: 'saved', command: 'echo never', folderId: f.record.id })
+    for (const kind of ['remote', 'layerfs']) {
+      let accessed = false
+      const actions = new ProjectActions(f.home, {
+        get: () => ({ ...f.record, kind, path: kind === 'remote' ? 'C:\\work\\project' : '/opaque/layerfs' }),
+        acquireAccess: () => () => {},
+        requireAvailable: () => { accessed = true; throw new Error('must not inspect target on Main') },
+      } as unknown as FolderRegistry, { spawn: async () => assert.fail('must not execute on Main') } as unknown as ProcessManager)
+      await actions.init()
+      await assert.rejects(actions.run(action.id), { code: 'remote_actions_unsupported', status: 409 })
+      await assert.rejects(actions.scripts(f.record.id), { code: 'remote_actions_unsupported', status: 409 })
+      assert.equal(accessed, false)
+      assert.deepEqual(actions.runs(), [])
+      await actions.shutdown()
+    }
+  } finally { await f.close() }
+})

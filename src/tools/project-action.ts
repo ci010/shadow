@@ -14,7 +14,7 @@ const inputSchema = z.discriminatedUnion('action', [
 /** Importable management capability, not a universal base tool or execution bypass. */
 export class ProjectActionTool implements Tool {
   readonly name = 'project_action'
-  readonly description = 'Manage reusable user actions in this Project: list, discover local npm scripts, create, patch or delete named shell commands. Requires an owning local durable Web session. Definitions use registered folderId, name, command and pinned. scripts returns runnable npm commands with lifecycle hooks; unsafe script names are omitted. Saving does not run commands or grant execution permission. No run operation: user execution is owner-controlled in the UI; existing exec authorization remains unchanged.'
+  readonly description = 'Manage reusable user actions in this Project: list, discover local package scripts, create, patch or delete named shell commands. Requires an owning local durable Web session. Definitions use registered folderId, name, command and pinned. scripts returns runnable commands using the supported declared package manager or local lockfile detection (npm fallback); unsafe script names are omitted. Saving does not run commands or grant execution permission. No run operation: user execution is owner-controlled in the UI; existing exec authorization remains unchanged.'
   readonly readonly = (args: Record<string, unknown>) => ['list', 'scripts'].includes(String(args.action))
   readonly parameters: ToolParameters = {
     type: 'object', properties: {

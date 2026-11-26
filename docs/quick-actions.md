@@ -11,9 +11,19 @@ There are no Quick Action launch icons on Folder rows.
 Create an action with a name, command, and target Folder, or discover scripts
 from that Folder's root `package.json` and import the ones you want. Discovery
 only lists candidates; it neither creates buttons nor starts commands by itself.
-Imported scripts run through npm so the package's script environment and hooks
-remain available. Unusual script names that cannot safely be used in the command
-are reported as unsupported. No package installation is performed automatically.
+Imported scripts run through the declared `packageManager` (`npm`, `pnpm`, `yarn`,
+or `bun`) using `<manager> run <script>`, preserving that runner's script environment
+and lifecycle behavior. Without a supported declaration, discovery uses an
+unambiguous lockfile in the target Folder; absent or conflicting lockfiles fall
+back to npm. Runner names are allowlisted; package metadata is never executed.
+Unusual script names that cannot safely be used in the command are reported as
+unsupported. No runner or package installation is performed automatically.
+
+You can also save an ordinary CLI command directly, for example `pnpm run build`
+or `node scripts/check.cjs --verbose`; an action need not be a package script.
+Commands use the host's default managed shell (`sh` on POSIX, `cmd` on Windows)
+and inherited backend environment/PATH, not an interactive terminal profile.
+The selected CLI must already be installed and reachable by that backend.
 
 Pin an action to show the same definition on the Project Board. Editing or
 unpinning it changes the shared definition, not a separate Board copy.
@@ -22,7 +32,7 @@ Actions can be edited and deleted from the conversation entry point.
 ## Agent management
 
 Eligible owning local durable Web sessions can import `project_action` through
-tool discovery to list actions, discover npm scripts, create definitions, patch
+tool discovery to list actions, discover package scripts, create definitions, patch
 them, or delete them. This is the same Project catalog used by the UI. Saving an
 action does not execute it. The tool is not available to managed conversations,
 remote working directories, temporary calls, or sessions from another Project,
@@ -45,8 +55,11 @@ are in memory. Restarting the backend does not rerun saved actions, and Project
 shutdown stops its active action processes.
 
 The initial implementation supports registered **local** folders only. Remote
-folder display paths must not be executed or inspected on Main. It does not yet
-provide multi-folder workflows or automatic service-URL discovery.
+folder display paths must not be executed or inspected on Main. Remote Windows
+folders and LayerFS folders are not supported by this execution route; they are
+rejected rather than falling back to Main. Main coordinator-only mode also denies
+local runs. It does not yet provide multi-folder workflows or automatic service-URL
+discovery.
 
 ## Stable conversation Search
 
@@ -61,7 +74,7 @@ one another.
 
 Owner-authorized endpoints live under /projects/:projectId/api/actions.
 GET lists definitions; POST creates; PATCH/DELETE /:id update/remove.
-GET /scripts?folderId=... discovers npm candidates. POST /:id/run starts a
+GET /scripts?folderId=... discovers package-script candidates and their runner. POST /:id/run starts a
 run, GET /runs or /runs/:runId reads state and logs, and POST
 /runs/:runId/stop stops it. Definitions are stored as the versioned
 user-actions.v1.json in the owning Project Home, never in a selected repository.
