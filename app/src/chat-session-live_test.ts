@@ -100,7 +100,8 @@ function fixture(t: TestContext, canWrite = false, socketSnapshot = false) {
   const invalidate = (projectId: string) => {
     for (const subscription of subscriptions) if (!subscription.closed && subscription.projectId === projectId) subscription.observer.reset('subscription')
   }
-  return { mount, invalidate, requests, subscriptions, refreshRequests: () => refreshRequests }
+  return { mount, invalidate, requests, subscriptions, refreshRequests: () => refreshRequests,
+    disconnectSocket: () => { socketSnapshot = false } }
 }
 
 test('main composer answers the pending question, retains rejected drafts and never sends them as ordinary chat', async t => {
@@ -1005,14 +1006,13 @@ test('socket ACK queued during older HTTP paging applies after that page without
     metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
     data: body(0, history),
   })
-  page.finish(revision('a', [older, prompt]))
-  const delivery = await findRead('/input-delivery')
   sub.observer.conversationSnapshot!({ chat: body(0, [older, prompt, answer]), inputDelivery: [] })
   sub.observer.event({ type: 'event', version: 1, cursor: 'fixture:1', topic: { kind: 'chat', projectId: 'a', sessionId: root },
     payload: { event: 'conversation_history_changed' } })
   assert.equal(f.refreshRequests(), 1, 'An ACK queued behind paging cannot cover a later invalidation')
   assert.equal(state.messages.some((message: { content: string }) => message.content === answer.content), false)
-  delivery.finish([])
+  page.finish(revision('a', [older, prompt]))
+  assert.equal(f.requests.filter(request => request.path.endsWith('/input-delivery')).length, 0, 'Paging reuses the independent ordered delivery snapshot')
   await prepend
   assert.deepEqual(state.messages.map((message: { content: string }) => message.content), [older.content, prompt.content, answer.content])
   assert.equal(state.canResend, false)
@@ -1024,7 +1024,7 @@ test('socket ACK queued during older HTTP paging applies after that page without
   const fallback = await findRead('/chat/session', 1)
   const corrected = { role: 'assistant', content: 'Recovered from HTTP' }
   fallback.finish(revision('d', [older, prompt, corrected]))
-  ;(await findRead('/input-delivery', 1)).finish([])
+  ;(await findRead('/input-delivery')).finish([])
   await settle()
   assert.deepEqual(state.messages.map((message: { content: string }) => message.content), [older.content, prompt.content, corrected.content])
   assert.equal(f.requests.filter(request => request.path.endsWith('/chat/session')).length, 2)
@@ -1074,4 +1074,30 @@ test('expanded socket history retains HTTP window but reuses socket input delive
   await settle()
   assert.deepEqual(state.messages.map((message: { content: string }) => message.content), ['Earlier', 'Updated tail'])
   assert.equal(f.requests.filter(request => request.path.endsWith('/input-delivery')).length, 0)
+})
+
+test('older paging during a disconnected socket revalidates independent delivery over HTTP', async t => {
+  const f = fixture(t, false, true)
+  const state = f.mount('a').state()
+  const initial = state.loadDirectChat()
+  const sub = f.subscriptions.find(item => item.kind === 'chat' && !item.closed)!
+  const body = (historyStart: number) => ({ chatId: root.slice(4), currentPhysicalId: 'segment', previousPhysicalId: null,
+    segmentIndex: 0, systemPrompt: '', tools: [], commandResults: [], decisionRecords: [], historyStart,
+    history: [{ role: 'assistant', content: 'History' }] })
+  sub.observer.conversationSnapshot!({ chat: body(1), inputDelivery: [] })
+  await initial
+  f.disconnectSocket()
+  const paging = state.prependOlderSegment()
+  await settle()
+  f.requests.find(request => request.path.endsWith('/chat/session'))!.finish({
+    revision: 'd'.repeat(64), historyRevision: 'd'.repeat(64),
+    metadataVersions: Object.fromEntries(['systemPrompt', 'tools', 'commandResults', 'decisionRecords'].map(field => [field, 'c'.repeat(64)])),
+    data: body(0),
+  })
+  await settle()
+  const delivery = f.requests.find(request => request.path.endsWith('/input-delivery'))
+  assert.ok(delivery, 'Disconnected WS cannot vouch for a cached delivery snapshot')
+  delivery.finish([])
+  await paging
+  assert.equal(state.messages[0]?.content, 'History')
 })

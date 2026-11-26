@@ -53,6 +53,12 @@ These explicit Project-qualified topics are available on the existing socket:
 - `{kind:'session-stages', projectId}` initially supplies the sparse
   `/api/sessions/stages` DTO. Continue consuming the existing `sessions` topic's
   validated `activity` replacements; activity ticks do not reread the full map.
+- `{kind:'channels', projectId}` supplies only sidebar-safe BOT identity and
+  connection status fields, never editable configuration or secret flags.
+- `{kind:'service-groups', projectId}` supplies the observation catalog with
+  message bodies omitted. Explicit `group`/`session` detail selections stay HTTP.
+  Shared sidebar owners retain every Project's list/count/navigation rather than
+  hiding non-visible Projects; catalog changes arrive as snapshot replacements.
 - `{kind:'io-runs', projectId}` supplies `{runs}` with the same accessible-session
   filtering and 100-run bound as `/api/io/runs`.
 - `{kind:'folders', projectId}`, `{kind:'folder-devices', projectId}` and
@@ -94,6 +100,25 @@ retains its legacy invalidation topics and HTTP baselines; it does not supply
 these WebSocket acknowledgement projections. Audio status remains HTTP: its
 readiness includes externally changed executable/model paths without an
 observable authoritative change feed.
+
+Renderer projection owners wait for the negotiated initial snapshot, not an
+HTTP read triggered by subscription readiness or a 750ms race. Unsupported
+peers signal immediate HTTP fallback; stalled/failed transport has a bounded
+10-second recovery deadline. Explicit Project removal clears protected values
+immediately; restoration requires a fresh authorized snapshot.
+
+The global Project directory still uses the existing authorized `projects`
+notification topic and one shared HTTP catalog owner. Child workspace health
+probes acquire that same owner instead of issuing a second `/api/projects` GET;
+probe waiting is bounded to 10 seconds without cancelling another consumer's
+shared request. This is intentionally not an API-over-WS directory tunnel.
+
+Explicit older-history paging and expanded history-window revalidation still
+use HTTP. Their independent input-delivery data can reuse the current healthy
+conversation WS snapshot after its recent history tail has been consumed.
+Delivery invalidation, reset, failed refresh or disconnection requires recovery;
+a recent tail never replaces an expanded window or a selected physical segment.
+Small conditional history responses for an expanded window remain expected.
 
 ## SSE endpoint
 

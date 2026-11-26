@@ -1212,6 +1212,9 @@ function startData(value: Record<string, unknown>, sessionId: string): Conversat
   return data
 }
 let firstSocketSnapshot: { chat: Record<string, unknown>; inputDelivery: ChatInputDelivery[] } | undefined
+// Delivery is independent of the recent history window and survives consuming
+// that window. Invalidations clear it until the next ordered WS snapshot.
+let socketInputDelivery: ChatInputDelivery[] | undefined
 let socketHistoryFallback = false
 const socketSnapshotRefresh = createConversationSnapshotRefresh()
 let historySnapshot: ReturnType<typeof createInitialLiveSnapshot> | undefined
@@ -1294,6 +1297,7 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
       if (eventStream !== subscription || activeSessionId.value !== sessionId) return
       if (!isRecord(data) || !isRecord(data.chat) || data.chat.chatId !== chatId || !Array.isArray(data.chat.history)
         || !Array.isArray(data.inputDelivery) || !data.inputDelivery.every(isChatInputDelivery)) return
+      socketInputDelivery = data.inputDelivery
       firstSocketSnapshot = { chat: data.chat, inputDelivery: data.inputDelivery }
       socketSnapshotRefresh.received()
       conversationStart.value = { apiBase: props.apiBase, sessionId, phase: 'socket', data: startData(data, sessionId) }
@@ -1301,12 +1305,14 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
     },
     conversationRefreshFailed() {
       if (eventStream !== subscription || activeSessionId.value !== sessionId) return
+      socketInputDelivery = undefined
       socketHistoryFallback = true
       socketSnapshotRefresh.failed()
       drainSocketHistory()
     },
     reset() {
       if (eventStream !== subscription || activeSessionId.value !== sessionId) return
+      socketInputDelivery = undefined
       bgStreamState = { accumulated: '' }
       streamRequestId = undefined
       resetStreamPresentation()
@@ -1326,6 +1332,7 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
       }
       if (readonlySessionId || isRecord(payload) && payload.event === 'conversation_history_changed') { snapshot.invalidate(); return }
       if (isRecord(payload) && payload.event === 'input_delivery_changed') {
+        socketInputDelivery = undefined
         snapshot.invalidate()
         return
       }
@@ -1409,6 +1416,7 @@ function connectEventStream(chatId: string, loadingCurrent = false, readonlySess
 function closeEventStream(): void {
   socketSnapshotRefresh.failed()
   firstSocketSnapshot = undefined
+  socketInputDelivery = undefined
   socketHistoryFallback = false
   conversationStart.value = undefined
   historySnapshot?.dispose()
@@ -2593,8 +2601,9 @@ async function loadDirectChat(background = false, from?: number, signal?: AbortS
     // Read scheduling after history so a saved row cannot race ahead of
     // its pending state. Overlapping rows reconcile by request ID.
     // A wider history window does not invalidate the socket's independent
-    // delivery projection. Explicit older-page reads retain HTTP recovery.
-    const delivery = socketSnapshot?.inputDelivery ?? await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/input-delivery`), {
+    // delivery projection, but a disconnected subscription cannot vouch for it.
+    const liveDelivery = livePool.client(props.apiBase).canOpenConversation?.() === true ? socketInputDelivery : undefined
+    const delivery = socketSnapshot?.inputDelivery ?? liveDelivery ?? await fetch(buildUrl(`/api/sessions/${encodeURIComponent(sessionId)}/input-delivery`), {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
     }).then(async response => {
       const entries: unknown = response.ok ? await response.json() : undefined

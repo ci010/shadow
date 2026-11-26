@@ -25,13 +25,22 @@ import shadowLogo from './assets/shadow-logo.png'
 import { t } from './i18n.ts'
 import { useLiveClientPool } from './composables/useLiveClient.ts'
 import { createChildWorkspaceConnection } from './child-workspace.ts'
+import { useProjectResourceStore } from './stores/project.ts'
 const props = defineProps<{ apiBase: string }>()
 const pool = useLiveClientPool()
-const connection = createChildWorkspaceConnection(props.apiBase, { observeHost: pool.observeHost })
+const catalog = useProjectResourceStore().owner.acquireCatalog(props.apiBase)
+let probed = false
+const connection = createChildWorkspaceConnection(props.apiBase, { observeHost: pool.observeHost, async catalogProbe(signal) {
+  const pending = probed ? catalog.refresh() : catalog.read()
+  probed = true
+  await pending
+  signal.throwIfAborted()
+  if (catalog.state.error || !catalog.state.value) throw new Error('main_workspace_catalog_unavailable')
+} })
 const { available, checking, error } = connection
 const roleActionActive = ref(false)
 onMounted(connection.refresh)
-onBeforeUnmount(connection.dispose)
+onBeforeUnmount(() => { connection.dispose(); catalog.release() })
 </script>
 <style scoped>
 .workspace-recovery { min-height: 100%; display: grid; place-items: center; padding: 32px 24px; background: var(--c-bg); color: var(--c-text); }

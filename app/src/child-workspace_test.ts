@@ -166,3 +166,22 @@ test('repeated reconnect phases preserve the original HTTP fallback deadline', a
   t.mock.timers.tick(60_000)
   assert.equal(reads, 2)
 })
+
+test('shared catalog health probe is bounded without aborting its shared owner', async t => {
+  const deadline = new AbortController()
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => { assert.equal(ms, 10_000); return deadline.signal })
+  let finish!: () => void
+  const connection = createChildWorkspaceConnection('http://fixture', {
+    catalogProbe: () => new Promise<void>(resolve => { finish = resolve }),
+  })
+  try {
+    const check = connection.refresh()
+    deadline.abort(new Error('Probe timeout'))
+    await check
+    assert.equal(connection.checking.value, false)
+    assert.equal(connection.available.value, false)
+    finish()
+    await Promise.resolve()
+    assert.equal(connection.available.value, false, 'A late shared result cannot overwrite the failed probe')
+  } finally { connection.dispose() }
+})

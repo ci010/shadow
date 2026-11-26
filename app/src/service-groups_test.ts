@@ -39,7 +39,7 @@ test('active subscribers share reads in one app; scope, visibility, auth and unm
  const observers = new Set<import('./live-client.ts').LiveObserver>()
  const pool = {
    client: () => ({ subscribe: (_: unknown, observer: import('./live-client.ts').LiveObserver) => {
-     observers.add(observer); return { close: () => observers.delete(observer), ready: async () => {} }
+     observers.add(observer); return { close: () => observers.delete(observer), ready: async () => { observer.projectionUnavailable?.() } }
    } }),
    observeHost: (_: string, observer: (status: any) => void) => { observer({ phase: 'live' }); return () => {} },
  }
@@ -57,11 +57,11 @@ test('active subscribers share reads in one app; scope, visibility, auth and unm
  app.mount({}); t.after(() => app.unmount())
  const waitFor = async (check: () => boolean) => { for (let i=0;i<100 && !check();i++) await new Promise(resolve => setTimeout(resolve, 5)); assert(check()) }
  await waitFor(() => requests.length === 1)
- assert.equal(observers.size, 1)
+ assert.equal(observers.size, 2)
  requests[0].resolve(Response.json({ revision: 'r1', groups: [], agents: ['agent'] }))
  await waitFor(() => values[0].revision.value === 'r1')
  assert.equal(values[1].revision.value, 'r1')
- shown[0] = false; await nextTick(); assert.equal(observers.size, 1)
+ shown[0] = false; await nextTick(); assert.equal(observers.size, 2)
  const refresh = values[1].refresh(); await waitFor(() => requests.length === 2)
  await new Promise(resolve => setTimeout(resolve, 20)); assert.equal(requests.length, 2)
  requests[1].resolve(new Response('', { status: 503 })); await refresh

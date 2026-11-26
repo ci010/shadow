@@ -10,6 +10,7 @@ import { createLiveClient, type LiveObserver } from './live-client.ts'
 import { createLiveProjection } from './live-projection.ts'
 import { createProjectLiveState } from './project-live-state.ts'
 import { createCatalogResources } from './stores/catalog.ts'
+import { createBotResources } from './stores/bots.ts'
 
 const topic = { kind: 'io-runs', projectId: 'fixture' } as const
 const flush = async () => { await setImmediate(); await setImmediate() }
@@ -26,6 +27,7 @@ test('projection pushes supersede HTTP, apply keyed removals and recover a misma
     load: s => { signal = s; reads++; return new Promise(resolve => { finish = resolve }) },
   })
   try {
+    observer.projectionUnavailable!()
     await new Promise(resolve => setTimeout(resolve, 5))
     assert.equal(reads, 1)
     observer.projectionSnapshot!({ event: 'snapshot', revision: 'one', data: { runs: [{ id: 'a' }, { id: 'b' }] } })
@@ -80,7 +82,7 @@ test('one real socket negotiates before fixed topics, initial/delta/refresh need
 test('an older server is never sent unknown fixed topics and uses bounded HTTP fallback', { timeout: 5000 }, async () => {
   const app = new Hono()
   app.use('*', async (c, next) => { normalizeGatewayUpgradeRequest(c); await next() })
-  const hub = new RealtimeHub(); hub.registerProject('fixture')
+  const hub = new RealtimeHub({ projectExists: () => true }); const publisher = hub.registerProject('fixture')
   registerRealtimeRoute(app, hub, () => true, { authorize: () => true, authorizeTopic: () => true })
   const server = serveGateway(app, { host: '127.0.0.1', port: 0 }); await server.ready
   const sent: any[] = []; let reads = 0
@@ -99,6 +101,12 @@ test('an older server is never sent unknown fixed topics and uses bounded HTTP f
     assert.equal(reads, 1)
     assert.ok(sent.length > 0)
     assert.ok(sent.every(command => command.subscriptions.every((entry: any) => entry.topic.kind === 'resources' || entry.topic.kind === 'io')))
+    publisher.close()
+    await until(() => projection.state.status === 'forbidden')
+    assert.equal(projection.state.value, undefined, 'Legacy topology reset immediately hides protected state')
+    hub.registerProject('fixture')
+    await until(() => projection.state.value !== undefined)
+    assert.equal(reads, 2, 'Legacy restoration performs authorized HTTP recovery')
   } finally { projection.dispose(); client.dispose(); hub.close(); await server.shutdown(); await server.finished }
 })
 
@@ -164,7 +172,7 @@ test('disconnected projections fall back and authorization errors clear protecte
   observer.projectionSnapshot!({ event: 'snapshot', revision: 'one', data: { runs: [{ id: 'private' }] } })
   host({ phase: 'live' }); t.mock.timers.tick(30_000); await flush()
   assert.equal(reads, 0)
-  live = false; host({ phase: 'reconnecting' }); t.mock.timers.tick(750); t.mock.timers.tick(0); await flush()
+  live = false; host({ phase: 'reconnecting' }); t.mock.timers.tick(10_000); t.mock.timers.tick(0); await flush()
   assert.equal(reads, 1)
   assert.equal(projection.state.value, undefined)
   assert.equal(projection.state.status, 'forbidden')
@@ -184,4 +192,56 @@ test('an unavailable projection ACK falls back once instead of a snapshot retry 
     await new Promise(resolve => setTimeout(resolve, 5)); await projection.read()
     assert.equal(reads, 1); assert.equal(refreshes, 0)
   } finally { projection.dispose() }
+})
+
+// A subscription acknowledgement is not proof that its snapshot is absent.
+test('slow healthy negotiated snapshot and ready do not race a 750ms HTTP read', async () => {
+  let observer!: LiveObserver, reads = 0
+  const projection = createLiveProjection({ client: () => ({ subscribe(t, next) {
+    if (t.kind === 'io-runs') observer = next
+    return { ready: () => Promise.resolve(), close() {}, refreshProjection: () => true }
+  } }) }, { base: '', topic, parse: value => value as { runs: unknown[] }, load: async () => { reads++; return { runs: [] } } })
+  try {
+    await new Promise(resolve => setTimeout(resolve, 820))
+    assert.equal(reads, 0)
+    observer.projectionSnapshot!({ event: 'snapshot', revision: 'slow', data: { runs: [] } })
+    await projection.read()
+    assert.equal(reads, 0)
+  } finally { projection.dispose() }
+})
+
+test('shared sidebar catalogs use one authorized socket for initial and changed data without HTTP', { timeout: 5000 }, async () => {
+  const app = new Hono()
+  app.use('*', async (c, next) => { normalizeGatewayUpgradeRequest(c); await next() })
+  const hub = new RealtimeHub()
+  let name = 'First'
+  const publisher = hub.registerProject('fixture', undefined, undefined, undefined, topic => {
+    if (topic.kind === 'channels') return { channels: [{ id: 'bot', projectId: 'fixture', platform: 'qq', displayName: name }] }
+    if (topic.kind === 'service-groups') return { revision: name, agents: [], groups: [] }
+    throw new Error('Unsupported')
+  })
+  registerRealtimeRoute(app, hub, () => true, { authorize: () => true, authorizeTopic: (_request, topic) => topic.projectId === 'fixture' })
+  const server = serveGateway(app, { host: '127.0.0.1', port: 0 }); await server.ready
+  let sockets = 0, reads = 0
+  const client = createLiveClient(`http://127.0.0.1:${server.addr.port}/projects/fixture`, { socket(url, protocols) {
+    sockets++; const socket = new WebSocket(url, protocols)
+    return { addEventListener(type, receive) { (socket as unknown as globalThis.WebSocket).addEventListener(type, receive) },
+      send(text) { socket.send(text) }, close() { socket.close() } }
+  } })
+  const resources = createBotResources(async () => { reads++; throw new Error('Unexpected HTTP') })
+  const pool = { client: () => client }
+  const first = resources.catalog('', 'fixture', pool), second = resources.catalog('', 'fixture', pool)
+  const groups = resources.groups({ apiBase: '', projectId: 'fixture', active: true }, pool)
+  try {
+    await Promise.all([first.read(), second.read(), groups.read()])
+    assert.equal(first.state.value.value, second.state.value.value)
+    assert.equal(first.state.value.value?.[0]?.displayName, 'First')
+    name = 'Changed'; publisher.invalidateResource!('channels')
+    await until(() => first.state.value.value?.[0]?.displayName === 'Changed' && groups.state.value.value?.revision === 'Changed')
+    assert.equal(reads, 0); assert.equal(sockets, 1)
+    publisher.close()
+    await until(() => first.state.value.value === undefined)
+    assert.equal(first.state.value.status, 'forbidden')
+    assert.equal(groups.state.value.value, undefined)
+  } finally { first.release(); second.release(); groups.release(); resources.dispose(); client.dispose(); hub.close(); await server.shutdown(); await server.finished }
 })

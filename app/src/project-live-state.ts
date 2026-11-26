@@ -106,13 +106,23 @@ export function createProjectLiveState(
     const observers = new Set<Partial<LiveObserver>>()
     function reset(reason: Parameters<LiveObserver['reset']>[0]) {
       for (const observer of observers) observer.reset?.(reason)
+      if (reason === 'project-removed' || reason === 'project-restored') {
+        // Legacy peers only deliver topology resets on the domain topic.
+        sessions.reset(reason); activity.reset(reason)
+      } else if (reason !== 'subscription') {
+        if (!sessions.hasSnapshot) sessions.reset()
+        if (!activity.hasSnapshot) activity.reset()
+      }
       gate.reset()
     }
     let started = false
     const gate = createInitialLiveSnapshot({ refresh() {
       started = true
-      if (!sessions.hasSnapshot) sessions.reset()
-      if (!activity.hasSnapshot) activity.reset()
+      // Do not race an initial negotiated projection with domain readiness.
+      // Legacy adapters with an already settled HTTP baseline still need the
+      // domain's reset/reconnect recovery; live projections own theirs.
+      if (!sessions.hasSnapshot && (sessions.state.value !== undefined || sessions.state.error)) sessions.reset()
+      if (!activity.hasSnapshot && (activity.state.value !== undefined || activity.state.error)) activity.reset()
       if (usage.work) work.reset()
     } })
     const subscription = pool.client(base).subscribe({ kind: 'sessions', projectId }, {

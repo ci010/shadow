@@ -6,19 +6,31 @@ import type { ServiceDiscoveryStore } from './service-discovery.ts'
 import type { DirectoryBots } from '../bots/runtime.ts'
 import { subscribedBindings } from '../bots/sdk.ts'
 
+type ServiceGroupOptions = { bots: BotInstanceStore; discovery: ServiceDiscoveryStore; runtime: DirectoryBots }
+
+/** Fixed observation read model shared by HTTP and the authorized Project WS projection.
+ * The catalog never includes message bodies; selected detail reads remain explicit. */
+export function serviceGroupSnapshot(options: ServiceGroupOptions, selected?: { group?: string; session?: string }) {
+  const definitions = options.runtime.definitions(), bots = options.bots.list()
+  const revision = createHash('sha256').update(JSON.stringify(definitions.map(item => item.deployment.revision))).digest('hex')
+  return { revision, agents: definitions.map(item => item.bot.id), groups: options.discovery.list()
+    .filter(group => bots.some(bot => bot.id === group.botInstanceId && bot.platform === group.platform)).map(group => {
+      const binding = definitions.flatMap(item => subscribedBindings(item.bot).map(binding => ({ binding, agent: item.bot.id })))
+        .find(({ binding }) => binding.platform !== 'discord' && binding.platform === group.platform && binding.botInstanceId === group.botInstanceId && binding.conversationId === group.conversationId)
+      const sessionId = channelSessionId({ projectId: options.bots.get(group.botInstanceId).projectId, botInstanceId: group.botInstanceId, platform: group.platform, conversationId: group.conversationId })
+      return { ...group, sessionId, botName: bots.find(bot => bot.id === group.botInstanceId)!.displayName,
+        enabled: binding?.binding.enabled ?? false, agent: binding?.agent, pending: false,
+        messages: selected?.group === JSON.stringify([group.botInstanceId, group.conversationId]) || selected?.session === sessionId ? group.messages : [] }
+    }) }
+}
+
 /** Observation inventory only. All BOT configuration lives in deployed directories. */
-export function serviceGroupsPlugin(options:{bots:BotInstanceStore;discovery:ServiceDiscoveryStore;runtime:DirectoryBots;authorize:(request:Request)=>boolean|Promise<boolean>}) {
-  return (app:Hono) => {
-    app.get('/api/service-groups',async c=>{
-      c.header('Cache-Control','no-store')
-      if(!await options.authorize(c.req.raw))return c.json({error:'unauthorized'},401)
-      const definitions=options.runtime.definitions(),bots=options.bots.list()
-      const revision=createHash('sha256').update(JSON.stringify(definitions.map(item=>item.deployment.revision))).digest('hex')
-      return c.json({revision,agents:definitions.map(item=>item.bot.id),groups:options.discovery.list().filter(group=>bots.some(bot=>bot.id===group.botInstanceId && bot.platform===group.platform)).map(group=>{
-        const binding=definitions.flatMap(item=>subscribedBindings(item.bot).map(binding=>({binding,agent:item.bot.id}))).find(({binding})=>binding.platform!=='discord' && binding.platform===group.platform && binding.botInstanceId===group.botInstanceId && binding.conversationId===group.conversationId)
-        const sessionId=channelSessionId({projectId:options.bots.get(group.botInstanceId).projectId,botInstanceId:group.botInstanceId,platform:group.platform,conversationId:group.conversationId})
-        return {...group,sessionId,botName:bots.find(bot=>bot.id===group.botInstanceId)!.displayName,enabled:binding?.binding.enabled ?? false,agent:binding?.agent,pending:false,messages:c.req.query('group')===JSON.stringify([group.botInstanceId,group.conversationId]) || c.req.query('session')===sessionId ? group.messages : []}
-      })})
+export function serviceGroupsPlugin(options: ServiceGroupOptions & { authorize: (request: Request) => boolean | Promise<boolean> }) {
+  return (app: Hono) => {
+    app.get('/api/service-groups', async c => {
+      c.header('Cache-Control', 'no-store')
+      if (!await options.authorize(c.req.raw)) return c.json({ error: 'unauthorized' }, 401)
+      return c.json(serviceGroupSnapshot(options, { group: c.req.query('group'), session: c.req.query('session') }))
     })
   }
 }

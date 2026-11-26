@@ -197,6 +197,10 @@ export function createLiveClient(base: string, options: {
       ready = true
       attempt = 0
       update({ phase: 'live' })
+      for (const subscriber of subscribers) if (!subscriber.closed && projectionTopic(subscriber.topic) && !subscriber.initialized) {
+        subscriber.initialized = true
+        subscriber.observer.projectionUnavailable?.()
+      }
       for (const subscriber of [...subscribers]) {
         if (subscriber.closed || !connectedTopics.has(realtimeTopicKey(subscriber.topic))
           || unavailableTopics.has(realtimeTopicKey(subscriber.topic))) continue
@@ -312,6 +316,12 @@ export function createLiveClient(base: string, options: {
       for (const key of connectedTopics) if (!unavailableTopics.has(key)) topicCursors.set(key, watermark)
       ready = true
       attempt = 0
+      if (!supportsProjections) for (const subscriber of subscribers) {
+        if (!subscriber.closed && !subscriber.initialized && projectionTopic(subscriber.topic)) {
+          subscriber.initialized = true
+          subscriber.observer.projectionUnavailable?.()
+        }
+      }
       if (status.phase !== 'live') update({ phase: 'live' })
       const receivedSnapshots = new Set<Subscriber>()
       if (Array.isArray(frame.conversations) && frame.conversations.length <= opening.size) {

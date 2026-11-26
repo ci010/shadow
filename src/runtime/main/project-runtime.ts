@@ -207,7 +207,7 @@ import { createModelsHandler } from '../../vfs/models.ts'
 import { createAgentsHandler } from '../../vfs/agents.ts'
 
 import { Bus } from '../../bus/bus.ts'
-import { serviceGroupsPlugin } from '../../channels/service-groups.ts'
+import { serviceGroupsPlugin, serviceGroupSnapshot } from '../../channels/service-groups.ts'
 import { ServiceDiscoveryStore } from '../../channels/service-discovery.ts'
 import { ChannelManager } from '../../channels/manager.ts'
 import { botSetupPlugin } from '../../channels/bot-setup.ts'
@@ -2160,6 +2160,9 @@ export async function createProjectRuntime(
       case 'session-summary': return readSessionInventory(true, topic.scope)
       case 'session-stages': return sessionActivitySnapshot(sessions.listSessions().map(row =>
         [row.sessionId, sessionActivityReadModel(sessions, row.sessionId)] as const))
+      case 'channels': return { channels: channels.botStatuses().map(({ id, projectId, platform, displayName, configured, state }) =>
+        ({ id, projectId, platform, displayName, configured, state })) }
+      case 'service-groups': return serviceGroupSnapshot({ bots: botStore, discovery: serviceDiscovery, runtime: directoryBots })
       case 'io-runs': return { runs: io.list() }
       case 'folders': return { folders: folderRegistry.list() }
       case 'nodes': return mainCluster.getNodeInventory()

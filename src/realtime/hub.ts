@@ -351,7 +351,10 @@ export class RealtimeHub {
           const sessionsChanged = changed.kind === 'sessions' && event.event !== 'activity'
           const foldersChanged = changed.kind === 'resources' && event.resource === 'folders'
           const nodesChanged = changed.kind === 'resources' && event.resource === 'nodes'
-          if (sessionsChanged && (topic.kind === 'session-summary' || topic.kind === 'session-stages' || topic.kind === 'io-runs') ||
+          if (changed.kind === 'resources' && event.resource === 'channels' && topic.kind === 'channels' ||
+            changed.kind === 'resources' && (event.resource === 'service-groups' || event.resource === 'channels') && topic.kind === 'service-groups' ||
+            changed.kind === 'integrations' && (topic.kind === 'channels' || topic.kind === 'service-groups') ||
+            sessionsChanged && (topic.kind === 'session-summary' || topic.kind === 'session-stages' || topic.kind === 'io-runs') ||
             changed.kind === 'integrations' && topic.kind === 'session-summary' ||
             changed.kind === 'io' && topic.kind === 'io-runs' ||
             foldersChanged && (topic.kind === 'folders' || topic.kind === 'io-runs') ||

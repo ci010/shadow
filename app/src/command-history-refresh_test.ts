@@ -73,6 +73,7 @@ function loadFixture(status = 200) {
     AbortController, AbortSignal, activeSessionId: { value: 'web:fixture' }, directRefreshPending: false,
     currentTimelinePhysicalId: undefined, currentHistoryStart: { value: 0 }, olderDirectRead: undefined, timelinePrefixLength: { value: 0 },
     refreshSocketHistory: async () => {}, takeSocketHistory: () => undefined, canUseConversationHistory: () => false,
+    socketInputDelivery: undefined, livePool: { client: () => ({ canOpenConversation: () => false }) },
     conversationStart: { value: undefined }, drainSocketHistory: () => false,
     loadingHistory: { value: false }, messagesContainer: { value: null },
     historyWindowQuery: () => ({ historyWindow: 'recent' }), chatReadScope: () => ({}),

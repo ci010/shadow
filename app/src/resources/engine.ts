@@ -145,6 +145,14 @@ export function createResource<T>(load: (signal: AbortSignal) => Promise<T>, del
       publish({ generation: state.generation + 1 })
       invalidate(reason)
     },
+    /** Explicit authorization/removal signals must hide protected data immediately. */
+    revoke(reason = 'Resource is unavailable') {
+      if (closed) return
+      cancel(); recovered = false
+      publish({ value: undefined, version: undefined, generation: state.generation + 1,
+        revision: state.revision + 1, loading: false, status: 'forbidden', error: reason })
+      settle()
+    },
     pause() {
       if (closed) return
       cancel()

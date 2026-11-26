@@ -5,6 +5,8 @@ import type { LiveStatus } from './live-client.ts'
 export function createChildWorkspaceConnection(apiBase: string, options: {
   observeHost?: (base: string, callback: (status: LiveStatus) => void) => () => void
   fetch?: typeof fetch
+  /** App-owned catalog probe; shares the authoritative reader with mounted consumers. */
+  catalogProbe?: (signal: AbortSignal) => Promise<void>
   setTimer?: typeof setTimeout
   clearTimer?: typeof clearTimeout
   document?: Pick<Document, 'hidden' | 'addEventListener' | 'removeEventListener'>
@@ -45,6 +47,21 @@ export function createChildWorkspaceConnection(apiBase: string, options: {
     if (!available.value) checking.value = true
     const current = new AbortController(); controller = current
     try {
+      if (options.catalogProbe) {
+        // Bound only this health waiter, not the app-owned shared request.
+        const signal = AbortSignal.any([current.signal, AbortSignal.timeout(10_000)])
+        let stop: () => void = () => {}
+        try {
+          await Promise.race([options.catalogProbe(signal), new Promise<never>((_, reject) => {
+            const abort = () => reject(signal.reason)
+            stop = () => signal.removeEventListener('abort', abort)
+            signal.addEventListener('abort', abort, { once: true })
+            if (signal.aborted) abort()
+          })])
+        } finally { stop() }
+        if (!disposed) { available.value = true; error.value = null }
+        return
+      }
       const response = await request(apiUrl(apiBase, '/api/projects'), {
         signal: AbortSignal.any([current.signal, AbortSignal.timeout(10_000)]), cache: 'no-store',
       })

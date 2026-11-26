@@ -248,13 +248,18 @@ test('fallback snapshot is repaired on late ready, and released scopes never rea
   const a = f.store.acquireProject('http://fixture', 'a')
   const b = f.store.acquireProject('http://fixture', 'b')
   b.release()
-  t.mock.timers.tick(750); await flush(); await f.tick()
+  await flush()
+  // The domain readiness gate requests recovery before the projection deadline.
+  t.mock.timers.tick(750); await flush()
+  t.mock.timers.tick(10_000); await flush(); await f.tick()
   assert.equal(f.requests.length, 2)
   f.requests[0].finish(graph('Fallback'))
   f.requests[1].finish({ activity: {} })
   await flush()
   f.ready.get(realtimeTopicKey({ kind: 'sessions', projectId: 'a' }))!()
   f.ready.get(realtimeTopicKey({ kind: 'sessions', projectId: 'b' }))!()
+  f.ready.get(realtimeTopicKey({ kind: 'session-summary', projectId: 'a', scope: 'navigation' }))!()
+  f.ready.get(realtimeTopicKey({ kind: 'session-stages', projectId: 'a' }))!()
   await f.tick()
   assert.equal(f.requests.length, 4)
   assert.ok(f.requests.every(request => request.path.includes('/projects/a/')))
@@ -858,4 +863,24 @@ test('activity decoded immediately after snapshot ACK and ready resolve survives
   assert.equal(f.lease.activity.state.value?.activeRequestIds['web:one'], 'after-ack')
   assert.equal(f.snapshots(), 0)
   assert.equal(f.requests(), 0)
+})
+
+test('domain readiness cannot race slow negotiated initial projections with duplicate HTTP or WS reads', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const observers = new Map<string, LiveObserver>()
+  let reads = 0, refreshes = 0
+  const store = createProjectLiveState({ client: () => ({ subscribe(topic, observer) {
+    observers.set(topic.kind, observer)
+    return { ready: async () => {}, close() {}, refreshProjection() { refreshes++; return true } }
+  } }) }, { request: async () => { reads++; throw new Error('Unexpected HTTP') } })
+  const lease = store.acquireProject('http://fixture', 'a')
+  try {
+    await flush(); t.mock.timers.tick(850); await flush()
+    assert.equal(reads, 0); assert.equal(refreshes, 0)
+    observers.get('session-summary')!.projectionSnapshot!({ event: 'snapshot', revision: 'one', data: graph('Slow') })
+    observers.get('session-stages')!.projectionSnapshot!({ event: 'snapshot', revision: 'two', data: { activity: {} } })
+    await lease.read()
+    assert.equal(lease.sessions.state.value?.[0]?.title, 'Slow')
+    assert.equal(reads, 0); assert.equal(refreshes, 0)
+  } finally { lease.release(); store.dispose() }
 })
