@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { conversationMatches, isConversationFindKey, loadConversationSearchHistory, textMatches } from './conversation-search.ts'
+import { conversationMatches, isConversationFindKey, isSearchHistoryMessage, loadConversationSearchHistory, textMatches } from './conversation-search.ts'
 
 test('conversation search is literal, case insensitive and preserves Unicode offsets', () => {
   assert.deepEqual(textMatches('Hello HELLO hello', 'hello'), [{ start: 0, end: 5 }, { start: 6, end: 11 }, { start: 12, end: 17 }])
@@ -67,4 +67,17 @@ test('closing search aborts history loading without reading more segments', asyn
   })
   await assert.rejects(loadConversationSearchHistory('http://localhost', 'web:chat', controller.signal), { name: 'AbortError' })
   assert.equal(calls, 1)
+})
+
+test('search accepts HTTP history with omitted content but rejects malformed messages', () => {
+  const toolCall = { role: 'assistant', tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read', arguments: '{"path":"note.md"}' } }] }
+  // JSON serialization drops undefined content in tool-call-only messages.
+  assert.equal(isSearchHistoryMessage(JSON.parse(JSON.stringify({ ...toolCall, content: undefined }))), true)
+  for (const content of [null, '', 'searchable', [{ type: 'text', text: 'searchable' }]]) {
+    assert.equal(isSearchHistoryMessage({ ...toolCall, content }), true)
+  }
+  for (const value of [null, {}, { role: 'assistant', content: 42 },
+    { ...toolCall, tool_calls: [{}] }, { role: 'user', content: [{ type: 'text', text: 42 }] }]) {
+    assert.equal(isSearchHistoryMessage(value), false)
+  }
 })

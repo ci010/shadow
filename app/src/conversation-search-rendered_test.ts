@@ -29,7 +29,12 @@ test('conversation search and split panes survive cached heavy-history activatio
   ]
   const histories: Record<string, { messages: unknown[]; previousPhysicalId: string | null }> = {
     'web:chat-one': { messages: current, previousPhysicalId: 'physical:middle' },
-    'physical:middle': { messages: [{ role: 'user', name: '__compaction_summary__', content: 'Collapsed historical summary.' }], previousPhysicalId: 'physical:oldest' },
+    'physical:middle': { messages: [
+      { role: 'user', name: '__compaction_summary__', content: 'Collapsed historical summary.' },
+      // HTTP history omits absent content on tool-call-only assistant messages.
+      { role: 'assistant', tool_calls: [{ id: 'search-tool', type: 'function', function: { name: 'read', arguments: '{"path":"note.md"}' } }] },
+      { role: 'tool', tool_call_id: 'search-tool', content: 'Synthetic tool output.' },
+    ], previousPhysicalId: 'physical:oldest' },
     'physical:oldest': { messages: [
       { role: 'user', content: 'An older his**torical** message and HISTORICAL again.' },
       ...Array.from({ length: 40 }, (_, i) => ({ role: 'assistant', content: `Synthetic filler message ${i}.` })),

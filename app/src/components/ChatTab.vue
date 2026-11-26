@@ -691,7 +691,7 @@ import { conversationLinkSession, conversationMicroAppLink, isDirectConversation
 import { useMobileChrome } from '../composables/useMobileChrome.ts'
 import ConversationSearch from './ConversationSearch.vue'
 import QuickActionsOverlay from './QuickActionsOverlay.vue'
-import { loadConversationSearchHistory, searchRange, searchTextBlocks, setConversationHighlights, textMatches, type ConversationSearchEntry, type ConversationSearchMatch } from '../conversation-search.ts'
+import { isSearchHistoryMessage, type RawMessage, loadConversationSearchHistory, searchRange, searchTextBlocks, setConversationHighlights, textMatches, type ConversationSearchEntry, type ConversationSearchMatch } from '../conversation-search.ts'
 
 const route = useRoute()
 const mobile = useMobileChrome()
@@ -1863,20 +1863,6 @@ function setThinkingExpanded(idx: number, open: boolean): void {
 /** Strip `<sender ... />` and `<event ... />` XML metadata tags from text. */
 const META_TAG_RE = /^<(?:sender|event)\s[^>]*\/>\s*/
 
-interface RawMessage {
-  role: string
-  responseContext?: unknown
-  timestamp?: string
-  /** HTTP history omits absent top-level values; items are complete replacements. */
-  content?: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> | null
-  reasoning_content?: string | null
-  reasoning_text?: string | null
-  tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>
-  tool_call_id?: string
-  name?: string
-  usage?: CostUsage & { promptTokens: number; completionTokens: number; totalTokens: number }
-}
-
 function rawTextContent(msg: RawMessage, stripMeta = false): string {
   let text: string
   if (typeof msg.content === 'string') {
@@ -2856,22 +2842,7 @@ async function loadSearchEntries(signal: AbortSignal): Promise<ConversationSearc
   searchSegments = segments
   return segments.flatMap(searchEntries)
 }
-function isSearchHistoryMessage(value: unknown): value is RawMessage {
-  if (!isRecord(value) || typeof value.role !== 'string'
-    || !(value.content === null || typeof value.content === 'string'
-      || Array.isArray(value.content) && value.content.every(part => isRecord(part) && typeof part.type === 'string'
-        && (part.text === undefined || typeof part.text === 'string')
-        && (part.image_url === undefined || isRecord(part.image_url) && (part.image_url.url === undefined || typeof part.image_url.url === 'string'))))) return false
-  if (['timestamp', 'name', 'tool_call_id'].some(key => value[key] !== undefined && typeof value[key] !== 'string')) return false
-  if (['reasoning_content', 'reasoning_text'].some(key => value[key] != null && typeof value[key] !== 'string')) return false
-  if (value.tool_calls !== undefined && !(Array.isArray(value.tool_calls) && value.tool_calls.every(call =>
-    isRecord(call) && typeof call.id === 'string' && typeof call.type === 'string' && isRecord(call.function)
-    && typeof call.function.name === 'string' && typeof call.function.arguments === 'string'))) return false
-  const usage = value.usage
-  return usage === undefined || isRecord(usage)
-    && validCostUsage(usage)
-    && ['promptTokens', 'completionTokens', 'totalTokens'].every(key => typeof usage[key] === 'number')
-}
+
 async function revealSearchMatch(match: ConversationSearchMatch, query: string, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted()
   browseHistory()

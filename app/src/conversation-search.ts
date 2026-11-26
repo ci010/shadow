@@ -1,6 +1,38 @@
+import { validCostUsage, type CostUsage } from './usage-cost.ts'
 import { t } from './i18n.ts'
 import { apiUrl } from './api-url.ts'
 import { isRecord } from './folders-sidebar.ts'
+
+export interface RawMessage {
+  role: string
+  responseContext?: unknown
+  timestamp?: string
+  /** HTTP history omits absent top-level values; items are complete replacements. */
+  content?: string | Array<{ type: string; text?: string; image_url?: { url?: string } }> | null
+  reasoning_content?: string | null
+  reasoning_text?: string | null
+  tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>
+  tool_call_id?: string
+  name?: string
+  usage?: CostUsage & { promptTokens: number; completionTokens: number; totalTokens: number }
+}
+
+export function isSearchHistoryMessage(value: unknown): value is RawMessage {
+  if (!isRecord(value) || typeof value.role !== 'string'
+    || !(value.content === undefined || value.content === null || typeof value.content === 'string'
+      || Array.isArray(value.content) && value.content.every(part => isRecord(part) && typeof part.type === 'string'
+        && (part.text === undefined || typeof part.text === 'string')
+        && (part.image_url === undefined || isRecord(part.image_url) && (part.image_url.url === undefined || typeof part.image_url.url === 'string'))))) return false
+  if (['timestamp', 'name', 'tool_call_id'].some(key => value[key] !== undefined && typeof value[key] !== 'string')) return false
+  if (['reasoning_content', 'reasoning_text'].some(key => value[key] != null && typeof value[key] !== 'string')) return false
+  if (value.tool_calls !== undefined && !(Array.isArray(value.tool_calls) && value.tool_calls.every(call =>
+    isRecord(call) && typeof call.id === 'string' && typeof call.type === 'string' && isRecord(call.function)
+    && typeof call.function.name === 'string' && typeof call.function.arguments === 'string'))) return false
+  const usage = value.usage
+  return usage === undefined || isRecord(usage)
+    && validCostUsage(usage)
+    && ['promptTokens', 'completionTokens', 'totalTokens'].every(key => typeof usage[key] === 'number')
+}
 
 export interface ConversationSearchEntry {
   segmentId: string | null
