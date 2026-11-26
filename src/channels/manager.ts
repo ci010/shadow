@@ -430,7 +430,8 @@ export class ChannelManager {
         delete source.parentId
         source = { ...source, kind: location.type === 1 ? 'direct' : isThread ? 'thread' : 'channel', botUserId: inspection.botUserId,
           ...(isThread && location.parentId ? { parentId: location.parentId } : {}), ...(location.guildId ? { guildId: location.guildId } : {}), ...(location.recipientId ? { recipientId: location.recipientId } : {}),
-          ...(location.name ? { name: location.name.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}) }
+          ...(location.name ? { name: location.name.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}),
+          ...(isThread && location.parentId && location.parentName ? { parentName: location.parentName.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 100) } : {}) }
       }
       // Recording is independent of BOT admission. Persist before any business
       // allowFrom/trigger/participant check; keep the arrival assignment frozen

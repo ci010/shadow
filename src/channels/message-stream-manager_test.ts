@@ -153,7 +153,7 @@ test('Discord manager receipts distinguish category ancestry from public thread 
  t.mock.method(adapter,'inspectReceipt',async(chatId:string)=>{
   const location=locations.get(chatId)!
   return {botUserId:'900',canView:true,location:{id:chatId,name:'Synthetic',...location,
-   guildId:location.type===1?null:'100',guildName:null,parentName:null,recipientId:location.type===1?'500':null}}
+   guildId:location.type===1?null:'100',guildName:null,parentName:'Verified\nforum',recipientId:location.type===1?'500':null}}
  })
  for(const chatId of ['201','202','301','302','401']){
   await adapter['collectPassive']({senderId:'500',chatId,content:'Synthetic receipt',messageId:`create-${chatId}`,
@@ -164,7 +164,10 @@ test('Discord manager receipts distinguish category ancestry from public thread 
  assert.deepEqual(sources.map(source=>[source.conversationId,source.kind,source.parentId]),[
   ['201','channel',undefined],['202','channel',undefined],['301','thread','201'],['302','thread','202'],['401','direct',undefined],
  ])
- for(const source of sources.filter(source=>source.kind!=='thread'))assert.equal(Object.hasOwn(source,'parentId'),false,'No stale spread parent remains')
+ for(const source of sources){
+  assert.equal(source.parentName,source.kind==='thread'?'Verified forum':undefined,'Only verified thread parent names survive; controls are sanitized')
+  if(source.kind!=='thread')assert.equal(Object.hasOwn(source,'parentId'),false,'No stale spread parent remains')
+ }
  const events=stream.snapshot().events
  assert.equal(events.length,10)
  for(const row of events)assert.equal(row.parent,row.conversation==='301'?'201':row.conversation==='302'?'202':undefined)

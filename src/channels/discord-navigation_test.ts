@@ -26,7 +26,8 @@ test('old Bot history projects bounded verified Discord location only', () => {
 test('passive inbox projects ancestry only when its entire scoped identity matches', () => {
   const state = { projectId: 'p', sessionId: 'channel-inbox:p:connection:discord:200', channelSource: origin() }
   assert.deepEqual(discordChannelNavigation(state, 'p'), { id: '200', name: 'Post', type: 11, guildId: '300', parentId: '400', parentName: null })
-  for (const source of [{ ...origin(), projectId: 'other' }, { ...origin(), connectionId: 'other' },
+  assert.equal(discordChannelNavigation({ ...state, channelSource: { ...origin(), parentName: 'Forum' } }, 'p')?.parentName, 'Forum')
+  for (const source of [{ ...origin(), parentName: 'Forum', projectId: 'other' }, { ...origin(), parentName: 'Forum', connectionId: 'other' },
     { ...origin(), conversationId: '201' }, { ...origin(), parentId: undefined }, { ...origin(), guildId: undefined },
     { ...origin(), recipientId: '900' }, { ...origin(), platform: 'qq' }]) {
     assert.equal(discordChannelNavigation({ ...state, channelSource: source }, 'p'), undefined)

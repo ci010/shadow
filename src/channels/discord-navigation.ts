@@ -15,7 +15,7 @@ const passiveOrigin = z.object({
   platform: z.literal('discord'), conversationId: snowflake,
   kind: z.enum(['direct', 'channel', 'thread']), parentId: snowflake.optional(),
   guildId: snowflake.optional(), recipientId: snowflake.optional(), botUserId: snowflake,
-  name: z.string().max(100).optional(),
+  name: z.string().max(100).optional(), parentName: z.string().max(100).optional(),
 })
 
 /** Project an exact persisted origin; do not fetch Discord, inspect bindings, or guess ancestry. */
@@ -46,5 +46,5 @@ export function discordChannelNavigation(state: {
     || (source.kind === 'thread') !== !!source.parentId
     || (source.kind === 'direct' ? !source.recipientId || !!source.guildId : !source.guildId || !!source.recipientId)) return undefined
   return { id: source.conversationId, name: source.name ?? null, type: source.kind === 'thread' ? 11 : source.kind === 'direct' ? 1 : 0,
-    guildId: source.guildId ?? null, parentId: source.parentId ?? null, parentName: null }
+    guildId: source.guildId ?? null, parentId: source.parentId ?? null, parentName: source.parentName ?? null }
 }

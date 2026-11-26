@@ -10,9 +10,12 @@ export const ChannelSourceSchema = z.object({
   kind: z.enum(['direct', 'group', 'channel', 'thread']),
   parentId: id.optional(), guildId: id.optional(), recipientId: id.optional(), botUserId: id.optional(),
   name: z.string().max(100).optional(),
+  // Optional presentation metadata: legacy origins did not retain the verified parent name.
+  parentName: z.string().max(100).optional(),
 }).strict().superRefine((source, context) => {
   const issue = (message: string) => context.addIssue({ code: 'custom', message })
   if ((source.kind === 'thread') !== !!source.parentId) issue('Thread origins require exact parent ancestry')
+  if (source.parentName !== undefined && (source.platform !== 'discord' || source.kind !== 'thread')) issue('Parent names require a Discord thread origin')
   if (source.platform === 'wechat' && source.kind !== 'direct') issue('WeChat receipts are direct only')
   if (source.platform === 'discord') {
     if (!source.botUserId || source.kind === 'group') issue('Verified Discord identity and location required')
