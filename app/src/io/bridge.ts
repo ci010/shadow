@@ -19,13 +19,12 @@ export interface IoBridge {
   executionBase: ShallowRef<string>
   busy: ShallowRef<string | undefined>
   actions: ShallowRef<IoActions | undefined>
-  clock: ShallowRef<number>
 }
 export const ioBridgeKey: InjectionKey<IoBridge> = Symbol('trusted-io-host')
 export function createIoBridge(): IoBridge {
   const context = shallowRef<IoContext>()
   return {
     context, views: shallowRef(new Map()), runs: shallowRef(new Map()), errors: shallowRef(new Map()),
-    execution: shallowRef(), executionBase: shallowRef(''), busy: shallowRef(), actions: shallowRef(), clock: shallowRef(Date.now()),
+    execution: shallowRef(), executionBase: shallowRef(''), busy: shallowRef(), actions: shallowRef(),
   }
 }

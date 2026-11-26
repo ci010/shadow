@@ -697,7 +697,7 @@ export class SessionTools extends Tools {
           ...(scope.modes.includes('task') ? [] : ['mode'])])],
         properties: {
           ...Object.fromEntries(Object.entries(def.function.parameters.properties)
-            .filter(([name]) => !['report_to', 'review'].includes(name) || scope.modes.includes('task'))),
+            .filter(([name]) => !['agent_type', 'report_to', 'review'].includes(name) || scope.modes.includes('task'))),
           mode: { ...def.function.parameters.properties.mode, enum: [...scope.modes],
             description: scope.modes.includes('task')
               ? 'Omission defaults to task, which returns an admitted ID immediately. Call waits for its final result.'
@@ -706,11 +706,10 @@ export class SessionTools extends Tools {
           task: { ...def.function.parameters.properties.task,
             description: 'Required initial work: a bounded assignment with an expected result.',
           },
-          agent_type: { ...def.function.parameters.properties.agent_type,
-            description: `Agent role from Runtime or read("v:agents"); a2a:<agent> targets support task mode only. ${scope.modes.includes('call')
-              ? 'For call, omission inherits your role and an explicit role cannot widen your capabilities.'
-              : 'Defaults to "sub".'}${scope.modes.includes('call') && scope.modes.includes('task') ? ' For task, defaults to "sub".' : ''}`,
-          },
+          ...(scope.modes.includes('task') ? { agent_type: {
+            ...def.function.parameters.properties.agent_type,
+            description: 'Task only: agent role from Runtime or read("v:agents"). Call inherits your role; omit agent_type.',
+          } } : {}),
         },
       } } } : def.function.name === 'exec' && this.scope?.mode === 'call'
       ? { ...def, function: { ...def.function, description: `${def.function.description} In calls, execution stays foreground; timeout or cancellation terminates owned processes.`,

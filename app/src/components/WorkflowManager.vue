@@ -165,6 +165,15 @@ const empty = computed(() => !!snapshot.value && !snapshot.value.definitions.len
 const selectedBot = computed(() => botFlows.value.find(flow => flow.definition.id === documentQuery.value.bot || typeof documentQuery.value.bot === 'string' && Object.hasOwn(flow.selectionAliases ?? {}, documentQuery.value.bot)))
 const botSelectedNode = computed(() => inspectedNode.value ?? (typeof documentQuery.value.bot === 'string' ? selectedBot.value?.selectionAliases?.[documentQuery.value.bot] : undefined))
 watch(() => documentQuery.value.bot, () => { inspectedNode.value = undefined })
+// Restore only nodes present in the displayed graph; stale links never select a neighbour.
+watch(() => [documentQuery.value.node, graph.value, selectedBot.value] as const, ([node, nodes, bot]) => {
+  if (typeof node !== 'string') return
+  inspectedNode.value = undefined
+  const available = bot ? bot.graph : nodes
+  if (!available?.some(item => item.id === node)) return
+  inspectedNodeScope.value = nodeScope.value
+  inspectedNode.value = node
+}, { flush: 'post' })
 const inspectorOpen = computed(() => !!selectedBot.value || typeof documentQuery.value.workflow === 'string' && !!definition.value)
 // The open document owns the selection, not the canvas viewport. This also
 // supports one-pane layouts where switching to chat hides the canvas.

@@ -19,7 +19,7 @@ test('sub task and call explicitly pin a same-Project draft; omission stays buil
   t.after(() => rm(root, { recursive: true, force: true }))
   const store = new SubOverrideStore(root)
   const revision = await store.save('Original behavior')
-  const parent: SessionState = { sessionId: 'web:parent', segmentIndex: 0, projectId: 'p' }
+  const parent: SessionState = { sessionId: 'web:parent', segmentIndex: 0, projectId: 'p', agentType: 'sub' }
   const fields: Array<Parameters<SessionManager['buildSession']>[2]> = []
   const sessions = {
     getSessionState: () => parent, getAllowedSubagentModes: () => ['task', 'call'], assertCanCreateChild() {},
@@ -34,7 +34,9 @@ test('sub task and call explicitly pin a same-Project draft; omission stays buil
   const receipt = JSON.parse(await tool.execute({ ...request, mode: 'task', sub_revision: revision }, ctx))
   assert.equal(receipt.subRevision, revision)
   await store.save('Replacement behavior')
-  assert.equal(await tool.execute({ ...request, mode: 'call', sub_revision: revision }, ctx), 'result')
+  assert.match(await tool.execute({ ...request, mode: 'call' }, ctx), /invalid arguments.*agent_type/)
+  assert.equal(fields.length, 1)
+  assert.equal(await tool.execute({ description: request.description, task: request.task, mode: 'call', sub_revision: revision }, ctx), 'result')
   assert.deepEqual(fields.slice(0, 2).map(field => field?.subDraft), [0, 1].map(() => ({ revision, markdown: 'Original behavior' })))
   assert.equal(JSON.parse(await tool.execute(request, ctx)).subRevision, 'builtin')
   assert.equal(fields[2]?.subDraft, undefined)

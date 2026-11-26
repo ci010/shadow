@@ -53,7 +53,6 @@ let generation = 0
 let preparingBase: string | undefined
 let pollTimer: ReturnType<typeof setInterval>
 let leaseTimer: ReturnType<typeof setInterval>
-let clockTimer: ReturnType<typeof setInterval>
 const bases = computed(() => new Set([
   ...[...bridge.views.value.values()].map(view => view.apiBase),
   ...(owned.value ? [bridge.executionBase.value] : []),
@@ -283,7 +282,6 @@ onMounted(() => {
   // heartbeat, lease checks and update loop are deliberately unchanged.
   pollTimer = setInterval(() => { void poll(true) }, 30_000)
   leaseTimer = setInterval(() => { void pulseClients() }, 5000)
-  clockTimer = setInterval(() => { bridge.clock.value = Date.now(); triggerRef(execution) }, 250)
   window.addEventListener('pagehide', pageHide)
   document.addEventListener('visibilitychange', visibilityChanged)
 })
@@ -291,7 +289,7 @@ onBeforeUnmount(() => {
   disposed = true; generation++
   for (const controller of polling.values()) controller.abort()
   pendingPoll.clear()
-  clearInterval(pollTimer); clearInterval(leaseTimer); clearInterval(clockTimer)
+  clearInterval(pollTimer); clearInterval(leaseTimer)
   window.removeEventListener('pagehide', pageHide)
   document.removeEventListener('visibilitychange', visibilityChanged)
   for (const base of new Set([...clients.keys(), ...registrations.keys()])) forgetClient(base)

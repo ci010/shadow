@@ -31,10 +31,10 @@
     <div v-if="phase === 'recording' || phase === 'starting'" class="capture-preview">
       <div v-for="source in microphones" :key="source.id" class="audio-level">
         <label :for="`${controlId}-${source.id}`">{{ t('Input level') }}</label>
-        <meter :id="`${controlId}-${source.id}`" min="0" max="1" :value="live?.execution.captures?.levels?.get(source.id) || 0" />
+        <IoInputLevel :id="`${controlId}-${source.id}`" :levels="live?.execution.captures?.levels" :source-id="source.id" />
       </div>
       <IoMedia v-for="source in videos" :key="source.id" :stream="live?.execution.captures?.streams.get(source.id)" :label="t('{kind} preview', { kind: source.kind })" />
-      <span class="capture-time">{{ elapsedLabel }} / {{ durationLabel }}</span>
+      <IoCaptureTime class="capture-time" :started-at="run.startedAt" :limit="durationLabel" />
     </div>
 
     <p v-if="phase === 'processing'" class="request-note" role="status">{{ t('Input collection has stopped. The agent\'s service is processing your input.') }}</p>
@@ -105,6 +105,8 @@ import { useMobileResources } from '../../mobile-resources.ts'
 import { mobileCaptureIssue, mobileCaptureRestricted } from '../../io/mobile-policy.ts'
 const resources = useMobileResources()
 import IoMedia from './IoMedia.vue'
+import IoCaptureTime from './IoCaptureTime.vue'
+import IoInputLevel from './IoInputLevel.vue'
 import IoNodes from './IoNodes.vue'
 
 const props = defineProps<{ run: IoRun; base: string }>()
@@ -112,8 +114,7 @@ const bridge = inject(ioBridgeKey)
 const controlId = useId()
 const live = computed(() => {
   const execution = bridge?.execution.value
-  const now = bridge?.clock.value ?? Date.now()
-  return execution?.run.id === props.run.id && bridge?.executionBase.value === props.base ? { execution, now } : undefined
+  return execution?.run.id === props.run.id && bridge?.executionBase.value === props.base ? { execution } : undefined
 })
 const run = computed(() => live.value ? { ...live.value.execution.run } : props.run)
 const unsupportedCapture = computed(() => mobileCaptureIssue(run.value.definition.sources))
@@ -139,7 +140,6 @@ const status = computed(() => terminal.value ? run.value.status === 'completed' 
   : busy.value ? t('Connecting') : phase.value === 'ready' ? t('Your turn') : phase.value === 'recording' ? recordingMedia.value ? t('Recording') : t('Collecting input') : phase.value === 'processing' ? t('Processing') : phase.value === 'starting' ? t('Starting') : phase.value === 'draining' ? t('Finishing') : t('Waiting'))
 const time = (ms: number) => `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`
 const durationLabel = computed(() => time(run.value.definition.limits.durationMs))
-const elapsedLabel = computed(() => time(Math.max(0, (live.value?.now ?? Date.now()) - Date.parse(run.value.startedAt ?? new Date().toISOString()))))
 const formatBytes = (bytes: number) => bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 const inputs = ref<Record<string, string>>({})
 const switching = ref<Record<string, boolean>>({})

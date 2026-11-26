@@ -23,3 +23,19 @@ export function contentReference(href: string): ContentReference | undefined {
     return { kind: match[3] ? 'session' : 'work', projectId, id, href: match[1]! }
   } catch { return undefined }
 }
+
+/** Workflow links carry selection only; they never execute or configure a flow. */
+export function workflowContentReference(href: string): string | undefined {
+  const match = /^#?(\/projects\/([^/?#]+)\/workflows\?([^#]+))$/.exec(href)
+  if (!match) return
+  try {
+    const project = decodeURIComponent(match[2]!)
+    if (!project || /[\/\\\u0000-\u001f\u007f]/.test(project)) return
+    const query = new URLSearchParams(match[3])
+    const keys = [...query.keys()]
+    if (keys.some(key => !['workflow', 'run', 'bot', 'node'].includes(key) || query.getAll(key).length !== 1)) return
+    if (query.has('workflow') === query.has('bot') || query.has('bot') && query.has('run')) return
+    if ([...query.values()].some(value => !value || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value))) return
+    return match[1]
+  } catch { return }
+}
