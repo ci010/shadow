@@ -136,7 +136,10 @@ export class IoExecution {
     // Browser acquisition begins before the first backend await.
     try { this.captures = (this.options.acquire ?? acquireIoSources)(this.run.definition.sources, { audioInputDevices: this.audioInputDevices }) }
     catch (error) { return this.fail(error) }
-    void this.captures.ready.catch(error => {
+    this.changed()
+    void this.captures.ready.then(() => {
+      if (!this.control.signal.aborted) this.changed()
+    }).catch(error => {
       if (!this.control.signal.aborted) void this.fail(error)
     })
     return this.acknowledgeStart()
@@ -152,6 +155,7 @@ export class IoExecution {
       if (performance.now() >= this.sourceDeadline) { await this.cancel('cancelled', t('Input deadline elapsed before devices were ready.')); return }
       this.lastHeartbeat = performance.now()
       this.phase = 'recording'
+      this.changed()
       await this.queue.send({ type: 'start' })
       if (this.control.signal.aborted || this.phase !== 'recording') return
       await this.captures!.start(async (packet, bytes) => {
@@ -301,6 +305,7 @@ export class IoExecution {
       this.releaseDevices()
       this.phase = 'processing'
     }
+    this.changed()
   }
   fail(error: unknown): Promise<void> {
     const status = error instanceof Error && error.name === 'NotAllowedError' ? 'denied'

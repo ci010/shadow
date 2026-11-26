@@ -471,3 +471,24 @@ test('global host survives internal navigation and uses the shared live connecti
   const card = await readFile(new URL('./components/io/IoRequestCard.vue', import.meta.url), 'utf8')
   assert.match(card, /does not stop that service/)
 })
+
+test('execution actively notifies capture, phase, backend view and failure changes without a UI clock', async () => {
+  const observations: { phase: string; captures: boolean; message?: string; text?: string; preview?: string; error: string }[] = []
+  const f = fixture({ change() {
+    observations.push({ phase: f.execution.phase, captures: !!f.execution.captures, message: f.execution.run.message,
+      text: f.execution.nodes[0]?.text, preview: f.execution.preview?.text, error: f.execution.error })
+  } })
+  try {
+    const starting = f.execution.start()
+    assert.ok(observations.some(value => value.phase === 'starting' && value.captures))
+    f.ack(); await starting
+    assert.ok(observations.some(value => value.phase === 'recording'))
+    f.effect('ui.render', [[{ id: 'notice', type: 'text', text: 'Updated view' }]])
+    f.effect('status', ['Backend working'])
+    f.effect('preview', [{ mime: 'text/plain', text: 'Live preview' }])
+    await f.execution.refresh(true)
+    assert.ok(observations.some(value => value.text === 'Updated view' && value.message === 'Backend working' && value.preview === 'Live preview'))
+    await f.execution.fail(new Error('Device lost'))
+    assert.ok(observations.some(value => value.phase === 'closed' && value.error === 'Device lost'))
+  } finally { f.execution.dispose() }
+})
