@@ -1,4 +1,8 @@
 {
+  "Bind CLI command": "Bind CLI command",
+  "Remote execution is unavailable.": "Remote execution is unavailable.",
+  "Loading actions…": "Loading actions…",
+  "package.json scripts": "package.json scripts",
   "No stacking": "No stacking",
   "Stack by project": "Stack by project",
   "Stack by model": "Stack by model",

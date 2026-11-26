@@ -1,4 +1,8 @@
 {
+  "Bind CLI command": "绑定 CLI 命令",
+  "Remote execution is unavailable.": "暂不支持远程执行。",
+  "Loading actions…": "正在加载操作…",
+  "package.json scripts": "package.json 脚本",
   "No stacking": "不堆叠",
   "Stack by project": "按项目堆叠",
   "Stack by model": "按模型堆叠",

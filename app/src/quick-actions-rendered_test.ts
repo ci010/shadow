@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { createServer } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import UnoCSS from 'unocss/vite'
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const require = createRequire(new URL('../../desktop/package.json', import.meta.url))
 const { build } = require('esbuild') as typeof import('esbuild')
@@ -19,14 +20,14 @@ test('rendered actions CRUD, explicit run confirmation, stop, import and search 
   let actions = [{ id: 'a', name: 'Build', command: 'npm run build', folderId: 'folder', pinned: false }]
   let runs: Record<string, unknown>[] = []
   let invalidFolders = false
-  const server = await createServer({ configFile: false, root: resolve(root, 'app'), logLevel: 'error', optimizeDeps: { noDiscovery: true, include: ['vue'] }, cacheDir: resolve(directory, 'cache'), plugins: [vue(), {
+  const server = await createServer({ configFile: false, root: resolve(root, 'app'), logLevel: 'error', optimizeDeps: { noDiscovery: true, include: ['vue'] }, cacheDir: resolve(directory, 'cache'), plugins: [vue(), UnoCSS({configFile:resolve(root,'app/unocss.config.ts')}), {
     name: 'actions-fixture', resolveId: id => id === '/actions-fixture.ts' ? '\0actions-fixture' : undefined,
-    load(id) { if (id !== '\0actions-fixture') return; return `import '/src/styles.css'; import {createApp,h,ref} from 'vue'; import QuickActions from '/src/components/QuickActions.vue'; import ConversationSearch from '/src/components/ConversationSearch.vue';
+    load(id) { if (id !== '\0actions-fixture') return; return `import 'virtual:uno.css'; import '/src/styles.css'; import {createApp,h,ref} from 'vue'; import QuickActions from '/src/components/QuickActions.vue'; import QuickActionsOverlay from '/src/components/QuickActionsOverlay.vue'; import ConversationSearch from '/src/components/ConversationSearch.vue';
       const search=ref(), open=ref(false), history=ref(); window.fixture={pinned:false}; window.addEventListener('shadow:quick-actions-changed',()=>{window.fixture.pinned=true});
       createApp({render:()=>location.pathname === '/__pinned' ? h(QuickActions,{apiBase:location.origin+'/projects/p/',projectId:'p',active:true,canWrite:true,pinnedOnly:true}) : h('main',{style:'position:relative;display:flex;flex-direction:column;height:700px'},[
         h('div',[h('button',{id:'search-trigger',onClick:()=>{open.value=false;search.value.show()}},'Search'),h('button',{onClick:()=>{search.value.close();open.value=true}},'Actions')]),
         h(ConversationSearch,{ref:search,active:true,keyboardActive:true,contextKey:'p',container:history.value,loadEntries:async()=>[],revealMatch:async()=>{}}),
-        open.value?h('div',{class:'actions-overlay',style:'position:absolute;top:44px;left:0;right:0;max-height:620px;overflow:auto;background:var(--c-bg)'},[h(QuickActions,{apiBase:location.origin+'/projects/p/',projectId:'p',active:true,canWrite:true,onClose:()=>open.value=false})]):null,
+        open.value?h(QuickActionsOverlay,{apiBase:location.origin+'/projects/p/',projectId:'p',active:true,canWrite:true,onClose:()=>open.value=false}):null,
         h('div',{id:'history',ref:history,tabindex:-1,style:'flex:1;min-height:0'},'Messages'),h('button',{id:'outside'},'Outside')
       ])}).mount('#app');` },
     configureServer(server) { server.middlewares.use(async (req,res,next) => {
@@ -50,7 +51,7 @@ test('rendered actions CRUD, explicit run confirmation, stop, import and search 
   }], server:{host:'127.0.0.1',port:0} })
   await server.listen();t.after(()=>server.close());const url=server.resolvedUrls!.local[0]!
   await build({stdin:{contents:await readFile(resolve(root,'app/src/quick-actions-smoke.fixture.txt'),'utf8'),loader:'ts',resolveDir:resolve(root,'app/src')},outfile:resolve(directory,'main.cjs'),bundle:true,platform:'node',format:'cjs',target:'node24',external:['electron'],logLevel:'silent'})
-  const env: NodeJS.ProcessEnv={QUICK_ACTIONS_URL:url}; for (const key of ['SystemRoot','WINDIR','PATH','Path','ComSpec','PATHEXT','DISPLAY','WAYLAND_DISPLAY','XDG_RUNTIME_DIR']) { if(process.env[key] !== undefined) env[key]=process.env[key] }
+  const env: NodeJS.ProcessEnv={QUICK_ACTIONS_URL:url,QUICK_ACTIONS_SCREENSHOT:process.env.QUICK_ACTIONS_SCREENSHOT}; for (const key of ['SystemRoot','WINDIR','PATH','Path','ComSpec','PATHEXT','DISPLAY','WAYLAND_DISPLAY','XDG_RUNTIME_DIR']) { if(process.env[key] !== undefined) env[key]=process.env[key] }
   for (const key of ['HOME','USERPROFILE','APPDATA','LOCALAPPDATA','TMP','TEMP','TMPDIR','XDG_CONFIG_HOME','XDG_CACHE_HOME']) env[key]=directory
   const child=spawn(require('electron') as string,[resolve(directory,'main.cjs')],{cwd:directory,env,windowsHide:true,stdio:['ignore','pipe','pipe']})
   let output='';child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>output+=chunk)

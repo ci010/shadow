@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 app.setPath('userData', join(process.cwd(), 'profile'))
 app.on('window-all-closed', () => {})
 async function main() {
@@ -23,12 +24,12 @@ try {
     click('Search'); await wait(()=>document.querySelector('.conversation-search')); click('Actions');
     await wait(()=>document.querySelector('.quick-actions .action-row')); if(document.querySelector('.conversation-search')) throw Error('Search/actions not exclusive');
     document.querySelector('.action-row details').open=true;
-    click('Build'); await wait(()=>document.querySelector('.run-confirmation'));
+    document.querySelector('.run-button').click(); await wait(()=>document.querySelector('.run-confirmation'));
     if(!document.querySelector('.run-confirmation').textContent.includes('synthetic')) throw Error('Target absent');
     document.querySelector('.run-confirmation button').click(); await wait(()=>document.querySelector('.run-status'));
     click('Stop'); await wait(()=>document.querySelector('.run-status').textContent.includes('stopped'));
     click('Pin to Dashboard'); await wait(()=>window.fixture.pinned);
-    click('New action'); await wait(()=>document.querySelector('form'));
+    click('Bind CLI command'); await wait(()=>document.querySelector('form'));
     const set=(selector,value)=>{const e=document.querySelector(selector);e.value=value;e.dispatchEvent(new Event(e.tagName==='SELECT'?'change':'input',{bubbles:true}))};
     set('form input','Test'); set('form textarea','echo test'); set('form select','folder'); await new Promise(r=>setTimeout(r,50)); click('Save'); await wait(()=>document.querySelectorAll('.action-row').length===2);
     document.querySelectorAll('.action-row')[1].querySelector('details').open=true; click('Delete'); await new Promise(r=>setTimeout(r,50)); click('Confirm delete'); await wait(()=>document.querySelectorAll('.action-row').length===1);
@@ -36,6 +37,14 @@ try {
     return {geometry:true,crud:true,run:true,import:true};
   })()`)
   assert.deepEqual(result, { geometry: true, crud: true, run: true, import: true })
+  if (process.env.QUICK_ACTIONS_SCREENSHOT) {
+    await writeFile(process.env.QUICK_ACTIONS_SCREENSHOT, (await win.webContents.capturePage()).toPNG())
+    win.setSize(420, 800)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    const overflow = await win.webContents.executeJavaScript('document.documentElement.scrollWidth > innerWidth')
+    assert.equal(overflow, false, 'Narrow actions overflowed viewport')
+    await writeFile(process.env.QUICK_ACTIONS_SCREENSHOT.replace('.png', '-narrow.png'), (await win.webContents.capturePage()).toPNG())
+  }
   await win.webContents.executeJavaScript(`fetch('/__pinned-state?mode=empty')`)
   await win.loadURL(process.env.QUICK_ACTIONS_URL! + '__pinned')
   const compact = await win.webContents.executeJavaScript(`(async () => {
