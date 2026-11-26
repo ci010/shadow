@@ -12,7 +12,9 @@
       <h2 v-else-if="!isRail"><span class="folders-heading-icon w-4 h-4" :class="loading ? 'i-lucide-loader-circle folder-loading-icon' : 'i-lucide-folder'" aria-hidden="true" />{{ t('Folders') }}</h2>
       <div class="folders-header-actions">
         <slot name="project-actions" />
-        <button type="button" class="folder-action-button" :aria-label="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')" :title="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')" :aria-pressed="folderGrouped" @click="folderGrouped = !folderGrouped"><span :class="folderGrouped ? 'i-lucide-list' : 'i-lucide-folders'" class="w-4 h-4" aria-hidden="true" /></button>
+        <HoverInfo :text="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')"><template #default="{ triggerProps }">
+          <button type="button" class="folder-action-button" v-bind="triggerProps" :aria-label="t(folderGrouped ? 'Show unified chats' : 'Group chats by folder')" :aria-pressed="folderGrouped" @click="folderGrouped = !folderGrouped"><span :class="folderGrouped ? 'i-lucide-list' : 'i-lucide-folders'" class="w-4 h-4" aria-hidden="true" /></button>
+        </template></HoverInfo>
         <HoverInfo v-if="!grouped && desktop" :text="isRail ? t('Expand folders') : t('Collapse folders')"><template #default="{ triggerProps }">
           <button class="folder-action-button folders-rail-toggle" v-bind="triggerProps" :aria-label="isRail ? t('Expand folders') : t('Collapse folders')" :aria-expanded="!isRail" aria-controls="folders-navigation" @click="railCollapsed = !railCollapsed">
             <span :class="isRail && loading ? 'i-lucide-loader-circle folder-loading-icon' : isRail ? 'i-lucide-panel-left-open' : 'i-lucide-panel-left-close'" class="w-4 h-4" aria-hidden="true" />

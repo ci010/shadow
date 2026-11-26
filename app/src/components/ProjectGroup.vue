@@ -10,10 +10,12 @@
     @manage="(folder, action) => $emit('manage', folder, action)" @automation="$emit('automation', $event)" @knowledge="$emit('knowledge')">
     <template #project-actions>
       <button v-if="runtimeState === 'failed'" class="project-settings retry-runtime" :disabled="retrying" :aria-label="t('Retry {name} startup', { name: project.name })" :title="t('Retry project startup')" @click="retryRuntime"><span class="i-lucide-refresh-cw w-3.5 h-3.5" aria-hidden="true" /></button>
-      <RouterLink class="project-settings" :aria-label="t('{name} settings', { name: project.name })" :title="t('{name} settings', { name: project.name })"
-        :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }" @click="$emit('project-document', 'settings')">
-        <span class="i-lucide-settings-2 w-3.5 h-3.5" aria-hidden="true" />
-      </RouterLink>
+      <HoverInfo :text="t('{name} settings', { name: project.name })"><template #default="{ triggerProps }">
+        <RouterLink class="project-settings" v-bind="triggerProps" :aria-label="t('{name} settings', { name: project.name })"
+          :to="{ name: 'project-settings', params: { projectId: project.id, section: 'general' } }" @click="$emit('project-document', 'settings')">
+          <span class="i-lucide-settings-2 w-3.5 h-3.5" aria-hidden="true" />
+        </RouterLink>
+      </template></HoverInfo>
       <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
     </template>
   </FoldersSidebar>
@@ -24,6 +26,7 @@ import { t } from '../i18n.ts'
 import { computed, inject, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useServiceGroups, projectGroupConversations, observedGroupId } from '../service-groups.ts'
 import FoldersSidebar from './FoldersSidebar.vue'
+import HoverInfo from './HoverInfo.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
 import { projectBase } from '../api-url.ts'
