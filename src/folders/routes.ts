@@ -1,3 +1,4 @@
+import { serveDeleteFile } from '../gateway/delete-file.ts'
 import { serveThreeSnapshot } from '../gateway/three-snapshot.ts'
 import { createHtmlPreview } from '../gateway/html-preview.ts'
 import { FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION } from './picker.ts'
@@ -140,6 +141,18 @@ export class FolderService {
       } catch (error) { return errorResponse(c, error) }
     })
     app.get('/api/folders', (c) => c.json({ folders: this.#options.registry.list() }))
+    app.delete('/api/folders/:id/files', async c => {
+      try {
+        this.#assertOpen()
+        const folder = await this.#options.registry.requireAvailable(c.req.param('id'), c.req.raw.signal)
+        // The execution protocol currently has read/write, but no file-only
+        // delete operation. Never emulate deletion through exec on Main.
+        if (folder.kind === 'remote' || folder.kind === 'layerfs') return c.json({
+          error: `${folder.kind}_delete_unsupported`, message: 'File deletion is not supported for this resource; no Main fallback.',
+        }, 501)
+        return await serveDeleteFile(c, folder.path)
+      } catch (error) { return errorResponse(c, error) }
+    })
     app.get('/api/folders/:id/files/search', async c => {
       try {
         this.#assertOpen()

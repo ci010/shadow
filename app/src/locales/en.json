@@ -1,4 +1,8 @@
 {
+  "File deletion is not supported for this workspace. No file was deleted.": "File deletion is not supported for this workspace. No file was deleted.",
+  "Delete permanently": "Delete permanently",
+  "Permanently delete {path}? This cannot be undone.": "Permanently delete {path}? This cannot be undone.",
+  "Could not delete file. Refresh and retry.": "Could not delete file. Refresh and retry.",
   "Bind CLI command": "Bind CLI command",
   "Remote execution is unavailable.": "Remote execution is unavailable.",
   "Loading actions…": "Loading actions…",

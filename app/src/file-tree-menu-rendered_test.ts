@@ -50,7 +50,7 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
               entry:{name:'nested',type:'dir',ext:'',size:0,mtime:null},
               changes:[{path:'nested/child.ts',status:'modified'}],
               onContextMenu:value=>request.value=value}),
-            request.value ? h(Menu,{request:request.value,workdir:workdir.value,onClose:()=>request.value=undefined}) : null
+            request.value ? h(Menu,{request:request.value,workdir:workdir.value,deleteFile:window.fixture.enableDelete?async()=>{if(window.fixture.failDelete)throw new Error('Delete denied');window.fixture.deleted=true}:undefined,onClose:()=>request.value=undefined}) : null
           ]}).mount('#app');`
       },
       configureServer(server) {
@@ -173,6 +173,18 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
           await run("document.querySelectorAll('.file-menu button')[2].click()");
           await wait("!!document.querySelector('.file-menu [role=alert]')");
           await escape(); await wait("!document.querySelector('.file-menu')");
+          // Deletion requires explicit confirmation, exposes failures and only closes after success.
+          await run("fixture.enableDelete=true;fixture.failDelete=true");
+          await open(); await wait("!!document.querySelector('.file-menu-delete')");
+          await run("document.querySelector('.file-menu-delete').click()");
+          await wait("!!document.querySelector('.file-menu-warning')");
+          assert.equal(await run("fixture.deleted"),undefined);
+          assert.equal(await run("(()=>{const r=document.querySelector('.file-menu').getBoundingClientRect();return r.right<=innerWidth&&r.bottom<=innerHeight})()"),true);
+          await run("document.querySelector('.file-menu-delete').click()");
+          await wait("document.querySelector('.file-menu-error')?.textContent==='Delete denied'");
+          await run("fixture.failDelete=false;document.querySelector('.file-menu-delete').click()");
+          await wait("fixture.deleted&&!document.querySelector('.file-menu')");
+          await run("fixture.enableDelete=false");
           await run("fixture.workdir.value.kind='remote';fixture.revealed=undefined");
           await open(); await wait("document.querySelectorAll('.file-menu button').length===2");
           await shortcut({key:'R',altKey:true,shiftKey:true});
@@ -192,6 +204,7 @@ test('rendered file menus copy paths, gate native reveal, report failures and re
           // Chinese labels and shortcut hints stay within a narrow viewport.
           await run("fixture.workdir.value={kind:'local',displayPath:'C:/project'};fixture.setLocalePreference('zh-CN')");
           win.setContentSize(320,400);
+          await delay(150); // Let the menu's resize-dismiss listener settle before opening.
           await open(); await wait("document.querySelectorAll('.file-menu button').length===3");
           assert.deepEqual(await run("Array.from(document.querySelectorAll('.file-menu button > span:nth-child(2)'),b=>b.textContent)"),['复制完整路径','复制相对路径','在文件资源管理器中显示']);
           assert.equal(await run("(()=>{const m=document.querySelector('.file-menu'),r=m.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&m.scrollWidth<=m.clientWidth})()"),true);

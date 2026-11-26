@@ -676,6 +676,12 @@ Electron also offers **Show in file explorer** for local files and folders;
 this option is hidden in the web app, for remote workdirs, and for entries
 inside archives. Clicking a file still opens its preview.
 
+The file context menu also offers **Delete file**, with an explicit permanent-deletion
+confirmation and inline failure feedback. Successful deletion refreshes files and
+Git changes. Only regular files in Main-local folder/session roots are currently
+supported: directories, symlinks, and entries inside archives cannot be deleted;
+remote and LayerFS roots report unsupported without falling back to Main.
+
 ZIP, 7z, RAR, TAR, GZIP, BZIP2 and XZ files expand in the file tree, including
 compressed TAR containers (`.tar.gz`/`.tgz`, `.tar.bz2`, `.tar.xz`) and nested
 archives. No archive is read until expanded. The first expansion fetches the

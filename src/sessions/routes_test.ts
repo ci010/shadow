@@ -110,6 +110,8 @@ test('file and Git routes distinguish offline nodes from unavailable capabilitie
   assert.equal((await app.request('/api/sessions/remote/files')).status, 200)
   assert.equal((await app.request('/api/sessions/remote/git/status')).status, 200)
   assert.equal(executor.requests.length, 2)
+  assert.equal((await app.request('/api/sessions/remote/files?path=notes.txt', { method: 'DELETE' })).status, 501)
+  assert.equal(executor.requests.length, 2)
 })
 
 test('cancel route requires an existing authorized logical session and distinguishes idle from requested', async () => {

@@ -11,6 +11,14 @@
         <button v-if="canReveal" role="menuitem" aria-keyshortcuts="Alt+Shift+R" :disabled="busy" @click="reveal">
           <span class="i-lucide-folder-open" aria-hidden="true" /><span>{{ t('Show in file explorer') }}</span><kbd aria-hidden="true">Alt+Shift+R</kbd>
         </button>
+        <button v-if="deleteFile && !confirming" role="menuitem" class="file-menu-delete" :disabled="busy" @click="confirming = true">
+          <span class="i-lucide-trash-2" aria-hidden="true" /><span>{{ t('Delete file') }}</span>
+        </button>
+        <template v-if="confirming">
+          <p class="file-menu-warning">{{ t('Permanently delete {path}? This cannot be undone.', { path: request.path }) }}</p>
+          <button role="menuitem" class="file-menu-delete" :disabled="busy" @click="remove"><span class="i-lucide-trash-2" aria-hidden="true" /><span>{{ t('Delete permanently') }}</span></button>
+          <button role="menuitem" :disabled="busy" @click="confirming = false"><span class="i-lucide-x" aria-hidden="true" /><span>{{ t('Cancel') }}</span></button>
+        </template>
         <p v-if="error" class="file-menu-error" role="alert">{{ error }}</p>
       </div>
     </div>
@@ -18,13 +26,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { t } from '../../i18n.ts'
 import { canShowInExplorer, fileTreePaths, fileTreeShortcut, type FileTreeMenuRequest } from '../../file-tree-menu.ts'
 import type { DirListing } from '../../composables/useSessionFiles.ts'
 import { useTextCopy } from '../../composables/useTextCopy.ts'
 
-const props = defineProps<{ request: FileTreeMenuRequest; workdir: DirListing['workdir'] }>()
+const props = defineProps<{ request: FileTreeMenuRequest; workdir: DirListing['workdir']; deleteFile?: () => Promise<void> }>()
 const emit = defineEmits<{ close: [] }>()
 const menu = ref<HTMLElement>()
 const position = ref({ left: '0px', top: '0px' })
@@ -35,8 +43,19 @@ const text = ref('')
 const { copy, error: copyError, busy: copying } = useTextCopy(text)
 const revealError = ref('')
 const revealing = ref(false)
-const error = computed(() => copyError.value || revealError.value)
-const busy = computed(() => copying.value || revealing.value)
+const confirming = ref(false)
+const deleting = ref(false)
+const deleteError = ref('')
+const error = computed(() => deleteError.value || copyError.value || revealError.value)
+const busy = computed(() => copying.value || revealing.value || deleting.value)
+async function remove() {
+  if (!props.deleteFile || !confirming.value || busy.value) return
+  deleting.value = true
+  deleteError.value = ''
+  try { await props.deleteFile(); close() }
+  catch (cause) { deleteError.value = cause instanceof Error ? cause.message : t('Could not delete file. Refresh and retry.') }
+  finally { deleting.value = false }
+}
 const target = props.request.event.target
 const anchor = target instanceof HTMLElement ? target.closest<HTMLElement>('button, [tabindex]') ?? target : undefined
 function close() { emit('close'); anchor?.focus({ preventScroll: true }) }
@@ -75,8 +94,9 @@ function keydown(event: KeyboardEvent) {
     : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length
   buttons[next]?.focus()
 }
-onMounted(async () => {
+async function place() {
   await nextTick()
+  if (!menu.value) return
   const rect = menu.value!.getBoundingClientRect()
   const event = props.request.event
   const anchorRect = anchor?.getBoundingClientRect()
@@ -85,6 +105,14 @@ onMounted(async () => {
     left: `${Math.max(8, Math.min(pointer ? event.clientX : anchorRect?.left ?? 8, window.innerWidth - rect.width - 8))}px`,
     top: `${Math.max(8, Math.min(pointer ? event.clientY : anchorRect?.bottom ?? 8, window.innerHeight - rect.height - 8))}px`,
   }
+}
+watch([confirming, error], () => { void place() })
+watch(confirming, async () => {
+  await nextTick()
+  menu.value?.querySelector<HTMLButtonElement>('.file-menu-delete')?.focus()
+})
+onMounted(async () => {
+  await place()
   menu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   window.addEventListener('resize', close)
   // Tree shortcuts use the same guarded actions/error UI as the context menu.
@@ -111,5 +139,7 @@ onUnmounted(() => window.removeEventListener('resize', close))
 .file-menu button:hover:not(:disabled), .file-menu button:focus-visible { background: var(--c-bg-muted); }
 .file-menu button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
 .file-menu button:disabled { opacity: 0.5; cursor: default; }
+.file-menu button.file-menu-delete, .file-menu button.file-menu-delete > span:first-child { color: var(--c-error); }
+.file-menu-warning { max-width: 280px; margin: 8px 12px; color: var(--c-text); font-size: 13px; overflow-wrap: anywhere; }
 .file-menu-error { margin: 4px 12px; color: var(--c-error); font-size: 12px; overflow-wrap: anywhere; }
 </style>

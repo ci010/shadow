@@ -158,6 +158,13 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
     return { paths: data.paths as string[], truncated: data.truncated }
   }
 
+  async function deleteFile(sessionId: string, path: string): Promise<void> {
+    const response = await fetch(buildUrl(apiBase, `${root(sessionId)}/files`, { path }), {
+      method: 'DELETE', redirect: 'error', signal: AbortSignal.timeout(30_000),
+    })
+    if (!response.ok) throw await fileRequestError(response)
+  }
+
   function rawUrl(sessionId: string, path: string): string {
     return buildUrl(apiBase, `${root(sessionId)}/raw`, { path })
   }
@@ -256,6 +263,7 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
     if (offline) return offline
     if (response.status === 401 || response.status === 403) return new Error(t('Access to these files was denied.'))
     if (response.status === 404) return new Error(t('This file or folder is no longer available. Refresh the file tree.'))
+    if (code === 'remote_delete_unsupported' || code === 'layerfs_delete_unsupported') return new Error(t('File deletion is not supported for this workspace. No file was deleted.'))
     if (code === 'invalid_text_encoding') return new Error(t('This text encoding is unsupported. Choose another encoding.'))
     if (code === 'remote_encoding_unavailable') return new Error(t('Encoding changes are not supported by this remote workdir. No local file was used.'))
     if (code === 'remote_workdir_requires_executor') return new Error(t('This remote workdir does not support this file operation yet. No local folder was used.'))
@@ -268,5 +276,5 @@ export function useSessionFiles(apiBase: string, folderId?: string, sessionWorks
     return new Error(t('Could not load files ({status}). Retry when Main is available.', { status: response.status }))
   }
 
-  return { listDir, searchPaths, rawUrl, staticUrl, htmlPreview, preview, readBlob }
+  return { listDir, searchPaths, deleteFile, rawUrl, staticUrl, htmlPreview, preview, readBlob }
 }

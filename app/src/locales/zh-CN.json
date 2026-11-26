@@ -1,4 +1,8 @@
 {
+  "File deletion is not supported for this workspace. No file was deleted.": "此工作区暂不支持删除文件，未删除任何文件。",
+  "Delete permanently": "永久删除",
+  "Permanently delete {path}? This cannot be undone.": "永久删除 {path}？此操作无法撤销。",
+  "Could not delete file. Refresh and retry.": "无法删除文件，请刷新后重试。",
   "Bind CLI command": "绑定 CLI 命令",
   "Remote execution is unavailable.": "暂不支持远程执行。",
   "Loading actions…": "正在加载操作…",

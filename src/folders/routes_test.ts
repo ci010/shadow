@@ -13,6 +13,7 @@ import { CloneTerminationError, type GitCloneRunner } from './git.ts'
 import { FolderRegistry } from './registry.ts'
 import { FolderService } from './routes.ts'
 import { folderFixture } from './test-fixtures.ts'
+import { resolveSessionLocations } from '../sessions/locality.ts'
 import { sessionsApiPlugin } from '../sessions/routes.ts'
 import type { SessionManager } from '../sessions/session-manager.ts'
 
@@ -62,6 +63,37 @@ function cloneBody(parentPath: string, overrides: Record<string, unknown> = {}) 
 }
 
 describe('folder file browsing', () => {
+  test('DELETE files is file-only, contained, and uses folder/session owning roots', async t => {
+    const { app, folders, registry, root } = await setup(t)
+    const folder = await registry.register(folders)
+    const state = { sessionId: 'deleting', workdir: { version: 2, nodeId: 'local', workdirId: 'folder' } }
+    sessionsApiPlugin({
+      workspace: folders,
+      assertFolderAccess: () => {},
+      getSessionState: (key: string) => key === 'deleting' ? state : undefined,
+      readSessionState: async (key: string) => key === 'deleting' ? state : undefined,
+      workdirLookup: () => ({ node: 'online', workdir: { online: true, path: folders } }),
+    } as unknown as SessionManager)(app)
+    await mkdir(join(folders, 'directory'))
+    await writeFile(join(root, 'outside.txt'), 'keep')
+    await symlink(root, join(folders, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
+    const managed = resolveSessionLocations(folders, state as Parameters<typeof resolveSessionLocations>[1]).sessionDataDir
+    await mkdir(managed, { recursive: true })
+    await writeFile(join(managed, 'managed.txt'), 'delete')
+    assert.equal((await app.request('/api/sessions/deleting/workspace/files?path=managed.txt', { method: 'DELETE' })).status, 200)
+    for (const base of [`/api/folders/${folder.id}`, '/api/sessions/deleting']) {
+      await writeFile(join(folders, 'delete.txt'), 'delete')
+      assert.equal((await app.request(`${base}/files?path=delete.txt`, { method: 'DELETE' })).status, 200)
+      assert.equal((await app.request(`${base}/files?path=delete.txt`, { method: 'DELETE' })).status, 404)
+      for (const path of ['', '.', '..', '../outside.txt', '/outside.txt', 'x/../outside.txt', 'escape/outside.txt', 'directory', 'a.zip!/member', 'a.zip::member', 'a\\b']) {
+        assert.equal((await app.request(`${base}/files?path=${encodeURIComponent(path)}`, { method: 'DELETE' })).status, 400, path)
+      }
+      assert.equal((await app.request(`${base}/files?path=a&path=b`, { method: 'DELETE' })).status, 400)
+    }
+    assert.equal(await readFile(join(root, 'outside.txt'), 'utf8'), 'keep')
+    assert.equal((await app.request('/api/sessions/unknown/files?path=delete.txt', { method: 'DELETE' })).status, 404)
+    assert.equal((await app.request('/api/folders/00000000-0000-4000-8000-000000000000/files?path=delete.txt', { method: 'DELETE' })).status, 404)
+  })
   test('authorized Main-local folder and session raw video requests support seeking', async t => {
     const { app, folders, registry, root } = await setup(t)
     const folder = await registry.register(folders)

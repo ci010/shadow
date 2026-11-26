@@ -56,7 +56,7 @@
           <button v-else type="button" class="file-search-result" :draggable="active && !sourcePending"
             :data-path="path" data-reference-kind="file"
             :aria-current="selectedPath === path ? 'page' : undefined" :title="path" @click="openSearchResult(path)"
-            @contextmenu.prevent.stop="openContextMenu({ event: $event, path })" @keydown="menuKey($event, path)">
+            @contextmenu.prevent.stop="openContextMenu({ event: $event, path, entry: searchEntry(path) })" @keydown="menuKey($event, path)">
             <span class="i-lucide-file w-4 h-4" aria-hidden="true" /><span>{{ path }}</span>
           </button>
           </template>
@@ -80,7 +80,7 @@
       :remote="workdir?.kind === 'remote'"
       :folder-id="folderId" :session-workspace="sessionWorkspace" :dir="previewDir" :entry="previewEntry" @close="closePreview" />
     <div v-else-if="previewOnOpen" class="file-preview-empty">{{ t('Select a file to preview its current contents.') }}</div>
-    <FileTreeContextMenu v-if="contextMenu" :request="contextMenu" :workdir="workdir" @close="contextMenu = undefined" />
+    <FileTreeContextMenu v-if="contextMenu" :request="contextMenu" :workdir="workdir" :delete-file="canDeleteFile(contextMenu) ? () => deleteTreeFile(contextMenu!) : undefined" @close="contextMenu = undefined" />
   </div>
 </template>
 
@@ -148,13 +148,26 @@ const contextMenu = shallowRef<FileTreeMenuRequest>()
 function openContextMenu(request: FileTreeMenuRequest) {
   if (props.active && !sourcePending.value && !offline.value) contextMenu.value = request
 }
+function canDeleteFile(request: FileTreeMenuRequest) {
+  return !!request.path && request.entry?.type === 'file' && !request.entry.archive
+}
+async function deleteTreeFile(menu: FileTreeMenuRequest) {
+  if (!props.active || sourcePending.value || offline.value || !canDeleteFile(menu)) return
+  const source = workspaceKey.value
+  await files.value.deleteFile(props.sessionId, menu.path)
+  if (source !== workspaceKey.value) return
+  if (previewPath.value === menu.path) previewEntry.value = null
+  searchPaths.value = searchPaths.value.filter(path => path !== menu.path)
+  await reload()
+  emit('refresh-git')
+}
 function menuKey(event: KeyboardEvent, path: string) {
   if (!props.active || sourcePending.value || offline.value || event.defaultPrevented || event.isComposing) return
   const shortcut = fileTreeShortcut(event)
   if (!shortcut && event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
   event.preventDefault()
   event.stopPropagation()
-  if (!event.repeat) openContextMenu({ event, path, shortcut })
+  if (!event.repeat) openContextMenu({ event, path, shortcut, ...(path ? { entry: searchEntry(path) } : {}) })
 }
 watch(() => [props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, props.active, workdir.value, sourcePending.value, filterQuery.value, changesOnly.value],
   () => { contextMenu.value = undefined })

@@ -1,3 +1,4 @@
+import { serveDeleteFile } from '../gateway/delete-file.ts'
 import { Session } from './session.ts'
 import { serveThreeSnapshot } from '../gateway/three-snapshot.ts'
 import { createHtmlPreview } from '../gateway/html-preview.ts'
@@ -943,6 +944,19 @@ export function sessionsApiPlugin(
     })
 
     // ── Session workspace file browsing ────────────────────────────────
+    for (const fileRoute of ['/api/sessions/:key/files', '/api/sessions/:key/workspace/files']) app.delete(fileRoute, async c => {
+      if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
+      const key = c.req.param('key')!
+      // Unlike read-only legacy browsing, mutation must never synthesize an
+      // owning root for an unknown session.
+      if (!await sessions.readSessionState(key)) return c.json({ error: 'session_not_found', key }, 404)
+      const base = await sessionFileBase(sessions, key, fileRoute.includes('/workspace/'))
+      if (!base.available) return c.json(workdirUnavailableApiResult(key, base), 503)
+      if (base.locality !== 'local') return c.json({
+        error: `${base.locality}_delete_unsupported`, message: 'File deletion is not supported for this resource; no Main fallback.',
+      }, 501)
+      return serveDeleteFile(c, base.path)
+    })
     for (const fileRoute of ['/api/sessions/:key/files/search', '/api/sessions/:key/workspace/files/search']) app.get(fileRoute, async c => {
       if (!sessions) return c.json({ error: 'sessions_unavailable' }, 501)
       const key = c.req.param('key')!
