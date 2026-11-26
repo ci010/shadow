@@ -18,6 +18,8 @@ import { readAgentPromptDraft, type SubOverrideStore } from '../agent/context/su
 import { isToolAllowed } from '../utils/tool-allow.ts'
 import { parseSessionName } from '../sessions/session-name.ts'
 
+const callArgumentsSchema = z.object({ agent_type: z.never().optional() }).passthrough()
+
 const reviewSchema = z.object({
   mode: z.enum(['parent', 'agent']).default('parent'),
   agent_type: z.string().min(1).optional(),
@@ -81,7 +83,7 @@ export class SubagentTool implements Tool {
       agent_type: {
         type: 'string',
         description:
-          'Agent role. Defaults to "general"; explicit call mode inherits the caller role when omitted. ' +
+          'Task only: agent role, defaults to "general". Call inherits the caller role and does not accept this parameter. ' +
           'Built-in specialist roles use their configured default for new ordinary delegations; use role@version to pin one explicitly. ' +
           'Discover local roles and configured a2a:<agent> targets with read("v:agents"). Remote targets support task mode only and inherit no local resources.',
       },
@@ -125,6 +127,10 @@ export class SubagentTool implements Tool {
     if (!description) return 'Error: description is required'
 
     if (args.mode !== undefined && !isExecutionMode(args.mode)) return 'Error: mode must be task or call.'
+    if (args.mode === 'call') {
+      const validation = callArgumentsSchema.safeParse(args)
+      if (!validation.success) return `Error: invalid arguments for "subagent": ${validation.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ')}`
+    }
     if (args.mode === 'call' && (Object.hasOwn(args, 'model') || Object.hasOwn(args, 'effort'))) {
       return 'Error: call mode cannot specify model or effort; it always inherits caller inference settings.'
     }
