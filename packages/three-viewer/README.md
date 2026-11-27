@@ -42,6 +42,12 @@ Static glTF 2.0 triangle geometry and the default scene. Core PBR, unlit, textur
 - `fit()` frames the model while retaining view direction. `setView('front' | 'back' | 'top')` frames and changes the visible camera. Front is +Z, back is −Z, and top is +Y.
 - `getCamera(view?)` returns `{ position, target }`. `captureFrame(view?)` returns `{ image: Blob, camera: { position, target }, objectIds, version }` for a single rendered snapshot. **The frame's IDs are the selection, not the scene inventory.** With no `view`, PNG comes from the actual canvas. Presets and explicit `{ position, target }` use an independent camera and a WebGL render target, without drawing to the user canvas or changing their camera. Both use the viewer's opaque baked-in background. A hidden canvas retains its last visible drawing size and aspect. PNG encoding may complete after a later model swap, but the result still describes the frame that was taken.
 
+### Explicit-time video frames
+
+`await viewer.captureVideoFrame({ position, target }, timeSeconds)` returns the same `CameraFrame` shape as capture, with an explicit nonnegative shader clock. It uses an independent camera and the inspection renderer: no selection/grid overlays, with the loaded preview lights, tone mapping and exposure. The canvas CSS dimensions determine resolution under the existing renderer limits. `objectIds` is empty because this is footage rather than a selection capture.
+
+The method restores the interactive shader clock before awaiting PNG encoding and rejects concurrent capture or a lost WebGL context. It does not encode a movie, animate arbitrary JavaScript/geometry, or provide a general simulation clock. The source-checkout [video helper](../../scripts/three-viewer-check/README.md) samples `time = frame / fps` and streams frames to FFmpeg without depending on an open editor.
+
 ## Focused checks
 
 From the repository root:
