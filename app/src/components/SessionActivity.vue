@@ -2,7 +2,7 @@
   <span class="session-activity" :class="[activity.kind, { working: activity.working, compact, 'icon-only': iconOnly, 'status-icons': statusIcons }]" :title="label" :aria-label="compact ? label : undefined" :role="compact ? 'img' : undefined">
     <span v-if="!hideSymbol && (iconOnly || stage || !delegatedLabel)" class="activity-symbol" aria-hidden="true">
       <WorkingWave v-if="activity.kind === 'running' && !delegatedRunning" />
-      <span v-else-if="compact || statusIcons" :class="statusIcon" class="status-icon" />
+      <span v-else-if="compact || statusIcons || delegatedStage === 'waiting'" :class="statusIcon" class="status-icon" />
       <span v-else-if="activity.kind === 'waiting'" class="i-lucide-message-circle-question attention-icon" />
       <span v-else-if="activity.working && !isWaitingStage(activity.kind)" class="activity-spinner" />
       <span v-else class="activity-dot" />
@@ -26,11 +26,11 @@ import { isWaitingStage, isWorkingStage, sessionActivity } from '../session-acti
 import { subagentActivityLabel, type SubagentActivity } from '../subagent-executions.ts'
 
 const props = defineProps<{ stage?: string | null; hasCron?: boolean; hasBackgroundTasks?: boolean; compact?: boolean; iconOnly?: boolean; statusIcons?: boolean; hideSymbol?: boolean; subagents?: SubagentActivity }>()
-const activity = computed(() => sessionActivity(props.iconOnly && props.stage !== 'failed' && !isWorkingStage(props.stage)
-  ? props.subagents?.waiting ? 'waiting' : props.subagents?.running ? 'running' : props.subagents?.pending ? 'pending' : props.stage
-  : props.stage))
-const delegatedRunning = computed(() => props.iconOnly && !isWorkingStage(props.stage)
-  && activity.value.kind === 'running' && !!props.subagents?.running)
+const delegatedStage = computed(() => props.iconOnly && props.stage !== 'failed' && !isWorkingStage(props.stage)
+  ? props.subagents?.waiting ? 'waiting' : props.subagents?.running ? 'running' : props.subagents?.pending ? 'pending' : undefined
+  : undefined)
+const activity = computed(() => sessionActivity(delegatedStage.value ?? props.stage))
+const delegatedRunning = computed(() => delegatedStage.value === 'running')
 const icons: Record<string, string> = {
   llm: 'i-lucide-brain', tool: 'i-lucide-wrench', waiting: 'i-lucide-message-circle-question',
   'waiting-for-call': 'i-lucide-git-branch', idle: 'i-lucide-circle-check', inactive: 'i-lucide-moon',
@@ -39,7 +39,8 @@ const icons: Record<string, string> = {
 }
 // Active background work outranks schedules, but never foreground/delegated activity or completion.
 const statusIcon = computed(() => {
-  if (delegatedRunning.value) return 'i-lucide-git-branch'
+  // A child waiting on its agent owner isn't asking the human to answer.
+  if (delegatedRunning.value || delegatedStage.value === 'waiting') return 'i-lucide-git-branch'
   if (activity.value.kind === 'inactive') {
     if (props.hasBackgroundTasks) return 'i-lucide-terminal'
     if (props.hasCron) return 'i-lucide-alarm-clock'
@@ -48,7 +49,8 @@ const statusIcon = computed(() => {
 })
 const delegatedLabel = computed(() => subagentActivityLabel(props.subagents))
 const subagentCount = computed(() => props.subagents ? props.subagents.running + props.subagents.waiting + props.subagents.pending : 0)
-const label = computed(() => [props.stage || !delegatedLabel.value ? activity.value.label : '', delegatedLabel.value].filter(Boolean).join(' · '))
+const label = computed(() => [delegatedStage.value === 'waiting' || (!props.stage && delegatedLabel.value)
+  ? '' : activity.value.label, delegatedLabel.value].filter(Boolean).join(' · '))
 </script>
 
 <style scoped>

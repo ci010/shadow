@@ -638,3 +638,44 @@ test('custom answer confirmation survives the session resuming before HTTP retur
   assert.equal(await answer, true)
   assert.equal(state.busy.value, false)
 })
+
+
+test('inline Ask submits a complete ordered round only, never replays, and retains confirmation through stage change', async t => {
+  const { state, source, requests } = harness(t)
+  const request = { kind: 'input', id: 'round', sessionId: 'web:root', question: '**Which layout?**',
+    recipient: { kind: 'user', sessionId: 'web:root' }, origin: { physicalId: 'root-0', toolCallId: 'ask-round' },
+    createdAt: new Date().toISOString(), deadline: null,
+    questions: [{ content: '**Which layout?**', options: ['A', 'B'] }, { content: 'Which format?', options: ['X', 'Y'] }] }
+  requests[0]!.finish(Response.json({ request }))
+  await settle()
+  assert.deepEqual(state.request.value, request)
+  assert.equal(await state.submitCustom(request.id, 'legacy path'), false)
+  assert.equal(await state.cancelQuestion(), false)
+  assert.equal(await state.submitRound('older', [{ option: 'A' }, { option: 'X' }]), false)
+  assert.equal(await state.submitRound(request.id, [{ option: 'A' }]), false)
+  assert.equal(await state.submitRound(request.id, [{ option: 'X' }, { option: 'A' }]), false)
+  assert.equal(requests.length, 1)
+  const answers = [{ option: 'B' }, { text: 'My format', media: ['/uploads/format.txt'] }]
+  const answer = { requestId: request.id, text: 'B\nMy format', answeredBy: 'user', answeredAt: request.createdAt, answers }
+  const failed = state.submitRound(request.id, answers)
+  assert.deepEqual(JSON.parse(String(requests[1]!.init.body)), { requestId: request.id, answers })
+  assert.equal(await state.submitRound(request.id, answers), false)
+  requests[1]!.finish(Response.json({ answer: { ...answer, answers: [{ option: 'A' }, answers[1]] } }))
+  assert.equal(await failed, false)
+  assert.equal(state.roundConfirmation.value, null)
+  assert.equal(await state.submitRound(request.id, answers), false, 'a stale snapshot cannot authorize a replay')
+  const refresh = state.refresh()
+  requests[2]!.finish(Response.json({ request }))
+  await refresh
+  const accepted = state.submitRound(request.id, answers)
+  source.stage = 'tool'
+  requests[3]!.finish(Response.json({ answer }))
+  assert.equal(await accepted, true)
+  assert.deepEqual(state.roundConfirmation.value, { request, receipt: answer })
+  assert.equal(state.request.value, null)
+  source.stage = 'waiting'
+  requests[4]!.finish(Response.json({ request }))
+  await settle()
+  assert.equal(await state.submitRound(request.id, answers), false, 'a confirmed request stays inert')
+  assert.equal(requests.length, 5)
+})

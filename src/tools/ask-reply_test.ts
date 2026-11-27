@@ -50,6 +50,9 @@ test('QQ and Discord cannot expose or invoke ask, including explicit allowlists 
 function fixture() {
   const states: Record<string, SessionState> = {
     root: { sessionId: 'root', segmentIndex: 0 },
+    'web:clarify': { sessionId: 'web:clarify', segmentIndex: 0, mode: 'session', agentType: 'general' },
+    'web:sub': { sessionId: 'web:sub', segmentIndex: 0, mode: 'session', agentType: 'sub' },
+    'web:child': { sessionId: 'web:child', segmentIndex: 0, mode: 'task', agentType: 'general', parentSessionId: 'parent' },
     parent: { sessionId: 'parent', segmentIndex: 0 },
     child: { sessionId: 'child', segmentIndex: 0, parent: { id: 'parent' }, reportTo: 'root' },
   }
@@ -58,7 +61,8 @@ function fixture() {
     notifyUser: async () => {}, notifyParent: async () => {},
   })
   const inputs = new InputRequests({
-    getState: id => states[id], assertAccess: () => {}, hasDecision: id => !!yields.get(id),
+    getState: id => states[id], resolveAgentName: state => state.agentType,
+    assertAccess: () => {}, hasDecision: id => !!yields.get(id),
     timeout: () => null, changed: () => {}, write: async () => {}, notify: async () => {},
   })
   return { yields, inputs, tool: new AskTool(yields, inputs), reply: new ReplyTool(yields, inputs) }
@@ -104,6 +108,36 @@ test('input asks return plain text and A2A callers cannot request local human de
   const answer = await inputs.replyUser('root', request.id, 'fixture-path')
   assert.deepEqual(JSON.parse(requireToolText(await waiting)), answer)
   assert.equal('approved' in answer, false)
+})
+
+test('inline shorthand is limited to direct Web general turns; legacy asks remain available', async () => {
+  const { tool, inputs } = fixture()
+  const webContext = (id: string) => ({ ...context(id), channel: 'web', inputSource: 'user' as const })
+  const args = { content: 'Which format?', options: ['CSV', 'JSON'] }
+  for (const ctx of [webContext('web:sub'), webContext('web:child'),
+    { ...webContext('web:clarify'), inputSource: 'event' as const }, { ...webContext('web:clarify'), channel: 'a2a' },
+    { ...webContext('web:clarify'), channel: 'system' }]) {
+    await assert.rejects(tool.execute(args, ctx), error => error instanceof YieldError && error.code === 'forbidden')
+    assert.equal(inputs.get(ctx.sessionId), null)
+  }
+  for (const invalidArgs of [{ ...args, kind: 'input' }, { ...args, action: 'ask' },
+    { ...args, questions: [args] }, { questions: [] }, { questions: Array(4).fill(args) },
+    { ...args, options: ['CSV', 'CSV'] }, { ...args, options: ['CSV', ' '] }]) {
+    await assert.rejects(tool.execute(invalidArgs, webContext('web:clarify')), invalid)
+  }
+  const pending = tool.execute(args, webContext('web:clarify'))
+  await new Promise(resolve => setImmediate(resolve))
+  const request = inputs.get('web:clarify')!
+  assert.deepEqual(request.questions, [args])
+  const receipt = await inputs.replyUserRound(request.sessionId, request.id, [{ option: 'JSON' }], async () => assert.fail('No uploads expected'))
+  assert.deepEqual(JSON.parse(requireToolText(await pending)), receipt)
+  const legacy = tool.execute({ kind: 'input', question: 'Legacy question?' }, webContext('web:sub'))
+  await new Promise(resolve => setImmediate(resolve))
+  const legacyRequest = inputs.get('web:sub')!
+  assert.equal(legacyRequest.questions, undefined)
+  await assert.rejects(inputs.replyUserRound('web:sub', legacyRequest.id, [{ option: 'JSON' }], async () => {}), invalid)
+  await inputs.replyUser('web:sub', legacyRequest.id, 'Ordinary reply')
+  assert.equal(JSON.parse(requireToolText(await legacy)).text, 'Ordinary reply')
 })
 
 test('reply answers a real child request and releases both calls with the same receipt', async () => {

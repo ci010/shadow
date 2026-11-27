@@ -43,6 +43,15 @@ test('shared icon honors completion, foreground, background and delegated live f
   assert.ok(has('i-lucide-terminal'))
   view.state.subagents = { running: 1, waiting: 0, pending: 0 }; await nextTick()
   assert.ok(has('i-lucide-git-branch'))
+  view.state.subagents = { running: 0, waiting: 1, pending: 0 }; await nextTick()
+  assert.ok(has('i-lucide-git-branch'))
+  assert.ok(!has('i-lucide-message-circle-question'), 'a child waiting for its parent is not waiting for the human')
+  assert.match(String(view.nodes().find(node => node.props.role === 'img')?.props['aria-label']), /1 subagent waiting/)
+  view.state.stage = 'waiting'; await nextTick()
+  assert.ok(has('i-lucide-message-circle-question'), 'a foreground question still asks for the human even if a child is also waiting')
+  view.state.stage = 'llm'; await nextTick()
+  assert.ok(has('i-lucide-brain'))
+  assert.ok(!has('i-lucide-message-circle-question'))
 })
 
 test('conversation tabs and sidebar share stage projection and the same reactive icon renderer', async t => {

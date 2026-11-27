@@ -68,6 +68,28 @@ and authenticated A2A caller waits retain their existing policy and never consul
 presence. Host-specific owner confirmations retain their explicit timeout, but
 also fail closed rather than authorizing on timeout.
 
+## Inline clarification rounds
+
+In a direct Web conversation, the root `general` agent gathers questions before
+interrupting the user. It asks together about independent issues the user can
+answer now, then asks a later round only when an answer or newly discovered
+blocker calls for it. A single question uses `ask({content, options})`; a round
+uses `ask({questions: [{content, options}, ...]})` with one to three questions.
+Each question has two suggested choices and can also be answered in the chat
+composer. For multiple questions, the composer starts at the first unanswered
+card unless the user selects a different card; answers are staged until the user
+submits the complete round.
+The sidebar question mark indicates a pending answer, not the entire period in
+which the agent is clarifying. After settlement, the agent can investigate,
+continue its work, or open another round without an explicit mode switch.
+
+These are input requests: a choice or free-text reply doesn't grant permission.
+Protected decisions and host confirmations retain their existing flows. Child
+agents such as `sub` still use their ordinary Ask flow to ask their stored parent
+as needed; the rule to gather questions into user-facing rounds doesn't apply to
+them. Waiting for an external system still uses follow-up, and finishing a round
+doesn't mark the underlying work complete.
+
 ## Settlement, history and limits
 
 `YieldManager` is the sole decision settlement authority. An unanswered human
@@ -79,8 +101,9 @@ the action needing the decision stays blocked. Without a durable journal, expiry
 fails with `unavailable` rather than manufacturing a receipt.
 
 Ordinary input expiry records a failed `input_request` close (not an answer).
-The Ask tool returns JSON `{kind:"input",status:"unavailable",approved:false,reason}`,
-not fabricated user text. Cancellation still follows its existing abort path.
+The Ask tool returns `{kind:"input",status:"unavailable",reason}` for an inline
+round (legacy `kind=input` also returns `approved:false`), not fabricated user
+text. Cancellation still follows its existing abort path.
 Micro App owner testing confirmations no longer auto-continue after sixty seconds.
 
 Existing pending phase/request-ID guards serialize human replies and expiry

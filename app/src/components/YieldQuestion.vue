@@ -1,5 +1,5 @@
 <template>
-  <section v-if="enabled && (request || error)" class="yield-question" :data-request-id="expectedRequestId ?? request?.id"
+  <section v-if="enabled && !inlineRound && (request || error)" class="yield-question" :data-request-id="expectedRequestId ?? request?.id"
     :class="{ 'yield-question-custom': customMode, 'is-embedded': embedded }" :aria-label="t('Pending question')">
     <form v-if="request" @submit.prevent="submit" @keydown="handleKeydown">
       <header class="yield-heading">
@@ -61,20 +61,25 @@
 import { t } from '../i18n.ts'
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from 'vue'
 import { MAX_YIELD_CUSTOM_TEXT_LENGTH, useYieldRequest, yieldDeadlineText, isInputRequest, type AskRequest } from '../yield-requests.ts'
+import { isInlineAskRequest } from '../inline-ask.ts'
+import type { InlineAskConfirmation } from '../inline-ask-history.ts'
 import DecisionBrief from './DecisionBrief.vue'
 import WorkContextPath from './WorkContextPath.vue'
 
 const props = defineProps<{ apiBase: string; sessionId: string; active: boolean; stage?: string | null; canAnswer: boolean; expectedRequestId?: string; useComposer?: boolean; composerId?: string; composerBusy?: boolean; embedded?: boolean; workNavigable?: boolean }>()
-const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; inspect: [sessionId: string]; custom: []; work: [key: string] }>()
+const emit = defineEmits<{ cancelled: [sessionId: string]; request: [request: AskRequest | null]; confirmed: [confirmation: InlineAskConfirmation | null]; inspect: [sessionId: string]; custom: []; work: [key: string] }>()
 const id = `yield-${useId()}`
 const documentVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const enabled = computed(() => props.active && documentVisible.value)
 const customInput = ref<HTMLTextAreaElement>()
-const { request, selected, customMode, customText, error, submitting, cancelling, busy: requestBusy, loading, now, answerable, refresh, submit, submitCustom, cancelQuestion: cancelPendingQuestion } = useYieldRequest(
+const { request, roundConfirmation, selected, customMode, customText, error, submitting, cancelling, busy: requestBusy, loading, now, answerable, refresh, submit, submitCustom, submitRound, cancelQuestion: cancelPendingQuestion } = useYieldRequest(
   () => ({ ...props, active: enabled.value }),
 )
 const busy = computed(() => requestBusy.value || props.composerBusy)
-defineExpose({ submitCustom, busy })
+const inlineRound = computed(() => isInlineAskRequest(request.value))
+const roundError = computed(() => inlineRound.value ? error.value : '')
+defineExpose({ submitCustom, submitRound, roundError, busy, loading, refresh })
+watch(roundConfirmation, value => emit('confirmed', value), { flush: 'sync' })
 const inputQuestion = computed(() => !!request.value && isInputRequest(request.value))
 const decisionRequest = computed(() => request.value && !isInputRequest(request.value) ? request.value : null)
 watch(request, (value, previous) => {

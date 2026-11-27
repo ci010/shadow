@@ -6,8 +6,10 @@ import type { SessionState } from './session-store.ts'
 import { delegationOwner } from './execution-scope.ts'
 import { physicalSessionId } from './session-identity.ts'
 import { YieldError } from './yield.ts'
-import { inputTextSchema, type InputAnswer, type InputRecord, type InputRequest } from './input-request.ts'
-import { answerMediaSchema } from './answer-media.ts'
+import { inlineInputAnswersSchema, inlineInputQuestionsSchema, inputTextSchema, type InputAnswer, type InputRecord, type InputRequest } from './input-request.ts'
+import { answerMediaSchema, MAX_ANSWER_ATTACHMENTS } from './answer-media.ts'
+import { supportsInlineAskRound } from '../tools/ask-policy.ts'
+import { isImagePath, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import { workDecisionContextSchema, type WorkDecisionContext } from '../initiatives/work-notes.ts'
 
 interface Dependencies {
@@ -15,6 +17,7 @@ interface Dependencies {
   presence?: (id: string, user?: { channel: string; senderId: string }) => PresenceState
   currentContext?(context: WorkDecisionContext): boolean
   getState(id: string): SessionState | null | undefined
+  resolveAgentName?(state: SessionState): string | undefined
   assertAccess(id: string): void
   hasDecision(id: string): boolean
   timeout(id: string): number | null
@@ -61,7 +64,19 @@ export class InputRequests {
     }
   }
 
-  async ask(question: string, context: ExecutionContext, workContext?: WorkDecisionContext): Promise<InputAnswer> {
+  private assertInlineRound(state: SessionState | null | undefined, context: ExecutionContext): void {
+    // Reply addresses can project Web onto event/session inputs; require direct user provenance too.
+    if (!state || state.sessionId !== context.sessionId || state.projectId !== context.projectId || state.channelSource || state.channelBoundary
+      || state.automation || state.automaticWork || state.statePersistence || state.serviceGeneration
+      || (state.parent && state.parent.index === undefined) || this.callers.has(context.sessionId)
+      || context.inputSource !== 'user' || context.channelAddress || context.isGroup || context.scriptInvocation || context.memoryAccess
+      || !supportsInlineAskRound({ agentName: this.deps.resolveAgentName?.(state), mode: state.mode,
+        channel: context.channel, sessionId: state.sessionId, parentSessionId: state.parentSessionId })) {
+      throw new YieldError('forbidden', 'Inline rounds require a direct user turn in a root Web general session.')
+    }
+  }
+
+  async ask(question: string | { questions: unknown }, context: ExecutionContext, workContext?: WorkDecisionContext): Promise<InputAnswer> {
     context.signal.throwIfAborted()
     const sessionId = context.sessionId
     this.deps.assertAccess(sessionId)
@@ -69,8 +84,19 @@ export class InputRequests {
     if (!state || this.stopped) throw new YieldError('unavailable', 'Input requester is unavailable.')
     if (state.mode === 'call') throw new YieldError('forbidden', 'Leaf calls cannot ask for input.')
     if (this.get(sessionId, true) || this.deps.hasDecision(sessionId)) throw new YieldError('conflict', 'This session already has a pending question.')
-    const text = inputTextSchema.safeParse(question)
-    if (!text.success) throw new YieldError('invalid_request', 'Supply a question of 1-4000 characters.')
+    let questions: InputRequest['questions']
+    let text: string
+    if (typeof question === 'string') {
+      const parsed = inputTextSchema.safeParse(question)
+      if (!parsed.success) throw new YieldError('invalid_request', 'Supply a question of 1-4000 characters.')
+      text = parsed.data
+    } else {
+      this.assertInlineRound(state, context)
+      const parsed = inlineInputQuestionsSchema.safeParse(question.questions)
+      if (!parsed.success) throw new YieldError('invalid_request', 'Supply one to three non-empty questions with exactly two distinct non-empty options each (up to 4000 characters).')
+      questions = parsed.data
+      text = questions[0].content
+    }
     const caller = this.callers.get(sessionId)
     if (context.channel === 'a2a' && !caller) throw new YieldError('unavailable', 'The A2A input caller is no longer available.')
     const parent = delegationOwner(state)
@@ -83,7 +109,8 @@ export class InputRequests {
     const userWait = !caller && !parent ? this.deps.userWait?.(sessionId) : undefined
     const timeout = userWait ? userWait.timeoutMs : this.deps.timeout(sessionId)
     const request: InputRequest = {
-      kind: 'input', id: randomUUID(), sessionId, question: text.data,
+      kind: 'input', id: randomUUID(), sessionId, question: text,
+      ...(questions ? { questions } : {}),
       recipient: { kind: caller ? 'caller' : parent ? 'parent' : 'user', sessionId: parent && !caller ? parent : sessionId },
       origin: { physicalId: physicalSessionId(state), ...(context.toolCallId ? { toolCallId: context.toolCallId } : {}) },
       createdAt: new Date().toISOString(), deadline: timeout === null ? null : new Date(Date.now() + timeout).toISOString(),
@@ -170,6 +197,36 @@ export class InputRequests {
   replyUser(sessionId: string, requestId: string, text: string, channel?: string, senderId?: string, media?: string[]): Promise<InputAnswer> {
     return this.complete(this.user(sessionId, requestId, channel, senderId), text, 'user', media)
   }
+  async replyUserRound(sessionId: string, requestId: string, answers: unknown,
+    validateMedia: (media: string[]) => Promise<void>): Promise<InputAnswer> {
+    const pending = this.user(sessionId, requestId)
+    const questions = pending.request.questions
+    if (!questions) throw new YieldError('invalid_request', 'This input request requires a text reply, not a round.')
+    this.assertInlineRound(this.deps.getState(sessionId), pending.context)
+    const parsed = inlineInputAnswersSchema.safeParse(answers)
+    if (!parsed.success || parsed.data.length !== questions.length) {
+      throw new YieldError('invalid_request', 'Supply exactly one option or non-empty custom answer for each question in order.')
+    }
+    const text = parsed.data.map((answer, index) => {
+      if ('text' in answer) return answer.text
+      if (!questions[index].options.includes(answer.option)) {
+        throw new YieldError('invalid_request', `Answer ${index + 1} must match one of its exact options.`)
+      }
+      return answer.option
+    }).join('\n')
+    const media = parsed.data.flatMap(answer => 'text' in answer ? answer.media ?? [] : [])
+    if (media.length > MAX_ANSWER_ATTACHMENTS) throw new YieldError('invalid_request', 'Too many answer attachments in this round.')
+    if (media.filter(isImagePath).length > MAX_TOOL_IMAGES) {
+      throw new YieldError('invalid_request', `An inline round supports at most ${MAX_TOOL_IMAGES} image attachments.`)
+    }
+    if (media.length) {
+      await validateMedia(media)
+      // Upload validation crosses an async boundary; recheck ownership, deadline and pending phase.
+      this.user(sessionId, requestId)
+      this.assertInlineRound(this.deps.getState(sessionId), pending.context)
+    }
+    return this.settle(pending, { answeredBy: 'user', text, answers: parsed.data, ...(media.length ? { media } : {}) })
+  }
   cancelUser(sessionId: string, requestId: string, channel?: string, senderId?: string): Promise<void> {
     return this.close(this.user(sessionId, requestId, channel, senderId), new DOMException('Input cancelled by user.', 'AbortError'))
   }
@@ -205,14 +262,18 @@ export class InputRequests {
   }
   private complete(pending: Pending, text: string, answeredBy: InputAnswer['answeredBy'], media?: string[]): Promise<InputAnswer> {
     this.find(pending.request.id)
+    if (pending.request.questions) throw new YieldError('invalid_request', 'This inline round requires a complete answers array.')
     const parsed = inputTextSchema.safeParse(text)
     if (!parsed.success) throw new YieldError('invalid_request', 'Reply must contain 1-4000 characters.')
     const attachments = media === undefined ? undefined : answerMediaSchema.safeParse(media)
     if (attachments && !attachments.success) throw new YieldError('invalid_request', 'Invalid answer attachments.')
+    return this.settle(pending, { text: parsed.data, answeredBy, ...(attachments?.data ? { media: attachments.data } : {}) })
+  }
+  private settle(pending: Pending, payload: Omit<InputAnswer, 'requestId' | 'answeredAt'>): Promise<InputAnswer> {
     pending.phase = 'settling'
     if (pending.timer !== undefined) clearTimeout(pending.timer)
-    const answer: InputAnswer = { requestId: pending.request.id, text: parsed.data, answeredBy, answeredAt: new Date().toISOString(),
-      ...(attachments?.data ? { media: attachments.data } : {}) }
+    const { text, answeredBy, ...details } = payload
+    const answer: InputAnswer = { requestId: pending.request.id, text, answeredBy, answeredAt: new Date().toISOString(), ...details }
     return this.track(Promise.resolve().then(() => this.deps.write({ version: 1, request: pending.request, answer })).then(() => {
       this.cleanup(pending)
       if (pending.interrupted) pending.result.reject(pending.interrupted.reason)

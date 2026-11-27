@@ -744,6 +744,7 @@ export class SessionManager {
       presence: (id, user) => this.presenceFor(id, user),
       currentContext: context => this.alignment?.currentContext(context) === true,
       getState: id => this.getSessionState(id),
+      resolveAgentName: state => this.deps.agentTypes.resolve(state.agentType ?? 'general')?.name,
       assertAccess: id => {
         if (this.stopped || this.deleting.has(id)) throw new YieldError('unavailable', 'Input session is unavailable.')
         this.assertFolderAccess(id)

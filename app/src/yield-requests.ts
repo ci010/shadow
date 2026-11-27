@@ -6,6 +6,8 @@ import { createInitialLiveSnapshot } from './initial-live-snapshot.ts'
 import { parseYieldRequest, parseYieldCustomText, MAX_YIELD_CUSTOM_TEXT_LENGTH, type YieldRequest } from '../../src/sessions/yield-contract.ts'
 import { parseInputRequest, type InputRequest } from '../../src/sessions/input-request.ts'
 import { answerMediaSchema, MAX_ANSWER_ATTACHMENTS } from '../../src/sessions/answer-media.ts'
+import { isInlineAskRequest, parseInlineAskReceipt, matchesInlineAnswers, validateInlineAnswers, type InlineAskAnswer } from './inline-ask.ts'
+import type { InlineAskConfirmation } from './inline-ask-history.ts'
 export { MAX_YIELD_CUSTOM_TEXT_LENGTH }
 export type AskRequest = YieldRequest | InputRequest
 export function isInputRequest(request: AskRequest): request is InputRequest { return 'kind' in request && request.kind === 'input' }
@@ -61,6 +63,7 @@ export interface YieldSource {
 
 export function useYieldRequest(source: () => YieldSource) {
   const request = ref<AskRequest | null>(null)
+  const roundConfirmation = ref<InlineAskConfirmation | null>(null)
   const selected = ref('')
   const customMode = ref(false)
   const customText = ref('')
@@ -88,6 +91,7 @@ export function useYieldRequest(source: () => YieldSource) {
   let draftRequestId: string | undefined
   let answeredId: string | undefined
   let answerError = false
+  let recheckInlineBeforeWrite = false
 
   function endpoint(): string {
     const { apiBase, sessionId } = source()
@@ -130,7 +134,8 @@ export function useYieldRequest(source: () => YieldSource) {
       const received = parseYieldResponse(await readResponse(response), sessionId)
       const next = source().expectedRequestId && received?.id !== source().expectedRequestId ? null : received
       if (current !== generation || controller.signal.aborted) return
-      if (next && next.id === answeredId) return
+      if (next && (next.id === answeredId || next.id === roundConfirmation.value?.request.id)) return
+      recheckInlineBeforeWrite = false
       const changed = next?.id !== draftRequestId
       if (changed) {
         selected.value = next && !isInputRequest(next) ? next.defaultOption : ''
@@ -152,13 +157,16 @@ export function useYieldRequest(source: () => YieldSource) {
       }
     }
   }
-  async function mutate(isCancellation: boolean, media?: string[]): Promise<boolean> {
+  async function mutate(isCancellation: boolean, media?: string[], round?: { requestId: string; answers: readonly InlineAskAnswer[] }): Promise<boolean> {
     const question = request.value
     if (!answerable.value || !question || write) return false
     const input = isInputRequest(question)
+    const inline = isInlineAskRequest(question)
+    const answers = inline && round?.requestId === question.id ? validateInlineAnswers(question.questions, round.answers) : undefined
+    if (inline ? !answers || isCancellation || recheckInlineBeforeWrite : !!round) return false
     const custom = !isCancellation && (input || customMode.value)
     let option = selected.value
-    if (!isCancellation) {
+    if (!isCancellation && !answers) {
       if (custom) {
         try { option = parseYieldCustomText(customText.value) }
         catch (cause) {
@@ -183,6 +191,7 @@ export function useYieldRequest(source: () => YieldSource) {
       const response = await fetch(endpoint(), {
         method: isCancellation ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(isCancellation ? { requestId: question.id }
+          : answers ? { requestId: question.id, answers }
           : { requestId: question.id, ...(input ? { text: option } : custom ? { customText: option } : { option }),
             ...(media?.length ? { media } : {}) }),
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]),
@@ -193,6 +202,13 @@ export function useYieldRequest(source: () => YieldSource) {
         if (!value || typeof value !== 'object' || !('cancelled' in value) || value.cancelled !== true) {
           throw new Error(t('The server did not confirm cancellation. Reload the question before trying again.'))
         }
+      } else if (inline && answers) {
+        const receipt = value && typeof value === 'object' && 'answer' in value
+          ? parseInlineAskReceipt(question.questions, value.answer) : undefined
+        if (!receipt || receipt.requestId !== question.id || !matchesInlineAnswers(receipt.answers, answers)) {
+          throw new Error(t('The server did not confirm your answer. Reload the question before trying again.'))
+        }
+        roundConfirmation.value = { request: question, receipt }
       } else if (!value || typeof value !== 'object' || !('answer' in value) || !value.answer || typeof value.answer !== 'object'
         || !('requestId' in value.answer) || value.answer.requestId !== question.id
         || (input ? !('text' in value.answer) || value.answer.text !== option : !('option' in value.answer) || value.answer.option !== option)
@@ -215,6 +231,7 @@ export function useYieldRequest(source: () => YieldSource) {
     } catch (cause) {
       if (current === generation && !controller.signal.aborted) {
         answerError = true
+        recheckInlineBeforeWrite = inline
         error.value = cause instanceof Error ? cause.message : isCancellation
           ? t('Could not cancel the task. Check the connection and retry.')
           : t('Could not submit your answer. Check the connection and retry.')
@@ -239,12 +256,14 @@ export function useYieldRequest(source: () => YieldSource) {
       && apiBase === previous?.[0] && sessionId === previous?.[1]
     stopRequests(preserveWrite)
     request.value = null
+    if (apiBase !== previous?.[0] || sessionId !== previous?.[1]) roundConfirmation.value = null
     if (!preserveDraft) {
       selected.value = error.value = ''
       customMode.value = false
       customText.value = ''
       draftRequestId = answeredId = undefined
       answerError = false
+      recheckInlineBeforeWrite = false
     }
     if (!active || !sessionId || !waiting) return
     now.value = Date.now()
@@ -295,10 +314,11 @@ export function useYieldRequest(source: () => YieldSource) {
     stopRequests()
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', visibilityChanged)
   })
-  return { request, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh,
+  return { request, roundConfirmation, selected, customMode, customText, error, submitting, cancelling, busy, loading, now, answerable, refresh,
     submit: () => mutate(false), cancelQuestion: () => mutate(true),
+    submitRound: (requestId: string, answers: readonly InlineAskAnswer[]) => mutate(false, undefined, { requestId, answers }),
     submitCustom: (requestId: string, text: string, media: string[] = []) => {
-      if (!answerable.value || busy.value || request.value?.id !== requestId) {
+      if (!answerable.value || busy.value || request.value?.id !== requestId || isInlineAskRequest(request.value)) {
         error.value = t('This question changed or is unavailable. Reload it before sending your answer.')
         return Promise.resolve(false)
       }

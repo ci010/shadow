@@ -2,7 +2,17 @@ import { resolvePrompt } from './prompt-version.ts'
 import type { SessionPromptContext } from './builder.ts'
 import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/execution-mode.ts'
 import { isDelegationToolAllowed, isToolAllowed } from '../../utils/tool-allow.ts'
-import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-policy.ts'
+import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE, supportsInlineAskRound } from '../../tools/ask-policy.ts'
+
+function inlineAskGuidance(ctx: SessionPromptContext, mode: string): string {
+  if (ctx.isGroup || ctx.channelAddress || !supportsInlineAskRound({ agentName: ctx.agent.name, mode, channel: ctx.channel,
+    sessionId: ctx.sessionId, parentSessionId: ctx.parentSessionId })) return ''
+  return `### Clarification rounds with the user
+
+Before substantial work, inspect the conversation and available evidence. Gather material uncertainties before asking; look up facts and resolve routine choices yourself. On a direct user turn, prefer the inline form for clarification, including facts, design preferences and intended scope within authorized work. Keep \`kind=decision\` for choices that need the decision record or explicit authorization; keep dedicated owner confirmations unchanged. Use \`ask({questions:[{content, options}, ...]})\` for one round of up to three independent questions the user can answer now, or \`ask({content, options})\` for one question. Each question offers exactly two distinct choices; the user can also type a free reply. Give your recommendation and the tradeoff in the content. Do not scatter independent questions across separate waits or include questions that depend on answers still open. After the round, clarify misunderstandings and ask the next dependent round only if needed. When there is enough to proceed, briefly state material conclusions and get back to work. During execution, reopen clarification only if new evidence or a newly discovered material choice blocks progress; explain why it arose now. An Ask reply is not authorization for protected actions.
+
+Waiting for CI, a review, a build, or another external system is still your responsibility: use the appropriate follow-up mechanism rather than asking the user to watch it. Finish clarification without marking the session complete unless the work itself is complete and no follow-up remains.`
+}
 
 /** Classic guideline renderer, kept for existing V1 prompt assembly. */
 export function toolsGuideline(ctx: SessionPromptContext): string {
@@ -55,6 +65,8 @@ Respect custom answers without treating them as approval of the original proposa
 ${allows('reply')
     ? 'Use reply with the exact request_id to answer a pending request. Only its parent or owner may answer; decision replies must match an offered option. Messages and final responses do not resolve pending requests.'
     : ''}`.trim())
+    const clarification = inlineAskGuidance(ctx, mode)
+    if (clarification) sections.push(clarification)
   }
 
   if ((ctx.promptVersion ?? resolvePrompt(ctx.agent).version) === 'v2' && mode === 'session') {
@@ -149,6 +161,10 @@ export function toolsContract(ctx: SessionPromptContext): string {
     if (!supportsAsk) sections.push('### Questions in chat\n\nThe ask tool is unavailable in QQ and Discord conversations. Protected changes still require the dedicated owner approval flow in Shadow.')
     if (supportsAsk && offers('ask')) {
       sections.push('### Requests\n\n`ask(kind=input)` returns information, never authorization. `ask(kind=decision)` requires two distinct choices and a default that exactly matches one; the UI adds a custom-response option. A default is not human approval. Unanswered decisions are deferred without approval; `approved: false` permits only investigation or authorized unaffected work.')
+    }
+    if (supportsAsk && offers('ask')) {
+      const clarification = inlineAskGuidance(ctx, mode)
+      if (clarification) sections.push(clarification)
     }
     if (offers('reply')) {
       sections.push('`reply` requires the exact `request_id`. Only the stored parent or remote task owner may answer; decision replies must match an offered option. Messages and final responses do not resolve pending requests.')

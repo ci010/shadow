@@ -19,8 +19,13 @@ const parameters = {
     reconsiders: { type: 'object', description: 'Decision only: earlier reference {sessionId, physicalId, requestId} being revisited after investigation, deferral or invalidation. Historical link only; do not put invalidated premises in sources.' },
     reference: { type: 'object', description: 'For invalidate: own decision reference {sessionId, physicalId, requestId}.' },
     reason: { type: 'string', description: 'For invalidate: which premise changed and why dependent decisions need revalidation.' },
-    question: { type: 'string', description: 'A clear question for missing input or a consequential decision.' },
-    options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2, uniqueItems: true, description: 'Decision only: two distinct non-empty suggested choices. The UI automatically provides a third, custom-response entry; do not generate an Other or free-text option.' },
+    question: { type: 'string', description: 'Legacy input or decision question.' },
+    content: { type: 'string', description: 'Single inline question (general direct Web conversations only). Combine with options, without kind or action.' },
+    questions: { type: 'array', minItems: 1, maxItems: 3, description: 'Inline round of 1–3 questions (general direct Web conversations only). Supply only questions, without kind or action.',
+      items: { type: 'object', properties: {
+        content: { type: 'string' }, options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2, uniqueItems: true },
+      }, required: ['content', 'options'], additionalProperties: false } },
+    options: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2, uniqueItems: true, description: 'Two distinct non-empty suggested choices for an inline question or legacy decision. The UI provides a custom-response entry; do not generate an Other or free-text option.' },
     default_option: { type: 'string', description: 'Decision only: exactly one of options; not human authorization. An unanswered human request is deferred without approval.' },
     independent: { type: 'boolean', description: 'Decision only: explicitly unrelated to waiting child decisions. Otherwise cite the live child in sources when escalating. Cannot combine with sources.' },
     sources: { type: 'array', minItems: 1, maxItems: 3, description: 'Decision only: optional existing references. Copy an answer receipt’s reference, or sessionId, origin.physicalId and id (as requestId) from a received request. Links provide context, not permission. Citing a live direct child links its escalation: deferral/investigation resumes that child without approval. When a child waits, cite it or mark the question independent.',
@@ -49,6 +54,14 @@ export class AskTool implements Tool<ToolResult> {
     }
     const denied = ctx.tools?.executionDenial?.('ask', args)
     if (denied) return denied
+    if (Object.hasOwn(args, 'content') || Object.hasOwn(args, 'questions')) {
+      const keys = Object.keys(args)
+      if (keys.length === 1 && Object.hasOwn(args, 'questions')) return this.askInput({ questions: args.questions }, ctx)
+      if (keys.length === 2 && Object.hasOwn(args, 'content') && Object.hasOwn(args, 'options')) {
+        return this.askInput({ questions: [{ content: args.content, options: args.options }] }, ctx)
+      }
+      throw new YieldError('invalid_request', 'For an inline question use only content and options, or supply only questions for an inline round.')
+    }
     const action = args.action === undefined ? 'ask' : args.action
     if (action === 'context' && Object.keys(args).every(key => key === 'action')) return JSON.stringify(await this.yields.context(ctx.sessionId))
     if (action === 'invalidate' && Object.keys(args).every(key => ['action', 'reference', 'reason'].includes(key))) {
@@ -67,13 +80,7 @@ export class AskTool implements Tool<ToolResult> {
     if ((args.workKey || args.decisionKey) && !workContext) throw new YieldError('unavailable', 'Project work context is unavailable.')
     if (action === 'ask' && args.kind === 'input' && Object.keys(args).every(key => ['action', 'kind', 'question', 'workKey', 'decisionKey'].includes(key))) {
       if (typeof args.question !== 'string') throw new YieldError('invalid_request', 'Input requires a question.')
-      try { return await this.answerResult(await this.inputs.ask(args.question, ctx, workContext), ctx) }
-      catch (error) {
-        if (error instanceof YieldError && error.code === 'unavailable') return JSON.stringify({
-          kind: 'input', status: 'unavailable', approved: false, reason: error.message,
-        })
-        throw error
-      }
+      return this.askInput(args.question, ctx, workContext)
     }
     if (action !== 'ask' || args.kind !== 'decision'
       || Object.keys(args).some(key => !['action', 'kind', 'question', 'options', 'default_option', 'sources', 'independent', 'brief', 'reconsiders', 'workKey', 'decisionKey'].includes(key))) {
@@ -91,6 +98,17 @@ export class AskTool implements Tool<ToolResult> {
     return this.answerResult(await this.yields.ask(ctx.sessionId, question, ctx.signal,
       ctx.inputSource === 'user' ? { channel: ctx.channel, senderId: ctx.senderId } : undefined,
       ctx.inputSource === 'user' ? ctx.platformMessageId : undefined, ctx.toolCallId, ctx.workStamps), ctx)
+  }
+
+  private async askInput(question: Parameters<InputRequests['ask']>[0], ctx: ExecutionContext,
+    workContext?: Parameters<InputRequests['ask']>[2]): Promise<ToolResult> {
+    try { return await this.answerResult(await this.inputs.ask(question, ctx, workContext), ctx) }
+    catch (error) {
+      if (error instanceof YieldError && error.code === 'unavailable') return JSON.stringify({
+        kind: 'input', status: 'unavailable', ...(typeof question === 'string' ? { approved: false } : {}), reason: error.message,
+      })
+      throw error
+    }
   }
 
   private async answerResult(answer: InputAnswer | YieldOutcome, ctx: ExecutionContext): Promise<ToolResult> {

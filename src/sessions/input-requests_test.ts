@@ -8,7 +8,7 @@ import type { ExecutionContext } from '../tools/context.ts'
 
 function fixture(write?: (record: InputRecord) => Promise<void>, currentContext?: () => boolean) {
   const states: Record<string, SessionState> = {
-    'web:root': { sessionId: 'web:root', segmentIndex: 0, mode: 'session' },
+    'web:root': { sessionId: 'web:root', segmentIndex: 0, mode: 'session', agentType: 'general' },
     child: { sessionId: 'child', segmentIndex: 0, mode: 'task', parentSessionId: 'web:root' },
     'web:other': { sessionId: 'web:other', segmentIndex: 0, mode: 'session' },
     'qq:group:one': { sessionId: 'qq:group:one', segmentIndex: 0, mode: 'session' },
@@ -21,7 +21,8 @@ function fixture(write?: (record: InputRecord) => Promise<void>, currentContext?
   let failDelivery = false
   const inputs = new InputRequests({
     currentContext,
-    getState: id => states[id], assertAccess: () => {}, hasDecision: () => decision,
+    getState: id => states[id], resolveAgentName: state => state.agentType,
+    assertAccess: () => {}, hasDecision: () => decision,
     timeout: () => timeout, changed: () => {},
     write: async record => { await write?.(record); records.push(structuredClone(record)) },
     notify: async () => { if (failDelivery) throw new Error('Delivery unavailable') },
@@ -125,6 +126,32 @@ test('timeouts, cancellation and failed delivery do not invent answers', async (
     assert.equal(f.records.some(record => record.answer), false)
     assert.ok(f.records.at(-1)?.closed)
   }
+})
+
+test('an inline round times out without inventing answers', async () => {
+  const f = fixture()
+  f.deadline()
+  await assert.rejects(f.inputs.ask({ questions: [{ content: 'Which format?', options: ['CSV', 'JSON'] }] }, f.context()), /deadline expired/)
+  await f.inputs.settled()
+  assert.equal(f.inputs.get('web:root'), null)
+  assert.equal(f.records.length, 2)
+  assert.equal(f.records[1].answer, undefined)
+  assert.equal(f.records[1].closed?.status, 'failed')
+})
+
+test('inline upload validation cannot settle a round cancelled while validation was in flight', async () => {
+  const f = fixture()
+  const pending = f.inputs.ask({ questions: [{ content: 'Which format?', options: ['CSV', 'JSON'] }] }, f.context())
+  const rejected = assert.rejects(pending, /cancelled by user/)
+  await setImmediate()
+  const request = f.inputs.get('web:root')!
+  const uploads = Promise.withResolvers<void>()
+  const submit = f.inputs.replyUserRound(request.sessionId, request.id, [{ text: 'Custom', media: ['attachment'] }], () => uploads.promise)
+  await f.inputs.cancelUser(request.sessionId, request.id)
+  uploads.resolve()
+  await assert.rejects(submit, /no longer pending/)
+  await rejected
+  assert.equal(f.records.some(record => record.answer), false)
 })
 
 test('conflicting decisions, duplicate asks, malformed input and leaf calls are rejected', async () => {

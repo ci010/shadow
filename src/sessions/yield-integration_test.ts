@@ -303,6 +303,87 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
+  test(`${Store.name}: direct Web inline round settles once with a validated ordered batch`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store)
+      const sessionId = 'web:inline'
+      const questions = [{ content: 'Which format?', options: ['CSV', 'JSON'] }, { content: 'Which scope?', options: ['Full', 'Sample'] }]
+      const uploadRoot = join(sessionWorkspacePath(workspace, sessionId), 'uploads')
+      const file = join(uploadRoot, 'notes.txt')
+      const foreign = join(workspace, 'outside.txt')
+      try {
+        await f.sessions.start()
+        await f.sessions.buildSession(sessionId, undefined, { agentType: 'general' })
+        await f.sessions.buildSession('web:other', undefined, { agentType: 'general' })
+        await mkdir(uploadRoot, { recursive: true })
+        await Promise.all([writeFile(file, 'Synthetic upload'), writeFile(foreign, 'Outside the upload root')])
+        await f.sessions.deliver(sessionId, channelMessageInput({ channel: 'web', chatId: 'inline', senderId: 'web-user',
+          messageId: 'inline-turn', content: 'Help me choose.', timestamp: new Date().toISOString() }))
+        await waitFor(() => f.calls.length === 1)
+        f.calls[0].resolve({ content: '', toolCalls: [{ id: 'inline-call', name: 'ask', arguments: { questions } }] })
+        await waitFor(() => !!f.sessions.inputs.get(sessionId))
+        const { request } = await (await f.app.request(`/api/sessions/${sessionId}/ask`)).json()
+        assert.equal(request.kind, 'input')
+        assert.equal(request.origin.toolCallId, 'inline-call')
+        assert.equal(request.question, questions[0].content)
+        assert.deepEqual(request.questions, questions)
+        const requestId = request.id
+        const post = (body: object, key = sessionId) => f.app.request(`/api/sessions/${key}/ask`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, ...body }),
+        })
+        const answers = [{ option: 'CSV' }, { text: 'Start in the west', media: [file] }]
+        for (const invalid of [
+          { text: 'Legacy bypass' }, { option: 'CSV' }, { answers, text: 'Extra argument' },
+          { answers: answers.slice(0, 1) }, { answers: [{ option: 'csv' }, answers[1]] },
+          { answers: [{ option: 'Sample' }, answers[1]] }, { answers: [answers[0], { text: ' ' }] },
+          { answers: [{ option: 'CSV', media: [file] }, answers[1]] },
+          { answers: [answers[0], { text: 'Bad attachment', media: [foreign] }] },
+          { answers: [{ text: 'Too many files', media: Array(17).fill(file) }, { text: 'More files', media: Array(16).fill(file) }] },
+          { answers: [answers[0], { text: 'Too many images', media: Array(5).fill(join(uploadRoot, 'image.png')) }] },
+          { answers: [answers[0], { text: 'Both choices', option: 'Full' }] },
+        ]) assert.equal((await post(invalid)).status, 400, JSON.stringify(invalid))
+        assert.equal((await post({ answers }, 'web:other')).status, 403)
+        assert.equal(f.sessions.inputs.get(sessionId)?.id, requestId)
+        assert.equal(f.calls.length, 1)
+        const response = await post({ answers })
+        assert.equal(response.status, 200)
+        const { answer } = await response.json()
+        assert.deepEqual(answer, { requestId, text: 'CSV\nStart in the west', answeredBy: 'user', answeredAt: answer.answeredAt, answers, media: [file] })
+        assert.equal((await post({ answers })).status, 404)
+        await waitFor(() => f.calls.length === 2)
+        const results = f.calls[1].messages.filter(item => item.tool_call_id === 'inline-call')
+        assert.equal(results.length, 1)
+        const content = results[0].content
+        assert.equal(typeof content, 'string', 'Text-only attachment parts are combined in model history')
+        assert.deepEqual(JSON.parse(String(content).split('\n', 1)[0]), answer)
+        assert.ok(String(content).includes(`[file: ${file}]`))
+        const nextQuestion = { content: 'Which delimiter for the CSV?', options: ['Comma', 'Tab'] }
+        f.calls[1].resolve({ content: '', toolCalls: [{ id: 'inline-follow-on', name: 'ask', arguments: nextQuestion }] })
+        await waitFor(() => !!f.sessions.inputs.get(sessionId))
+        const { request: next } = await (await f.app.request(`/api/sessions/${sessionId}/ask`)).json()
+        assert.notEqual(next.id, requestId)
+        assert.equal(next.origin.toolCallId, 'inline-follow-on')
+        assert.deepEqual(next.questions, [nextQuestion])
+        assert.equal((await post({ answers })).status, 404, 'A stale round cannot settle the next one')
+        const nextResponse = await post({ requestId: next.id, answers: [{ option: 'Tab' }] })
+        assert.equal(nextResponse.status, 200)
+        const { answer: nextAnswer } = await nextResponse.json()
+        assert.deepEqual(nextAnswer.answers, [{ option: 'Tab' }])
+        await waitFor(() => f.calls.length === 3)
+        assert.deepEqual(JSON.parse(String(f.calls[2].messages.find(item => item.tool_call_id === 'inline-follow-on')?.content)), nextAnswer)
+        f.calls[2].resolve(done())
+        await waitFor(() => f.facts.length === 1)
+        const records = []
+        for await (const event of store.readSessionLog(request.origin.physicalId)) if (event.input_request) records.push(event.input_request)
+        assert.deepEqual(records, [{ version: 1, request }, { version: 1, request, answer },
+          { version: 1, request: next }, { version: 1, request: next, answer: nextAnswer }])
+        assert.deepEqual(await f.sessions.getYieldRecords(sessionId), [])
+      } finally { await f.sessions.stop(); await store.close?.() }
+    })
+  })
+
   test(`${Store.name}: ordinary input uses the request route and preserves paired tool history without decision records`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

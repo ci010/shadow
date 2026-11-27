@@ -781,16 +781,39 @@ export function sessionsApiPlugin(
       let body: unknown
       try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
       const cancel = c.req.method === 'DELETE'
+      const validateUploads = async (media: string[]) => {
+        const state = sessions.getSessionState(key)
+        const workdir = state && resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirLookup).workdir
+        if (!key.startsWith('web:') || !state || !workdir?.available) {
+          throw new TypeError('Answer attachments require an available web conversation.')
+        }
+        await validateAnswerUploads(sessions.workspace, state.workspaceRoot ?? key, media, c.req.raw.signal, workdir.locality === 'remote')
+      }
+      if (isConfigObject(body) && Object.hasOwn(body, 'answers')) {
+        if (cancel || typeof body.requestId !== 'string' || !body.requestId
+          || Object.keys(body).some(key => key !== 'requestId' && key !== 'answers')) {
+          return c.json({ error: 'invalid_request', message: 'Supply only requestId and answers for an inline round.' }, 400)
+        }
+        try {
+          const answer = await sessions.inputs.replyUserRound(key, body.requestId, body.answers, async media => {
+            try { await validateUploads(media) }
+            catch (error) {
+              if (!(error instanceof TypeError)) throw error
+              throw new YieldError('invalid_request', error.message)
+            }
+          })
+          return c.json({ answer })
+        } catch (error) {
+          if (!(error instanceof YieldError)) throw error
+          return c.json({ error: error.code, message: error.message }, error.code === 'not_found' ? 404 : error.code === 'forbidden' ? 403
+            : error.code === 'conflict' ? 409 : error.code === 'invalid_request' ? 400 : 503)
+        }
+      }
       let answerMedia: string[] | undefined
       if (isConfigObject(body) && body.media !== undefined) {
         const parsed = answerMediaSchema.safeParse(body.media)
         if (cancel || !parsed.success || typeof body.option === 'string') return c.json({ error: 'invalid_request', message: 'Attachments require a custom answer.' }, 400)
-        const state = sessions.getSessionState(key)!
-        const { workdir } = resolveSessionLocations(sessions.workspace, state, undefined, sessions.workdirLookup)
-        if (!key.startsWith('web:') || !workdir.available) {
-          return c.json({ error: 'invalid_request', message: 'Answer attachments require an available web conversation.' }, 400)
-        }
-        try { await validateAnswerUploads(sessions.workspace, state.workspaceRoot ?? key, parsed.data, c.req.raw.signal, workdir.locality === 'remote') }
+        try { await validateUploads(parsed.data) }
         catch (error) {
           if (!(error instanceof TypeError)) throw error
           return c.json({ error: 'invalid_request', message: error.message }, 400)

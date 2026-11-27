@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
-import { mkdir, rm } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -31,13 +31,15 @@ test('session exchanges use fixed-height preview cards with accessible animated 
 test('call and task responses share five-line faded preview cards and the tool rail width', renderedOptions, t => renderConversation(t, 'response-cards'))
 test('wide asymmetric conversation keeps users right and AI cards full-width across themes and desktop/mobile', renderedOptions, t => renderConversation(t, 'reading-layout'))
 
-async function renderConversation(t: TestContext, scenario: 'presentation' | 'response-audience' | 'events' | 'admin-navigation' | 'message-direction' | 'session-exchanges' | 'response-cards' | 'reading-layout' = 'presentation') {
+test('inline Ask cards render Markdown, route each control, and retain inert answers in the conversation', renderedOptions, t => renderConversation(t, 'inline-ask'))
+
+async function renderConversation(t: TestContext, scenario: 'presentation' | 'response-audience' | 'events' | 'admin-navigation' | 'message-direction' | 'session-exchanges' | 'response-cards' | 'reading-layout' | 'inline-ask' = 'presentation') {
   const directory = resolve(root, '.test-artifacts', `conversation-${randomUUID()}`)
   await mkdir(directory, { recursive: true })
   t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 12, retryDelay: 250 }))
   const { descriptor } = parse(readFileSync(resolve(root, 'app', 'src', 'components', 'ChatTab.vue'), 'utf8'))
   const template = descriptor.template!.content.replaceAll('\r\n', '\n')
-  const start = template.indexOf('<template v-for="(msg, idx) in displayMessages"')
+  const start = template.indexOf('<template v-for="{ msg, idx } in mountedHistoryRows"')
   const end = template.indexOf('<IoRequestCard v-for="run in ioAfter.get(-1)"')
   assert(start >= 0 && end > start)
   const streamStart = template.indexOf('<!-- Streaming response -->')
@@ -71,10 +73,15 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
   assert.deepEqual(styles.errors, [])
   const server = await createServer({
     configFile: false, root: resolve(root, 'app'), logLevel: 'error', cacheDir: resolve(directory, 'vite-cache'),
+    optimizeDeps: { noDiscovery: true, include: ['vue', 'vue-router', 'vue-i18n', 'dompurify', 'zod', 'marked'] },
     plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
-      name: 'synthetic-conversation',
-      resolveId: id => ['/conversation-fixture.ts', '/conversation-rows.js', '/conversation-style.css'].includes(id) ? `\0${id}` : undefined,
+      name: 'synthetic-conversation', enforce: 'pre',
+      resolveId(id) {
+        if (['/conversation-fixture.ts', '/conversation-rows.js', '/conversation-style.css'].includes(id)) return `\0${id}`
+        if (id.endsWith('/open-file-viewer-sdk') || id.endsWith('/open-file-viewer-sdk.ts')) return '\0unused-rich-file-sdk'
+      },
       load(id) {
+        if (id === '\0unused-rich-file-sdk') return 'export function mountFileViewer(){throw Error("Rich file SDK outside fixture scope")}'
         if (id === '\0/conversation-rows.js') return ts.transpileModule(compiled.code, {
           compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
         }).outputText
@@ -94,6 +101,10 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
           import YieldDecision from '/src/components/YieldDecision.vue';
           import InputQuestion from '/src/components/InputQuestion.vue';
           import { inlineInputQuestions } from '/src/input-history.ts';
+          import { inlineAskRounds } from '/src/inline-ask-history.ts';
+          import { historyPresentationRows } from '/src/progressive-history.ts';
+          import MarkdownContent from '/src/components/MarkdownContent.vue';
+          import InlineAskRound from '/src/components/InlineAskRound.vue';
           import SessionMessageDisclosure from '/src/components/SessionMessageDisclosure.vue';
           import { inlineYieldDecisions } from '/src/yield-history.ts';
           import MessageTimestamp from '/src/components/MessageTimestamp.vue';
@@ -113,6 +124,8 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
             streaming:false, streamPhase:undefined, streamContent:'', streamMedia:[], streamTimestamp:null, streamResponseContext:undefined, isDirectChat:true, requestBusy:false, currentRecovery:null,
             embedded:false, enableChildPane:false, navigation:[], apiBase:location.origin, decisionRecords:[], decisionRecordError:'', installation:{uiScopes:[]},
             compactionFixture:false, previousPhysicalId:null, unlinkedExecutions:[], childSessionId:null,
+            inlineAsk:null, inlineDraft:null, submissionBusy:false, pastingFiles:false, pickingContext:false, imageEditsBusy: new Set(),
+            yieldQuestion:null, runResult:null, currentWorkdir:undefined, timelineBoundaries:new Map(),
             executionFixtures:{11:{mode:'task',label:'Compile and finish native helper',agentType:'sub',
               sessionId:'web:peer',stage:'completed',blocked:false,arguments:'{"mode":"task"}',receipt:'Task completed.'}},
             headingTopic:{ title:'Daily preliminary review', goal:'Preserve independently verifiable review results.',
@@ -246,10 +259,27 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
               {sessionId:'web:peer-3',label:'Brand kit review / ' + 'UnbrokenTitle'.repeat(24)},
             ];
           };
+          window.__showInlineAsk = (phase, single = false) => {
+            const first = { content:'**Which source?**', options:['First source','Alternative'] };
+            const questions = single ? [first] : [first, {content:'Which output?',options:['Brief summary','Full notes']}];
+            const id = 'inline-fixture';
+            const timestamp = '2026-10-12T10:00:00Z';
+            const call = { role:'assistant', event:'tool_call', content:'', toolCallId:'round-call', timestamp,
+              toolCall:{ name:'ask', arguments:single ? first : {questions} } };
+            const answers = [{option:'First source'}, {text:'<img src=x onerror=alert(1)> User-written answer'}];
+            state.messages = phase === 'unlinked' ? [] : [call];
+            state.loadingHistory = false; state.executionFixtures = {}; state.navigation = [];
+            state.inlineAsk = phase === 'history' ? null : { kind:'input', id, question:first.content, questions, deadline:null,
+              sessionId:state.activeSessionId, recipient:{kind:'user',sessionId:state.activeSessionId},
+              origin:{physicalId:'owner-0',toolCallId:'round-call'}, createdAt:timestamp };
+            state.inlineDraft = phase === 'history' ? null : { answers:questions.map(() => undefined) };
+            if (phase === 'history') state.messages.push({role:'tool',event:'tool_result',toolCallId:'round-call',content:JSON.stringify({
+              requestId:id, text:'recorded', answeredBy:'user', answeredAt:timestamp, answers:answers.slice(0,questions.length) })});
+          };
           const empty = { render:() => null };
           createApp({
             __scopeId:'data-v-fixture',
-            components:{ ReasoningItem, MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, InputQuestion, SessionMessageDisclosure,
+            components:{ InlineAskRound, MarkdownContent, ReasoningItem, MessageAction, ConversationSkeleton, ToolActivityGroup, MessageTimestamp, SessionActivity, YieldDecision, InputQuestion, SessionMessageDisclosure,
               SessionHeading, SegmentNavigation, ConversationSummary, ExecutionMessage, ConversationEvent, CommandResult:empty,
               MessageAttachments:empty, IoRequestCard:empty },
             render,
@@ -258,6 +288,15 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
               const messageActions = computed(() => inlineMessageActions(state.messages, sessions));
               const yieldDecisions = computed(() => inlineYieldDecisions(state.messages, null, state.decisionRecords));
               const inputQuestions = computed(() => inlineInputQuestions(state.messages));
+              const askRounds = computed(() => inlineAskRounds(state.messages, state.inlineAsk));
+              const displayMessages = computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) })));
+              const inlineExecutions = computed(() => ({entries:new Map(Object.entries(state.executionFixtures).map(([index, value]) => [Number(index), value]))}));
+              const toolActivity = computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded,
+                ...inputQuestions.value.excluded, ...askRounds.value.excluded, ...Object.keys(state.executionFixtures).map(Number), 12])));
+              const mountedHistoryRows = computed(() => historyPresentationRows(displayMessages.value, {
+                entries:[inlineExecutions.value.entries, toolActivity.value, messageActions.value.entries, yieldDecisions.value.entries, inputQuestions.value.entries, askRounds.value.entries],
+                after:[yieldDecisions.value.after], boundaries:state.timelineBoundaries,
+              }));
               const nav = useConversationNavigation({
                 props:{ managed:true, get embedded() { return state.embedded }, get enableChildPane() { return state.enableChildPane },
                   sessionId:'web:owner', projectId:'fixture' },
@@ -265,11 +304,15 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
                 sessions:() => sessions, reset(){}, refresh(){}, mounted:() => true, newDraft(){},
               });
               return { ...toRefs(state), t, formatNumber, messageActions, yieldDecisions, inputQuestions, SessionMessageDisclosure,
-                displayMessages:computed(() => state.messages.map(msg => ({ ...msg, attachmentBody:messageAttachments(msg.content) }))),
-                inlineExecutions:computed(() => ({entries:new Map(Object.entries(state.executionFixtures).map(([index, value]) => [Number(index), value]))})),
+                displayMessages, mountedHistoryRows, historyRowKey:({idx}) => String(idx), inlineExecutions, toolActivity,
                 ioAfter:new Map(), expandedThinking:new Set(), setThinkingExpanded(){},
-                toolActivity:computed(() => groupToolActivity(state.messages, new Set([...messageActions.value.excluded, ...yieldDecisions.value.excluded, ...inputQuestions.value.excluded,
-                  ...Object.keys(state.executionFixtures).map(Number), 12]))),
+                askRounds, canEditAskRound:round => round.status === 'waiting-user' && round.requestId === state.inlineAsk?.id,
+                domId:key => key, yieldDeadlineText:() => '',
+                chooseInlineOption(id, index, option) {
+                  state.navigation.push({id,index,option}); state.inlineDraft.answers[index] = {option};
+                },
+                focusInlineQuestion(id, index) { state.navigation.push({id,index,custom:true}); state.inlineDraft.focused = index; },
+                submitStagedInlineAnswers(id) { state.navigation.push({id,answers:state.inlineDraft.answers.map(answer => ({ ...answer }))}); },
                 inspectExecution:nav.inspectExecution, sourceForEvent:meta => meta.attrs['source-session-id'] ? ({
                   ...sessions[0],sessionId:meta.attrs['source-session-id'],
                   mode:meta.type === 'exec-complete' || meta.attrs['source-session-id'] === 'web:owner' ? 'session' : 'task',
@@ -327,7 +370,8 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
   await server.listen()
   t.after(() => server.close())
   assert.ok(server.resolvedUrls?.local[0])
-  await build({
+  if (scenario === 'inline-ask') await writeFile(resolve(directory, 'main.cjs'), inlineAskBrowser)
+  else await build({
     entryPoints: [resolve(root, 'desktop', 'tests', 'fixtures', 'conversation-presentation-smoke.ts')],
     outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs',
     target: 'node24', external: ['electron'], logLevel: 'silent',
@@ -356,3 +400,62 @@ async function renderConversation(t: TestContext, scenario: 'presentation' | 're
   assert.equal(code, 0, output)
   assert.match(output, /CONVERSATION_SMOKE_OK/)
 }
+
+const inlineAskBrowser = String.raw`
+const assert = require('node:assert/strict')
+const { app, BrowserWindow } = require('electron')
+const { join } = require('node:path')
+app.setPath('userData', join(process.cwd(), 'profile'))
+app.whenReady().then(async () => {
+  const win = new BrowserWindow({ show: false, width: 1110, height: 800, webPreferences: { sandbox: true, backgroundThrottling: false } })
+  const errors = []
+  win.webContents.on('console-message', details => { if (details.level === 'error') errors.push(details.message) })
+  const page = async script => {
+    try { return await win.webContents.executeJavaScript(script) }
+    catch (error) { throw new Error('Renderer failed: ' + script + '\n' + errors.join('\n'), { cause: error }) }
+  }
+  const frame = () => page('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+  await win.loadURL(new URL('__conversation', process.env.CONVERSATION_SMOKE_URL).href)
+  const readyBy = Date.now() + 15_000
+  while (!await page('!!document.querySelector(".conversation-skeleton") && typeof window.__showInlineAsk === "function"')) {
+    if (Date.now() >= readyBy) throw new Error('Fixture did not mount: ' + errors.join('\n'))
+    await require('node:timers/promises').setTimeout(50)
+  }
+  await page('window.__showInlineAsk("unlinked", true)')
+  await frame()
+  assert.equal(await page('document.querySelectorAll(".ask-card").length'), 1)
+  assert.equal(await page('document.querySelector(".ask-card strong").textContent'), 'Which source?')
+  assert.equal(await page('document.querySelectorAll(".ask-card button").length'), 3)
+  assert.equal(await page('document.querySelectorAll("[data-inline-ask-submit]").length'), 0)
+  await page('document.querySelector(".ask-card button").click()')
+  assert.equal(await page('window.__conversationFixture.navigation[0].option'), 'First source')
+  await page('window.__showInlineAsk("linked")')
+  await frame()
+  assert.equal(await page('document.querySelectorAll(".ask-card").length'), 2)
+  assert.equal(await page('document.querySelector("[data-inline-ask-submit]").disabled'), true)
+  await page('document.querySelectorAll(".ask-card")[1].querySelector("button[aria-controls]").click()')
+  await frame()
+  assert.equal(await page('window.__conversationFixture.navigation[0].index'), 1)
+  assert.equal(await page('document.querySelectorAll(".ask-card")[1].querySelector("button[aria-controls]").getAttribute("aria-pressed")'), 'true')
+  await page('document.querySelectorAll(".ask-card").forEach(card => card.querySelector("button").click())')
+  await frame()
+  assert.equal(await page('document.querySelector("[data-inline-ask-submit]").disabled'), false)
+  await page('document.querySelector("[data-inline-ask-submit]").click()')
+  assert.deepEqual(JSON.parse(await page('JSON.stringify(window.__conversationFixture.navigation.at(-1).answers)')), [{option:'First source'}, {option:'Brief summary'}])
+  win.setContentSize(390, 800)
+  await page('document.documentElement.classList.add("dark"); window.__conversationFixture.mobileLayout = true; window.__setConversationLocale("zh-CN")')
+  await frame()
+  assert.equal(await page('document.documentElement.scrollWidth <= innerWidth'), true)
+  assert.ok(await page('document.querySelector(".ask-card button").getBoundingClientRect().height >= 44'))
+  assert.equal(await page('document.querySelector("[data-inline-ask-submit]").textContent.trim()'), '提交回答')
+  await page('window.__showInlineAsk("history")')
+  await frame()
+  assert.equal(await page('document.querySelectorAll(".ask-card").length'), 2)
+  assert.equal(await page('document.querySelectorAll(".ask-card button, .ask-card img").length'), 0)
+  assert.equal(await page('document.querySelectorAll(".ask-card .ask-answer").length'), 2)
+  assert.match(await page('document.querySelectorAll(".ask-answer")[1].textContent'), /User-written answer/)
+  assert.equal(await page('document.querySelectorAll(".tool-activity-group").length'), 0)
+  console.log('CONVERSATION_SMOKE_OK')
+  app.exit(0)
+}).catch(error => { console.error(error); app.exit(1) })
+`
