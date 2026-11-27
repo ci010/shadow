@@ -6,7 +6,7 @@ app.setPath('userData', join(fixture, 'electron-profile'));
 app.setPath('sessionData', join(fixture, 'electron-session'));
 app.setPath('downloads', fixture);
 app.whenReady().then(async () => {
-  const window = new BrowserWindow({ width: 1100, height: 800, show: mode !== 'capture', webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true, backgroundThrottling: false } });
+  const window = new BrowserWindow({ width: 1100, height: 800, show: !['capture', 'video'].includes(mode), webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true, backgroundThrottling: false } });
   const contents = window.webContents;
   contents.on('console-message', event => { if (event.level === 'error') console.error(event.message); });
   let download;
@@ -16,9 +16,10 @@ app.whenReady().then(async () => {
     download = new Promise((resolve, reject) => item.once('done', (_event, state) => state === 'completed' ? resolve(readFile(output)) : reject(new Error(`Download ${state}`))));
   });
   await window.loadURL(url);
-  if (mode !== 'capture') { window.show(); window.focus(); contents.focus(); }
+  if (!['capture', 'video'].includes(mode)) { window.show(); window.focus(); contents.focus(); }
 
-  const result = mode === 'capture' ? await contents.executeJavaScript(`window.runThreeCapture(${JSON.stringify(JSON.parse(cameraJson))})`)
+  const result = mode === 'video' ? await require('./video-driver.cjs')(contents, fixture, screenshot, JSON.parse(cameraJson))
+    : mode === 'capture' ? await contents.executeJavaScript(`window.runThreeCapture(${JSON.stringify(JSON.parse(cameraJson))})`)
     : mode === 'marker' ? await contents.executeJavaScript(`window.runThreeMarkerCheck(${Number(expectedShaders)})`, true)
     : mode === 'lighting' ? await contents.executeJavaScript('window.runThreeLightingCheck()', true)
     : mode === 'ui'
@@ -30,7 +31,7 @@ app.whenReady().then(async () => {
     delete result.png;
     if (screenshot) result.screenshot = screenshot;
   }
-  if (!['product', 'outline', 'marker', 'lighting', 'capture'].includes(mode)) {
+  if (!['product', 'outline', 'marker', 'lighting', 'capture', 'video'].includes(mode)) {
     const deadline = Date.now() + 5000;
     while (!download && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
     if (!download) throw new Error('No browser download observed');

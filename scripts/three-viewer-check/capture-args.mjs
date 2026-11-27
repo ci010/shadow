@@ -3,9 +3,9 @@ import { extname, resolve } from 'node:path';
 
 const usage = 'Usage: run.mjs capture <marker> <new.png> --position x,y,z --target x,y,z';
 
-export async function captureArgs(args) {
+export async function captureArgs(args, extension = '.png') {
   const [marker, output, ...options] = args;
-  if (!marker || !output || extname(output).toLowerCase() !== '.png' || options.length !== 4) throw new Error(usage);
+  if (!marker || !output || extname(output).toLowerCase() !== extension || options.length !== 4) throw new Error(usage);
   const camera = {};
   for (let i = 0; i < options.length; i += 2) {
     const key = options[i] === '--position' ? 'position' : options[i] === '--target' ? 'target' : null;

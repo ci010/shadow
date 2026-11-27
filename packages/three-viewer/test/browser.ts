@@ -333,6 +333,13 @@ async function run() {
     if (!(before[0] > before[1] && before[0] < 250 && after[1] > after[0] && after[1] < 250)) {
       throw new Error(`expected blended back-face animation: ${before} -> ${after}`);
     }
+    const offlineZero = await center((await viewer.captureVideoFrame(fixed, 0)).image);
+    const offlineLater = await center((await viewer.captureVideoFrame(fixed, 1 / 30)).image);
+    await twoFrames();
+    equal(await center((await viewer.captureVideoFrame(fixed, 0)).image), offlineZero);
+    equal(await center((await viewer.captureVideoFrame(fixed, 1 / 30)).image), offlineLater);
+    if (!(offlineZero[0] > offlineZero[1] && offlineLater[1] > offlineLater[0])) throw new Error('Offline clock did not control playgroundTime');
+    await rejects(viewer.captureVideoFrame(fixed, -1), /Invalid video time/);
     await rejects(viewer.load({ ...animated, shaders: [{ ...animated.shaders[0], fragment: 'invalid shader' }] }), /Shader rain/);
     equal(await center(await viewer.capture(fixed)), after);
     await viewer.load(animated);

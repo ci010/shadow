@@ -536,6 +536,27 @@ export class ThreeViewer {
       return { image, camera: pose, version, objectIds };
     } finally { this.captureCount--; }
   }
+  /** Offline frame: explicit shader clock, independent camera, no editor overlays.
+   * Time is restored before yielding; interactive capture/RAF behavior is unchanged.
+   */
+  async captureVideoFrame(view: CameraPose, time: number): Promise<CameraFrame> {
+    this.assertOpen(); this.resize();
+    if (!Number.isFinite(time) || time < 0) throw new RangeError('Invalid video time');
+    if (this.renderer.getContext().isContextLost()) throw new Error('WebGL context is lost');
+    if (this.captureCount) throw new Error('Capture already in progress');
+    const { camera, target } = this.cameraFor(view);
+    const priorTime = this.previewTime.value;
+    this.captureCount++;
+    try {
+      let surface: HTMLCanvasElement;
+      try { this.previewTime.value = time; surface = this.renderInspection(camera); }
+      finally { this.previewTime.value = priorTime; }
+      const image = await new Promise<Blob>((resolve, reject) => {
+        surface.toBlob(blob => blob ? resolve(blob) : reject(new Error('Canvas PNG encoding failed')), 'image/png');
+      });
+      return { image, camera: { position: camera.position.toArray(), target: target.toArray() }, version: this.version, objectIds: [] };
+    } finally { this.captureCount--; }
+  }
   private renderInspection(camera: PerspectiveCamera): HTMLCanvasElement {
     const { width, height } = this.canvas;
     if (!width || !height || width * height > 8_388_608) throw new RangeError('Invalid inspection size');
