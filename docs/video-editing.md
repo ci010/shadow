@@ -26,7 +26,7 @@ pnpm exec node --import tsx scripts/video.ts init edit.otio --duration 5 --rate 
 pnpm exec node --import tsx scripts/video.ts plan edit.otio
 ```
 
-The built equivalent is `node dist/src/index.js project-video ...`. Run from the intended working directory or use absolute file arguments. `init` creates a gap-only timeline; populate its clips with local OTIO ExternalReferences using normal file edits. `plan` and `validate` explicitly run ffprobe and return a SHA-256 source revision and media/render information.
+The built equivalent is `node dist/src/index.js project-video ...`. Run from the intended working directory or use absolute file arguments. `init` creates a gap-only timeline; populate its clips with local OTIO ExternalReferences using normal file edits. `plan` and `validate` explicitly run ffprobe and return a SHA-256 source revision and media/render information. For VP8/VP9 media they also check the existing FFmpeg build for an alpha-preserving libvpx decoder; `--ffmpeg` and `--ffprobe` can select installed executables. They are execution commands, not passive VFS reads.
 
 Use the returned revision for rendering:
 

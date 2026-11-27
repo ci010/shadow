@@ -148,3 +148,11 @@ alpha/color/geometry pixels, dissolve/wipe samples and decoded handles, interval
 frame correspondence, gain/fade RMS, rejection/receipt/no-clobber/cleanup behavior.
 Media tests skip only if existing ffmpeg/ffprobe cannot run; no tools are installed.
 `TEST_FFMPEG`/`TEST_FFPROBE` select existing binaries.
+
+## Decoder and path boundary hardening
+
+VP8/VP9 input always uses the existing FFmpeg build's `libvpx`/`libvpx-vp9` decoder so native WebM decoding cannot silently discard alpha. `plan`/`validate` accept explicit `--ffmpeg` as well as `--ffprobe` and preflight that decoder; missing capability fails rather than falling back. All VP8/VP9 sources are conservatively alpha-possible for transition-endpoint validation, including missing AlphaMode tags.
+
+Source and handle bounds use the selected stream's `duration`, then `duration_ts * time_base`, then same-stream DURATION end timestamp minus a known `start_time`/`start_pts` origin. Unknown usable duration fails closed. Longer audio/container duration cannot justify a shorter video stream (or vice versa); actually mixed audio has its own check.
+
+Source OTIO, media, init, output and manifest paths are checked before filesystem access for explicit UNC/network/device forms and remote file-URL hosts. Local references and localhost file URLs remain supported for media. This is path preflight, not an OS sandbox or a claim that arbitrary pre-mounted filesystems are non-network storage.
