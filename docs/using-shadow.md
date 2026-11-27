@@ -251,7 +251,7 @@ The readable v1 fields retain `id` (the write receipt's `edit=` ID), `sessionId`
 selected/explicit registered workspace context, not ownership of the file.
 Remote `target`, unavailable-diff reasons and bounded fallback content remain intact.
 Older records without workspace or time fields remain readable without inventing
-provenance. `view_edit` still retrieves the recorded patch by receipt ID.
+provenance. Read `v:sessions/self/edits/<editId>` to retrieve the recorded patch.
 The separate `memory/sessions/*.files.jsonl` working-set index remains compact
 (`when`, `path`, `action`), not a duplicate diff store. It is omitted from the
 default Knowledge tree and graph, including graph edges to that index; exact-ID
@@ -263,7 +263,7 @@ post-write read-back; CRLF-only differences are ignored.
 Agents can discover the same retained records through
 `v:sessions/<session ID>/edits?offset=0&limit=30`. This read-only index returns
 edit IDs, paths, recorded times and exact tool-call history links when available;
-it never opens the current file. `view_edit` remains current-session-only.
+it never opens the current file. Only the current session’s index includes a `patchPath`.
 
 For knowledge, `v:knowledge/overview` documents bounded catalog, entry and
 explicit-reference/backlink navigation over the existing Project store. Original
@@ -283,8 +283,8 @@ performed. Local and remote edits preserve untouched text, BOM, mixed line
 endings and the final newline state outside the replacement. New replacement
 lines follow the target region's line ending, then the following or preceding
 line ending if the target has none. Full overwrites and appends use the supplied
-content as-is; these edit-preservation rules do not apply to them. Source excerpts are not echoed. `view_edit({ "edit_id": "<id>" })`
-returns only that edit's saved patch, on demand, from the current session's own
+content as-is; these edit-preservation rules do not apply to them. Source excerpts are not echoed. Pass the receipt’s `patchPath` to `read`
+(with `offset` and `limit` for line paging) to retrieve the saved patch from the current session’s own
 segments. It cannot select another session. Empty patches report no content
 changes; unavailable or missing details report an explicit error.
 

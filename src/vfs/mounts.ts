@@ -1,6 +1,8 @@
 import type { SkillRecallStore } from '../skills/recall.ts'
 import { safePath } from '../knowledge/service.ts'
 import { MaintenanceGate } from '../agent/learning/maintenance-gate.ts'
+import { readSessionEditPatch } from './session-edit-patch.ts'
+import { SELF_EDIT_PATCH_ROUTE } from '../sessions/file-change-path.ts'
 import { sessionEdits } from './session-edits.ts'
 import { listRemoteFolderSkillResources } from '../skills/remote-folder.ts'
 import { discoverFolderSkills, folderSkillsSummary, readFolderSkillResource, type FolderSkillScope } from '../skills/folder.ts'
@@ -66,6 +68,7 @@ export function createSessionsHandler(
   const read: VirtualFsHandler = async (subpath, context) => {
     topics?.().assertActor(context.projectId, context.sessionId)
     context.signal.throwIfAborted()
+    if (subpath.startsWith(SELF_EDIT_PATCH_ROUTE)) return readSessionEditPatch(subpath, context)
     if (subpath.startsWith('remote:')) {
       if (!remote) throw new Error('A2A is not configured in this Project.')
       return remote.read(subpath, context)
@@ -86,6 +89,8 @@ export function createSessionsHandler(
     topics?.().assertActor(context.projectId, context.sessionId)
     context.signal.throwIfAborted()
     const requested = options?.subpath
+    // Patch bodies are available by exact self-scoped read only, never by listing or search.
+    if (requested?.startsWith(SELF_EDIT_PATCH_ROUTE)) return []
     if (requested && /\/edits(?:\?|$)/.test(requested)) {
       return [{ name: requested, content: await sessionEdits(sessions, requested, context) }]
     }
@@ -172,7 +177,7 @@ export function createSessionsHandler(
     for (const s of all) {
       context.signal.throwIfAborted()
       if (!selected(s.sessionId)) continue
-      entries.push({ name: `${s.sessionId}/edits`, content: options?.content === false ? '' : `Recorded edit index: v:sessions/${s.sessionId}/edits (paged; view_edit remains current-session only).` })
+      entries.push({ name: `${s.sessionId}/edits`, content: options?.content === false ? '' : `Recorded edit index: v:sessions/${s.sessionId}/edits (paged; patch paths remain current-session only).` })
       if (options?.content === false) {
         entries.push({ name: s.sessionId + viewSuffix, content: '' })
         continue

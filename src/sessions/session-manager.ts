@@ -59,7 +59,7 @@ import {
 import { Span } from '../otel/tracing.ts'
 import { newPhysicalSessionId } from '../utils/paths.ts'
 import { hasTruncatedLegacyHistory, physicalSessionId, SessionIdentityError } from './session-identity.ts'
-import { isToolAllowed } from '../utils/tool-allow.ts'
+import { isDelegationToolAllowed, isToolAllowed } from '../utils/tool-allow.ts'
 import { errMsg } from '../utils/truncate.ts'
 import { EphemeralSession } from './ephemeral-session.ts'
 import { runBoundedSession } from './bounded-session.ts'
@@ -84,7 +84,7 @@ import type { InputRequest } from './input-request.ts'
 import { YieldRecords } from './yield-records.ts'
 import { YieldDiscussions, DECISION_REVIEW_PROMPT } from './yield-discussions.ts'
 import { parseYieldPolicy, type YieldPolicy, type YieldRequest, type YieldReview } from './yield-contract.ts'
-import { allowedSubagentModes, isExecutionMode, type ExecutionMode } from './execution-mode.ts'
+import { isNativeCallInvocation, allowedSubagentModes, isExecutionMode, type ExecutionMode } from './execution-mode.ts'
 import { delegationOwner } from './execution-scope.ts'
 import { addTokenUsage, parseTokenUsage, readTokenUsage } from './usage.ts'
 import { CallTools } from './call-tools.ts'
@@ -454,7 +454,7 @@ export class SessionManager {
     if (this.deleting.has(sessionId)) throw new Error('Delegation owner is being deleted.')
     if (!this.getAllowedSubagentModes(sessionId).includes(mode)) throw new Error(`Execution mode "${mode}" is not allowed from this session.`)
     const role = this.resolveAgentTypeTools(state.agentType)
-    if (role.allowedTools !== undefined ? !role.allowedTools.includes('subagent') : role.blockedTools?.includes('subagent')) {
+    if (!isDelegationToolAllowed(role, mode === 'call' ? 'call' : 'subagent')) {
       throw new Error('The owner role does not permit subagent creation.')
     }
     const seen = new Set<string>()
@@ -482,8 +482,8 @@ export class SessionManager {
     if (!state || state.mode !== 'call' || delegationOwner(state) !== context.sessionId) throw new Error('Call admission requires its actual owner.')
     try {
       this.assertCanCreateChild(context.sessionId, 'call')
-      if (context.toolCallName && context.toolCallName !== 'subagent') {
-        throw new Error('Blocking calls require native subagent invocation; a script bridge cannot guarantee the caller remains attached.')
+      if (!isNativeCallInvocation(context)) {
+        throw new Error('Blocking calls require native call invocation; a script bridge cannot guarantee the caller remains attached.')
       }
       context.signal.throwIfAborted()
       // Admission is authoritative even for callers that bypass SubagentTool.
@@ -3383,9 +3383,8 @@ ${JSON.stringify(request)}`,
     const policy = !state.config?.model || allowsChannelCall
       ? (policies?.inspect ? policies.inspect(sessionId) : policies?.resolve(sessionId))
       : undefined
-    const canDelegate = (managed ? allowsChannelCall && !!policy?.agent.allowedTools?.includes('subagent')
-      : this.getAllowedSubagentModes(sessionId).length > 0) &&
-      (role.allowedTools !== undefined ? role.allowedTools.includes('subagent') : !role.blockedTools?.includes('subagent'))
+    const canDelegate = (managed ? allowsChannelCall && !!policy?.agent.allowedTools?.includes('subagent') && isDelegationToolAllowed(role, 'call')
+      : this.getAllowedSubagentModes(sessionId).some(mode => isDelegationToolAllowed(role, mode === 'call' ? 'call' : 'subagent')))
     let subagentUsage: LLMResponseUsage | null = hasDelegates ? null : { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
     let usageIncomplete = own.incomplete
     for (const child of queue.slice(1)) {
@@ -4143,7 +4142,7 @@ ${JSON.stringify(request)}`,
     scoped.setExecutionScope(mode, allowedSubagentModes(mode, !!delegationOwner(state)))
     const allDefs = scoped.getDefinitions()
     const filtered = allDefs.filter((d) =>
-      isToolAllowed(policy, d.function.name, d.optIn)
+      (d.function.name === 'call' ? isDelegationToolAllowed(policy, 'call') : isToolAllowed(policy, d.function.name, d.optIn))
     )
 
     return filtered.map((d) => ({

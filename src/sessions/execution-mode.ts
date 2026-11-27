@@ -29,8 +29,14 @@ const SESSION_ONLY_TOOLS = new Set([
   'event_subscribe', 'signal_provider', 'cron', 'cron_add', 'cron_list', 'cron_remove',
 ])
 const CALL_COORDINATION_TOOLS = new Set([
-  'subagent', 'task', 'ask', 'reply', 'message', 'cancel', 'skill_save',
+  'subagent', 'call', 'task', 'ask', 'reply', 'message', 'cancel', 'skill_save',
 ])
+
+// Only native tools can bind a blocking child to its caller's lifetime.
+export function isNativeCallInvocation(context: { toolCallName?: string; scriptInvocation?: boolean }): boolean {
+  return !context.scriptInvocation && (context.toolCallName === undefined
+    || context.toolCallName === 'call' || context.toolCallName === 'subagent')
+}
 
 export function executionModeAllowsTool(mode: ExecutionMode | undefined, name: string): boolean {
   if (!mode || mode === 'session') return true

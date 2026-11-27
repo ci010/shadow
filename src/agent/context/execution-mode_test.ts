@@ -123,21 +123,20 @@ test('prompt guides expose only current delegation modes and permitted coordinat
   const provider = guidelineProvider()
   const root = (await provider.getPromptSection(ctx))!
   assert.doesNotMatch(root, /mode: "session"/)
-  assert.match(root, /mode: "task"/)
-  assert.match(root, /mode: "call"/)
+  assert.match(root, /`subagent` starts asynchronously/)
+  assert.match(root, /Invoke `call` directly/)
   assert.match(root, /v:skills\/orchestration/)
   assert.match(root, /Resolve routine implementation choices yourself/)
 
   const sub = (await provider.getPromptSection({ ...ctx, parentSessionId: 'fixture:root' }))!
   assert.doesNotMatch(sub, /mode: "session"/)
-  assert.match(sub, /mode: "task"/)
-  assert.match(sub, /mode: "call"/)
+  assert.match(sub, /`subagent` starts asynchronously/)
+  assert.match(sub, /Invoke `call` directly/)
   assert.match(sub, /Only its parent or owner may answer/)
 
   const task = (await provider.getPromptSection({ ...ctx, mode: 'task', parentSessionId: 'fixture:root' }))!
   assert.doesNotMatch(task, /mode: "session"|mode: "task"|Asynchronous creation|`report_to` redirects/)
-  assert.match(task, /mode: "call"/)
-  assert.match(task, /Specify `mode: "call"` explicitly/)
+  assert.match(task, /Invoke `call` directly/)
   assert.match(task, /Do not create\/manage durable sessions or register folders/)
 
   const call = (await provider.getPromptSection({ ...ctx, mode: 'call' }))!

@@ -32,9 +32,9 @@ test('full writes return compact receipts without echoing file content', async t
   const content = Array.from({ length: 50 }, (_, i) => `row ${i + 1}`).join('\n') + '\n'
   const result = await tool.execute({ path: 'nested/file.txt', content }, context)
   assert.equal(await readFile(join(root, 'nested', 'file.txt'), 'utf8'), content)
-  assert.match(result, /^OK write \+50 -0 edit=\S+$/)
+  assert.match(result, /^OK write \+50 -0 edit=(\S+)\npatchPath: v:sessions\/self\/edits\/\1$/)
   assert.doesNotMatch(result, /row|L1:|@@/)
-  assert.ok(result.length < 100)
+  assert.ok(result.length < 180)
   const unicode = '\u4f60\u597d\n'
   assert.match(await tool.execute({ path: 'unicode.txt', content: unicode }, context), /^OK write \+1 -0/)
   assert.equal(await readFile(join(root, 'unicode.txt'), 'utf8'), unicode)

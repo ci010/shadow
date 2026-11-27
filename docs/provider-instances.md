@@ -89,8 +89,11 @@ reopen the conversation to request the catalog again after connectivity recovers
 ### Generate an image in chat
 
 In a private Shadow Web conversation, ask the agent to generate an image. The
-`generate_image` tool uses the saved `openrouter` connection by default; name
-another saved OpenRouter connection in your request if needed. The image model
+bundled [`image-generation` skill](../src/skills/builtin/image-generation/SKILL.md)
+(`v:skills/image-generation`) explains the on-demand `generate_image` tool, which
+is called through `invoke_tool` rather than exposed on every turn. It uses the
+saved `openrouter` connection by default; name another saved OpenRouter connection
+in your request if needed. The image model
 is independent of the composer’s chat model: the tool defaults to
 `bytedance-seed/seedream-4.5` and accepts a different OpenRouter image model ID.
 

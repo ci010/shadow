@@ -32,7 +32,7 @@ test('reflector host allowlist denies generic writes regardless of path and role
   assert.match(tools.executionDenial('invoke_tool', { name: 'write', args: {} })!, /trusted one-shot allowlist/)
   assert.equal(writes, 0)
   const role = await readFile(new URL('../types/builtin/reflector/AGENT.md', import.meta.url), 'utf8')
-  assert.match(role, /allowedTools: \[read, search, view_edit, log, learning_memory, learning_result\]/)
+  assert.match(role, /allowedTools: \[read, search, log, learning_memory, learning_result\]/)
   assert.doesNotMatch(role, /use write to merge|Direct write to existing wiki/)
 }))
 

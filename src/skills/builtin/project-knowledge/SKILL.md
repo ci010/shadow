@@ -55,7 +55,7 @@ reads for exhaustive raw discovery, including `.files.jsonl`.
   `logs/session/<encodeURIComponent(session ID)>` provide semantic log pages.
 - `v:sessions/<session ID>/edits?offset=0&limit=30`: recorded edit IDs, files,
   timestamps where recorded, and exact tool-call history links where available.
-  Only the current session receives a `view_edit` argument; cross-session history
+  Only the current session receives a `patchPath` for `read`; cross-session history
   access does not widen that tool's permission. This index never reads live files.
 
 Navigation offsets are zero-based; limits are 1–100 (edit pages capped at 30).

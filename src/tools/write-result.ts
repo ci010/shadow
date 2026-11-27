@@ -1,3 +1,4 @@
+import { sessionEditPatchPath } from '../sessions/file-change-path.ts'
 import type { RecordedFileChange } from '../sessions/file-change-contract.ts'
 import type { LineChanges } from './line-changes.ts'
 
@@ -25,6 +26,7 @@ interface WriteResult {
 export function formatWriteResult(result: WriteResult): string {
   const counts = result.lineChanges.added === undefined ? '' : ` +${result.lineChanges.added} -${result.lineChanges.removed}`
   const output = [`OK ${result.mode}${counts}${result.change ? ` edit=${result.change.id}` : ''}`]
+  if (result.change) output.push(`patchPath: ${sessionEditPatchPath(result.change.id)}`)
   if (result.edit) output.push(`Replacements: ${result.edit.count}; match: ${result.edit.strategy}.`)
   if (result.unchanged) output.push('Content unchanged.')
   const unavailable = result.change?.unavailable ?? result.lineChanges.unavailable

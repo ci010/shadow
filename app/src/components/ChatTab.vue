@@ -3098,7 +3098,7 @@ function applyStreamPayload(payload: StreamPayload, state: StreamState): boolean
       }),
       toolCallId: payload.toolCallId, toolName: payload.toolName, timestamp: new Date().toISOString(),
     })
-    if (payload.toolName === 'subagent' || streamingToolCallData.value?.name === 'subagent') void loadSessionList()
+    if (['subagent', 'call'].some(name => payload.toolName === name || streamingToolCallData.value?.name === name)) void loadSessionList()
     scrollToBottom()
   } else {
     // response event

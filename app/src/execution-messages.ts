@@ -40,7 +40,7 @@ export function inlineExecutionMessages(
     const message = messages[index]
     if (message.event !== 'tool_call') continue
     const call = parseToolCall(message)
-    if (call.name !== 'subagent') continue
+    if (call.name !== 'subagent' && call.name !== 'call') continue
     const resultIndex = pairs.get(index)
     const raw = resultIndex === undefined ? undefined : messages[resultIndex].content
     const result = receipt(raw)
@@ -48,14 +48,18 @@ export function inlineExecutionMessages(
       typeof result?.sessionId === 'string' ? session.sessionId === result.sessionId
         : !!message.toolCallId && session.parentToolCallId === message.toolCallId))
     const session = candidates.length === 1 ? candidates[0] : undefined
-    const mode = result?.mode ?? session?.mode ?? call.args.mode
+    const mode = result?.mode ?? session?.mode ?? (call.name === 'call' ? 'call' : call.args.mode ?? 'task')
     if (mode !== 'task' && mode !== 'call') continue
     const status = isExecutionStatus(result?.status) ? result.status : undefined
     const blocked = result?.status === 'blocked'
     const failed = raw !== undefined && (!result || result.status === 'failed' || blocked)
     entries.set(index, {
       mode,
-      label: typeof call.args.description === 'string' ? call.args.description : session?.label ?? (mode === 'task' ? t('Delegated task') : t('Context call')),
+      label: mode === 'task' && typeof call.args.title === 'string' ? call.args.title
+        : typeof call.args.description === 'string' ? call.args.description
+        : call.name === 'call' && typeof call.args.task === 'string' && call.args.task.trim()
+          ? call.args.task.trim().replace(/\s+/g, ' ').slice(0, 120)
+          : session?.label ?? (mode === 'task' ? t('Delegated task') : t('Context call')),
       agentType: session?.agentType ?? (typeof call.args.agent_type === 'string' ? call.args.agent_type : undefined),
       model: session?.config?.model ?? session?.inferenceDefaults?.model
         ?? (mode === 'task' && typeof call.args.model === 'string' ? call.args.model : undefined),

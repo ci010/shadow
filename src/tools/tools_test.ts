@@ -6,7 +6,6 @@ import { Bus } from '../bus/bus.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { ReadTool } from './read.ts'
 import { WriteTool } from './filesystem.ts'
-import { ViewEditTool } from './view-edit.ts'
 import { PlanWriteTool } from './plan-write.ts'
 import { ExecTool } from './shell.ts'
 import { SearchTool } from './search.ts'
@@ -23,6 +22,7 @@ import type { ExecutionContext } from './context.ts'
 import { requireToolText } from './tool.ts'
 import type { WorkAlignment } from '../sessions/work-alignment.ts'
 import type { TopicService } from '../sessions/topics.ts'
+import { CallTool } from './call.ts'
 import { SubagentTool } from './subagent.ts'
 import { AskTool } from './ask.ts'
 import { ReplyTool } from './reply.ts'
@@ -84,7 +84,6 @@ function buildBaseTools(loadable = new Map<string, LoadableEntry>()): Tools {
   tools.register(new ReadTool(WORKSPACE))
   tools.register(new WriteTool(WORKSPACE))
   tools.register(new PlanWriteTool(WORKSPACE))
-  tools.register(new ViewEditTool())
   tools.register(
     new ExecTool(
       WORKSPACE,
@@ -108,14 +107,9 @@ function buildBaseTools(loadable = new Map<string, LoadableEntry>()): Tools {
   tools.register(new AskTool(stub<YieldManager>(), stub<InputRequests>()))
   tools.register(new ReplyTool(stub<YieldManager>(), stub<InputRequests>()))
   tools.register(new CancelTool(stub<SessionManager>()))
-  tools.register(
-    new SubagentTool(
-      bus,
-      stub<SessionManager>(),
-      stub<AgentTypesManager>(),
-      stub<ChannelManager>(),
-    ),
-  )
+  const subagent = new SubagentTool(bus, stub<SessionManager>(), stub<AgentTypesManager>(), stub<ChannelManager>())
+  tools.register(subagent)
+  tools.register(new CallTool(subagent))
   tools.register(new SqlTool(stub<ProjectConventions>(), 'test', async () => { throw new Error('Not invoked in tool snapshots') }))
   return tools
 }
@@ -206,28 +200,29 @@ test('scoped tool descriptions match the modes advertised to the model', () => {
     const definitions = tools.getDefinitions()
     assert.equal(definitions.some(def => def.function.name === 'session'), mode !== 'call')
     const subagent = definitions.find(def => def.function.name === 'subagent')?.function
-    if (!modes.length) {
-      assert.equal(subagent, undefined)
-      for (const name of ['ask', 'reply', 'message']) {
-        assert(!definitions.some(def => def.function.name === name))
-      }
+    const call = definitions.find(def => def.function.name === 'call')?.function
+    assert.equal(!!subagent, modes.includes('task'))
+    assert.equal(!!call, modes.includes('call'))
+    if (subagent) {
+      assert.deepEqual(subagent.parameters.required, ['title', 'task'])
+      assert(!('mode' in subagent.parameters.properties))
+    }
+    if (call) {
+      assert.deepEqual(call.parameters.required, ['task'])
+      assert.deepEqual(Object.keys(call.parameters.properties), ['task', 'description'])
+    }
+    if (mode === 'call') {
+      for (const name of ['ask', 'reply', 'message']) assert(!definitions.some(def => def.function.name === name))
       const exec = definitions.find(def => def.function.name === 'exec')!
       assert.doesNotMatch(JSON.stringify(exec), /fire-and-forget|NOT killed|0 = run in background/)
-      continue
     }
-    assert(subagent)
-    assert.deepEqual(subagent.parameters.properties.mode.enum, modes)
-    if (!modes.includes('call')) {
-      assert.doesNotMatch(JSON.stringify(subagent), /\bcall\b|blocking|leaf/)
-    } else {
-      assert.match(subagent.description, /blocking bounded leaf call/)
-      assert.equal(subagent.parameters.required?.includes('mode') ?? false, !modes.includes('task'))
-      assert(subagent.parameters.required?.includes('task'))
-      assert.doesNotMatch(subagent.parameters.properties.task.description!, /optional/)
-    }
-    if (mode === 'task') assert(!('report_to' in subagent.parameters.properties))
   }
-  assert.deepEqual(base.get('subagent')!.parameters.properties.mode.enum, ['task', 'call'])
+  const listed = (allow?: string[], block?: string[]) => new SessionTools(base, WORKSPACE, allow, block).names()
+  assert(listed(['subagent']).includes('call'), 'preserve legacy grants')
+  assert(listed(['call']).includes('call'))
+  assert(!listed(['call']).includes('subagent'))
+  assert(!listed(undefined, ['subagent']).includes('call'), 'preserve legacy blocks')
+  assert(!listed(undefined, ['call']).includes('call'))
 })
 
 

@@ -54,6 +54,22 @@ test('a running call links from structural owner and native invocation, never it
   assert.equal(completed.stage, 'completed')
 })
 
+test('split delegation tools render without mode or description, before the result arrives', () => {
+  const messages = [
+    { ...call('a'), toolCall: { name: 'call', arguments: { task: 'Inspect the inputs' } } },
+    { ...call('b'), toolCall: { name: 'subagent', arguments: { title: 'Review the schema', task: 'Review it' } } },
+  ]
+  const sessions = parseSessionGraph({ sessions: [
+    { sessionId: 'native-leaf', mode: 'call', parentSessionId: 'owner', parentToolCallId: 'a', executionStatus: 'running' },
+  ], nodes: [] })
+  const { entries } = inlineExecutionMessages(messages, sessions, 'owner', {}, true)
+  assert.equal(entries.get(0)?.mode, 'call')
+  assert.equal(entries.get(0)?.sessionId, 'native-leaf')
+  assert.equal(entries.get(0)?.label, 'Inspect the inputs')
+  assert.equal(entries.get(1)?.mode, 'task')
+  assert.equal(entries.get(1)?.label, 'Review the schema')
+})
+
 test('legacy admission receipts infer omitted modes and failed or blocked results stay visible', () => {
   const legacy = { ...call('a'), toolCall: { name: 'subagent', arguments: { description: 'Legacy role default' } } }
   assert.equal(inlineExecutionMessages([legacy, result('a', 'child')], [], 'owner', {}, false).entries.get(0)?.mode, 'task')

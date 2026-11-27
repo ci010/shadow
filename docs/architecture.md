@@ -972,12 +972,12 @@ through the original blocking tool call. Task creation returns after admission,
 not model completion; their caller can work independently or finish its turn.
 There is no independently configurable
 `ephemeral` execution flag. Agent definitions provide `defaultMode`, not a fixed
-lifetime. `subagent` accepts only task/call, defaulting omission to task regardless
-of role default; durable topics use a separate creation surface. Mode is stored with execution state rather than inferred repeatedly
+lifetime. Use `subagent` for asynchronous tasks, `call` for blocking leaves, and
+`session` for durable peers. Mode is stored with execution state rather than inferred repeatedly
 from a role that can be edited later.
 
 The delegation capability matrix is enforced at runtime as well as described in
-the prompt: durable root/topic → task/call; task → explicit call; call → none.
+the prompt: durable root/topic → `subagent` or `call`; task → `call`; call → neither.
 Role tool restrictions can narrow this further. Structural delegation ownership applies to temporary executions, not
 topic provenance; neither the agent type's visibility flag nor context-only fork
 ancestry establishes coordination authority.
@@ -1176,8 +1176,11 @@ boundary. The Main sidebar also offers Open remote folder, which opens the
 existing remote-resource draft picker rather than registering a Main-local
 path. Git worktree/branch management is not implemented.
 
-`subagent` requires the initial `task` for task/call execution. Legacy
-`mode: "session"` fails explicitly with guidance to use the `session` tool.
+`subagent({title, task, description?})` starts an asynchronous worker; `call({task,
+description?})` runs a blocking leaf. Both take the initial assignment in `task`.
+The model-facing `subagent` schema no longer has `mode`. Existing native
+`subagent(mode: "call")` invocations remain compatible, and legacy
+`mode: "session"` still directs callers to the `session` tool.
 Tasks/calls start their assignment as part of
 creation and do not accept later message-tool assignments. Child sessions inherit
 the spawner's workdir ownership, not an isolated git worktree.
@@ -1225,7 +1228,7 @@ Call receipts retain their structured `completed`, `blocked`, `failed`, or
 `cancelled` status without generic tool-output truncation. A model can return raw
 JSON with `status: "blocked"`, `reason`, and `partialWork`, or `status: "failed"`
 and `error` (including partial work/side effects), to make non-success explicit.
-Only native subagent tool invocation supports blocking calls; embedding one in
+Only native `call` tool invocation (or the legacy native entry point) supports blocking calls; embedding one in
 exec/scripts/invoke_tool is rejected because those wrappers do not establish the
 same caller-bound lifetime. Calls have no overall execution deadline: the caller
 waits until completion or cancellation. Individual tools retain their own timeouts,
@@ -1682,7 +1685,7 @@ the schema; runtime correctness does not depend on a stale disclosure marker.
 | `exec` | Managed local shell processes and inline script/tool-bridge execution |
 | `cancel`, `continuation`, `v:bg` | Inspect/cancel owned background, task/call and A2A executions; continuation applies only to `bg:` callbacks |
 | `session` | Durable peer creation/naming and Main-local folder registration; no work definition |
-| `message`, `subagent` | Authorized session messaging and temporary task/call execution |
+| `message`, `subagent`, `call` | Authorized session messaging and temporary task/call execution |
 | `ask`, `reply` | Ordinary text input or structured decisions, authenticated recipient routing, correlated answers and configurable waiting |
 | `v:works`, dynamic `work_*` tools | Optional current notes/goal paths through VFS; typed mutations for assignment, progress and impact reviews |
 | `plan_write`, `sql`, `log` | Planning documents, guarded Project conventions/read-only current Work queries, structured knowledge logging |
@@ -2054,7 +2057,7 @@ explicit comment options or the defined Work transitions.
 
 The `write` tool returns a compact receipt after the filesystem operation
 completes, with mode, line-change counts and an edit ID when recorded. Source
-excerpts stay out of the default receipt; `view_edit` retrieves the saved patch.
+excerpts stay out of the default receipt; `write` returns a `patchPath` for reading the saved patch through `read`.
 Filesystem edits require a nonempty exact match, unique unless `g` explicitly
 requests all non-overlapping matches. There is no fuzzy fallback. LF and CRLF
 are equivalent during matching, but replacements splice original-text offsets:

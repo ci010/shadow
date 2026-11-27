@@ -29,8 +29,8 @@ export function learningJob(pipeline: Pipeline): CronJob {
 
 // Host-selected only; editable cron records cannot override pipeline execution ceilings.
 export const LEARNING_LIMITS = {
-  reflector: { allowedTools: ['read', 'search', 'view_edit', 'log', 'learning_memory', 'learning_result'], inferenceRequests: null },
-  encapsulator: { allowedTools: ['read', 'search', 'write', 'view_edit', 'learning_memory', 'learned_skill', 'invoke_tool', 'agent_tool_test', 'learning_result'], inferenceRequests: 8, toolCalls: 24, argumentBytes: 192000 },
+  reflector: { allowedTools: ['read', 'search', 'log', 'learning_memory', 'learning_result'], inferenceRequests: null },
+  encapsulator: { allowedTools: ['read', 'search', 'write', 'learning_memory', 'learned_skill', 'invoke_tool', 'agent_tool_test', 'learning_result'], inferenceRequests: 8, toolCalls: 24, argumentBytes: 192000 },
   'soulReflector': { allowedTools: ['read', 'search', 'learning_soul', 'learning_result'], inferenceRequests: 4, toolCalls: 12, argumentBytes: 48000 },
 } as const
 

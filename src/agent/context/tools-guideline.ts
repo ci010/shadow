@@ -1,15 +1,14 @@
 import { resolvePrompt } from './prompt-version.ts'
 import type { SessionPromptContext } from './builder.ts'
 import { allowedSubagentModes, executionModeAllowsTool } from '../../sessions/execution-mode.ts'
-import { isToolAllowed } from '../../utils/tool-allow.ts'
+import { isDelegationToolAllowed, isToolAllowed } from '../../utils/tool-allow.ts'
 import { channelSupportsAsk, CHAT_QUESTION_GUIDANCE } from '../../tools/ask-policy.ts'
 
 /** Classic guideline renderer, kept for existing V1 prompt assembly. */
 export function toolsGuideline(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
-  const allows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
-  const modes = allows('subagent')
-    ? allowedSubagentModes(mode, !!ctx.parentSessionId) : []
+  const allows = (name: string) => executionModeAllowsTool(mode, name) && (name === 'call' ? isDelegationToolAllowed(ctx.agent, name) : isToolAllowed(ctx.agent, name))
+  const modes = allowedSubagentModes(mode, !!ctx.parentSessionId).filter(m => allows(m === 'call' ? 'call' : 'subagent'))
   const sections: string[] = []
   const readOnlyExplore = ctx.agent.source === 'builtin' && ctx.agent.name === 'explore'
   if (mode !== 'call' && allows('work') && readOnlyExplore) {
@@ -64,8 +63,8 @@ ${allows('reply')
 Use the \`write\` tool to create ordinary text files or apply exact local replacements. Read the relevant lines with \`read\` first when editing an existing file; if an exact match fails, reread and refine the match. Then use \`exec\` to run focused validation. Use \`exec\` also for generators and transformations that actually require scripting.`)
     const coordination: string[] = []
     if (allows('cancel')) coordination.push('Read `v:bg` for execution output. `cancel({executionId})` waits for local cleanup or reports remote state. Do not poll.')
-    if (modes.includes('call')) coordination.push('Set `mode: "call"` explicitly for a blocking, inherited-context result. Invoke `subagent` directly, never through scripts.')
-    if (modes.includes('task')) coordination.push('`mode: "task"` starts asynchronously in a fresh context. Admission is not a result; continue independent work or end the turn instead of waiting or polling. `report_to` routes completion, not ownership or permission.')
+    if (modes.includes('call')) coordination.push('Invoke `call` directly for a blocking, inherited-context result, never through scripts.')
+    if (modes.includes('task')) coordination.push('`subagent` starts asynchronously in a fresh context. Admission is not a result; continue independent work or end the turn instead of waiting or polling. `report_to` routes completion, not ownership or permission.')
     if (modes.length) coordination.push('Separate sessions do not isolate files or roll back side effects. Wait for completion or confirmed cancellation, then reread the affected files before taking over a worker’s scope.')
     if (modes.includes('task') && allows('task')) coordination.push('Only designated reviewers may accept a task, using its exact submitted revision.')
     if (allows('read')) coordination.push('Check another session’s progress in `v:sessions/<sessionId>` and relevant Work first. Missing or stale evidence is not a reason to poll or ping.')
@@ -91,16 +90,16 @@ Read \`v:bg\` for owned background/task/call/A2A executions, or \`v:bg/<executio
       '### Delegation',
       '',
       ...(ctx.agent.source === 'builtin' && ctx.agent.name === 'sub' ? [
-        'Use subagent only in permitted modes; tools and the execution contract remain authoritative.',
+        'Use only the delegation tools offered in this session; tools and the execution contract remain authoritative.',
       ] : [
-        'Use subagent only in permitted modes; tools and the execution contract remain authoritative. Ordinary task/call delegation needs no preliminary skill. Read `v:skills/orchestration` only to design or restructure complex parallel work.',
+        'Use only the delegation tools offered in this session; tools and the execution contract remain authoritative. Ordinary task/call delegation needs no preliminary skill. Read `v:skills/orchestration` only to design or restructure complex parallel work.',
         'Give each assignment an outcome, necessary context and sources, explicit scope, constraints, expected evidence and a stop condition. Split only independent scopes; stabilize shared interfaces before parallel edits.',
       ]),
       'Keep scopes distinct. Separate conversations do not isolate files or roll back side effects; taking over a worker scope requires completion or confirmed cancellation, then rereading its files.',
     ]
     if (modes.includes('call') && modes.includes('task')) lines.push('Prefer call when current context matters, the parent needs an evidence-backed result rather than the working process, and its next step depends on that result. Prefer task when the parent can continue other work, or the assignment needs ongoing coordination, fresh context, or a managed review cycle.')
-    if (modes.includes('task')) lines.push('`mode: "task"`: asynchronous with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. `report_to` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.')
-    if (modes.includes('call')) lines.push('Specify `mode: "call"` explicitly for a blocking inherited-context leaf. Invoke subagent directly, never through scripts; follow Execution Contract limits and account for partial side effects before retrying.')
+    if (modes.includes('task')) lines.push('`subagent` starts asynchronously with fresh context. Asynchronous creation admits an ID, not a result. Continue independent work or end the turn; do not sleep or poll. `report_to` redirects completion, not ownership or decisions, and grants no messaging permission. Review exact revisions; only designated reviewers may accept them.')
+    if (modes.includes('call')) lines.push('Invoke `call` directly for a blocking inherited-context leaf, never through scripts; follow Execution Contract limits and account for partial side effects before retrying.')
     sections.push(lines.join('\n'))
   }
 
@@ -129,7 +128,7 @@ ${mode === 'session' ? '- Message is free-form direct interaction for questions,
 /** V2 tool contract. Workflow choices belong to the role Markdown. */
 export function toolsContract(ctx: SessionPromptContext): string {
   const mode = ctx.mode ?? ctx.agent.defaultMode
-  const policyAllows = (name: string) => executionModeAllowsTool(mode, name) && isToolAllowed(ctx.agent, name)
+  const policyAllows = (name: string) => executionModeAllowsTool(mode, name) && (name === 'call' ? isDelegationToolAllowed(ctx.agent, name) : isToolAllowed(ctx.agent, name))
   const offers = (name: string) => policyAllows(name) && (!ctx.offeredTools || ctx.offeredTools.has(name))
   const sections: string[] = []
 
@@ -157,9 +156,9 @@ export function toolsContract(ctx: SessionPromptContext): string {
   }
 
   if (offers('cancel')) sections.push('`cancel({executionId})` awaits local cleanup or reports remote state. Cancellation does not roll back side effects or delete conversations.')
-  const modes = offers('subagent') ? allowedSubagentModes(mode, !!ctx.parentSessionId) : []
-  if (modes.includes('call')) sections.push('`subagent` with explicit `mode: "call"` is blocking; it inherits context and returns through the originating tool invocation, without a completion event.')
-  if (modes.includes('task')) sections.push('`subagent` with `mode: "task"` starts asynchronously in a fresh context. Admission is not a result. `report_to` routes completion, not ownership or permission. Separate sessions do not isolate files or roll back side effects.')
+  const modes = allowedSubagentModes(mode, !!ctx.parentSessionId).filter(m => offers(m === 'call' ? 'call' : 'subagent'))
+  if (modes.includes('call')) sections.push('`call` is blocking; it inherits context and returns through the originating tool invocation, without a completion event.')
+  if (modes.includes('task')) sections.push('`subagent` starts asynchronously in a fresh context. Admission is not a result. `report_to` routes completion, not ownership or permission. Separate sessions do not isolate files or roll back side effects.')
   if (offers('task')) sections.push('Only the designated reviewer may use `task(action:review,sessionId,revision,outcome,content)` to record a verdict on that exact local submission. Changes rerun the original worker; PASS delivers success, and blocked or exhausted review escalates. Work is unchanged.')
 
   if (offers('read') && offers('write') && mode !== 'call') {

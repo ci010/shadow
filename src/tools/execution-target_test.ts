@@ -12,7 +12,7 @@ import { executionTargetContext, executionTargetParameters } from './execution-t
 import { ReadTool } from './read.ts'
 import { WriteTool } from './filesystem.ts'
 import { SearchTool } from './search.ts'
-import { ViewEditTool } from './view-edit.ts'
+import { readSessionEditPatch } from '../vfs/session-edit-patch.ts'
 import { Tools, SessionTools } from './registry.ts'
 import { UseProjectTool } from './use-project.ts'
 import { ExecTool } from './shell.ts'
@@ -74,7 +74,7 @@ test('Folder-targeted read/write operate the bound resource without touching Mai
     assert.equal(await readFile(join(main, 'note.txt'), 'utf8'), 'main-unchanged')
     assert.equal(await readFile(join(child, 'note.txt'), 'utf8'), 'child-after')
     assert.deepEqual(change?.target, { nodeId: 'child', workdirId: 'approved', folderId: folder.id })
-    assert.match(await new ViewEditTool().execute({ edit_id: change!.id }, context), /Recorded on node "child", workdir "approved"/)
+    assert.match(await readSessionEditPatch(`self/edits/${change!.id}`, context), /Recorded on node "child", workdir "approved"/)
     assert.equal(context.cwd, main); assert.equal(context.remoteWorkdir, undefined)
     const childImage = pngFixture(400, 400)
     assert(childImage.length > 256 * 1024)

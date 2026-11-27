@@ -1,6 +1,7 @@
 import type { SessionManager } from '../sessions/session-manager.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
 import type { ExecutionContext } from '../tools/context.ts'
+import { sessionEditPatchPath } from '../sessions/file-change-path.ts'
 import { navigationPage } from './knowledge.ts'
 
 export async function sessionEdits(sessions: Pick<SessionManager, 'getHistory' | 'getSessionState'> &
@@ -28,10 +29,10 @@ export async function sessionEdits(sessions: Pick<SessionManager, 'getHistory' |
   const size = Math.min(limit, 30)
   return JSON.stringify({ offset, limit: size, total: page.total,
     next: offset + size < page.total ? `v:sessions/${id}/edits?offset=${offset + size}&limit=${size}` : null,
-    note: 'Recorded edits only; no current file reads. view_edit is restricted to the current session. Missing history references and timestamps are not inferred.',
+    note: 'Recorded edits only; no current file reads. Patch paths are available for the current session only. Missing history references and timestamps are not inferred.',
     items: page.changes.map(change => ({ editId: change.id, file: change.path, when: change.timestamp ?? null,
       mode: change.mode, patchStatus: change.unavailable ?? (change.patch ? 'recorded' : 'no changes'),
-      viewEdit: id === context.sessionId ? { edit_id: change.id } : null,
+      patchPath: id === context.sessionId ? sessionEditPatchPath(change.id) : null,
       history: references.get(change.toolCallId) ?? null,
     })) }, null, 2)
 }

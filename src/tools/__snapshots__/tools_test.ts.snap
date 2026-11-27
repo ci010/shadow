@@ -10,7 +10,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. LayerFS accepts versioned branch-backed layerfs: IDs (not legacy mounts): UTF-8 read/list, exact edit/overwrite and literal grep/glob via SDK; writes checkpoint automatically. No append/global edit, binary input or grep include. Exec mounts current branch, checkpoints even nonzero exit, then unmounts; independent branches run concurrently while overlapping branch operations are reserved. In a direct owner Web turn, device:<nodeId> runs OS-shell exec from the Child's home by default. Direct read/search access to Child home requires opt-in."
           },
           "path": {
             "type": "string",
@@ -31,7 +31,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "offset": {
             "type": "number",
-            "description": "1-based starting line for files, URLs and virtual text. With flag \\"l\\": item index."
+            "description": "1-based starting line for files, URLs and virtual text. With flag \\"l\\": item index. With flag \\"c\\": UTF-16 character offset in a generated output spill."
           },
           "limit": {
             "type": "number",
@@ -52,13 +52,13 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "write",
-      "description": "Write or edit a file. With \`match\`: find and replace. Creates directories as needed. Returns a short receipt; use view_edit with the returned edit ID for the recorded patch.",
+      "description": "Write or edit a file. With \`match\`: find and replace. Creates directories as needed. Returns a short receipt; use read on the returned patchPath for the recorded patch.",
       "parameters": {
         "type": "object",
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. LayerFS accepts versioned branch-backed layerfs: IDs (not legacy mounts): UTF-8 read/list, exact edit/overwrite and literal grep/glob via SDK; writes checkpoint automatically. No append/global edit, binary input or grep include. Exec mounts current branch, checkpoints even nonzero exit, then unmounts; independent branches run concurrently while overlapping branch operations are reserved. In a direct owner Web turn, device:<nodeId> runs OS-shell exec from the Child's home by default. Direct read/search access to Child home requires opt-in."
           },
           "path": {
             "type": "string",
@@ -124,26 +124,6 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
   {
     "type": "function",
     "function": {
-      "name": "view_edit",
-      "description": "View the recorded patch for a write receipt edit ID in this session. Returns plain unified hunks, not the current file. No changes and unavailable diffs are reported explicitly.",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "edit_id": {
-            "type": "string",
-            "description": "The edit ID returned by write."
-          }
-        },
-        "required": [
-          "edit_id"
-        ],
-        "additionalProperties": false
-      }
-    }
-  },
-  {
-    "type": "function",
-    "function": {
       "name": "exec",
       "description": "Run an OS command or bounded inline JavaScript. JavaScript has no Node APIs; its filesystem tool bridge is bound to the resolved workspace. Not a security sandbox.",
       "parameters": {
@@ -193,7 +173,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
         "properties": {
           "workspace": {
             "type": "string",
-            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. Advanced LayerFS callers may also pass an opaque layerfs: mount ID."
+            "description": "Registered Workspace in the current Project: unique short name, name-ID selector or full Workspace ID. Uses that workspace on its actual local, remote or LayerFS backend for this call only; omit to retain the selected workspace. Location is reported in workspace metadata. Unavailable targets fail without Main fallback or automatic device switching. LayerFS accepts versioned branch-backed layerfs: IDs (not legacy mounts): UTF-8 read/list, exact edit/overwrite and literal grep/glob via SDK; writes checkpoint automatically. No append/global edit, binary input or grep include. Exec mounts current branch, checkpoints even nonzero exit, then unmounts; independent branches run concurrently while overlapping branch operations are reserved. In a direct owner Web turn, device:<nodeId> runs OS-shell exec from the Child's home by default. Direct read/search access to Child home requires opt-in."
           },
           "query": {
             "type": "string",
@@ -204,9 +184,14 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
             "enum": [
               "grep",
               "glob",
-              "web"
+              "web",
+              "web:firecrawl",
+              "web:brave",
+              "web:exa",
+              "web:tavily",
+              "web:deepseek"
             ],
-            "description": "Search implementation: grep (content), glob (names), or web. Bare names only; put file/virtual scope in path and web scope in domain."
+            "description": "Search implementation: grep (content), glob (names), web (default routing), or web:<provider> (explicit, no fallback; requires a configured key). Web results list configured handlers. Put file/virtual scope in path and web scope in domain."
           },
           "domain": {
             "type": "string",
@@ -651,25 +636,25 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
     "type": "function",
     "function": {
       "name": "subagent",
-      "description": "Create an asynchronous reviewable local task, or invoke a blocking bounded leaf call. Declare review at creation: parent (default) or an independently managed agent. Structured verdicts automatically rerun requested changes in the same worker history; only PASS delivers success. Remote A2A tasks remain legacy one-shot and do not support this review lifecycle. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.",
+      "description": "Start an asynchronous task. The result is an admitted ID, not completion. Local submissions require parent or independent agent review; only PASS delivers success. Remote A2A tasks are one-shot and do not support local review.",
       "parameters": {
         "type": "object",
         "properties": {
-          "mode": {
+          "prompt_revision": {
             "type": "string",
-            "enum": [
-              "task",
-              "call"
-            ],
-            "description": "Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Remote workdirs support task only; call is rejected before creation because remote exec has no foreground lifecycle. Omission defaults to task in a long-lived session; tasks must explicitly choose call."
+            "description": "Exact Project draft revision for the selected local role definition. Omission uses its normal prompt. Not supported for remote A2A."
+          },
+          "sub_revision": {
+            "type": "string",
+            "description": "Exact Project draft revision (built-in sub only). Missing explicit revisions fail closed; omission uses built-in behavior."
           },
           "task": {
             "type": "string",
-            "description": "Initial work. Required for task/call."
+            "description": "First assignment for the worker: outcome, scope, constraints and expected result."
           },
           "model": {
             "type": "string",
-            "description": "Task only: optional exact model ID from v:models; omission preserves role defaults. Forbidden in call mode, which always inherits caller settings."
+            "description": "Optional exact model ID from v:models; omission preserves role defaults."
           },
           "effort": {
             "type": "string",
@@ -680,15 +665,15 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
               "xhigh",
               "max"
             ],
-            "description": "Task only: optional reasoning effort supported by the selected model. Omission inherits existing defaults. Forbidden in call mode, which always inherits caller settings."
+            "description": "Optional reasoning effort supported by the selected model. Omission inherits existing defaults. Forbidden in call mode, which always inherits caller settings."
           },
           "title": {
             "type": "string",
-            "description": "Task only: parent-owned display title, max 120 characters. Supply title and description explicitly; legacy omission derives a title from description. Ignored for call."
+            "description": "Parent-owned display title, max 120 characters."
           },
           "description": {
             "type": "string",
-            "description": "Parent-owned task discovery description (max 4000 characters); the task child cannot change title or description. Call purpose is unchanged."
+            "description": "Optional parent-owned discovery context, max 4000 characters. Put worker instructions in task instead."
           },
           "workRoot": {
             "type": "string",
@@ -696,7 +681,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "agent_type": {
             "type": "string",
-            "description": "Agent role. Defaults to \\"general\\"; explicit call mode inherits the caller role when omitted. Discover local roles and configured a2a:<agent> targets with read(\\"v:agents\\"). Remote targets support task mode only and inherit no local resources."
+            "description": "Agent role, defaults to \\"general\\". Built-in specialist roles use their configured default for new ordinary delegations; use role@version to pin one explicitly. Discover local roles and configured a2a:<agent> targets with read(\\"v:agents\\"). Remote targets support task mode only and inherit no local resources."
           },
           "review": {
             "type": "object",
@@ -744,9 +729,33 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           }
         },
         "required": [
-          "description",
+          "title",
           "task"
         ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "call",
+      "description": "Run a blocking leaf in a snapshot of your context and return its result here. Inherits your role and inference settings. Invoke directly, not via a script. The child cannot ask, message, or delegate. Remote device workdirs are not supported.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "Bounded assignment for the child, including the expected result."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional short label for the call trace."
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -787,7 +796,6 @@ search
 exports[`tools — tool surface per agent type > encapsulator 1`] = `
 read
 write
-view_edit
 search
 invoke_tool
 `;
@@ -804,7 +812,6 @@ reply
 exports[`tools — tool surface per agent type > general 1`] = `
 read
 write
-view_edit
 exec
 search
 invoke_tool
@@ -815,23 +822,7 @@ ask
 reply
 cancel
 subagent
-sql
-`;
-
-exports[`tools — tool surface per agent type > general-legacy 1`] = `
-read
-write
-view_edit
-exec
-search
-invoke_tool
-continuation
-session
-message
-ask
-reply
-cancel
-subagent
+call
 sql
 `;
 
@@ -846,7 +837,6 @@ reply
 
 exports[`tools — tool surface per agent type > reflector 1`] = `
 read
-view_edit
 search
 log
 `;
@@ -859,7 +849,6 @@ search
 exports[`tools — tool surface per agent type > sub 1`] = `
 read
 write
-view_edit
 exec
 search
 invoke_tool
@@ -870,6 +859,7 @@ ask
 reply
 cancel
 subagent
+call
 sql
 `;
 

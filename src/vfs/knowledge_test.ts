@@ -74,10 +74,10 @@ test('session edit index preserves history authorization and current-session pat
   }
   const handler = createSessionsHandler(sessions as never)
   const own = JSON.parse(await handler.read('web:one/edits', context))
-  assert.deepEqual(own.items[0].viewEdit, { edit_id: 'edit' })
+  assert.equal(own.items[0].patchPath, 'v:sessions/self/edits/edit')
   assert.equal(own.items[0].when, null); assert.match(own.items[0].history, /\/calls\/call$/)
   const other = JSON.parse(await handler.read('web:one/edits', { ...context, sessionId: 'web:two' }))
-  assert.equal(other.items[0].viewEdit, null)
+  assert.equal(other.items[0].patchPath, null)
   await assert.rejects(async () => handler.read('web:one/edits', { ...context, projectId: 'other' }), /Project/)
   const denied = createSessionsHandler({ ...sessions, getHistory: async () => { throw new Error('history denied') } } as never)
   await assert.rejects(async () => denied.read('web:one/edits', context), /history denied/)

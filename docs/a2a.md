@@ -155,7 +155,7 @@ session operations share the existing Shadow tools:
 
 ```javascript
 read({ path: "v:agents" }) // Local roles and configured a2a:<agent> targets.
-subagent({ agent_type: "a2a:peer", mode: "task", description: "Review supplied text", task: "Review this text: ..." })
+subagent({ agent_type: "a2a:peer", title: "Review supplied text", task: "Review this text: ..." })
 read({ path: "v:sessions/<returned-sessionId>" })
 message({ sessionId: "<returned-sessionId>", content: "Explain your previous answer." })
 read({ path: "v:sessions/<returned-sessionId>/executions" })

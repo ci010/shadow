@@ -5,6 +5,9 @@ import { YieldManager } from '../sessions/yield.ts'
 import type { YieldRequest } from '../sessions/yield-contract.ts'
 import type { ExecutionContext } from './context.ts'
 import { createGenerateImageTool } from './generate-image.ts'
+import { InvokeTool } from './invoke-tool.ts'
+import { ImportTool } from './load-tool.ts'
+import { ReadTool } from './read.ts'
 import { SessionTools, Tools } from './registry.ts'
 import { ToolOutcomeUnknownError } from './tool.ts'
 
@@ -28,19 +31,28 @@ function fixture() {
   const provider = { apiKey: 'fixture-secret' }
   const tool = createGenerateImageTool({ providers: () => ({ openrouter: provider }), ownerSession: () => true,
     askOwner: yields.askOwner.bind(yields), send: async (url, init) => { calls.push({ url: String(url), init }); return response() } })
+  const importer = new ImportTool(new Map(), '.')
+  importer.registerBuiltin('generate_image', tool)
   const base = new Tools('.')
-  base.register(tool)
+  base.register(new ReadTool('.'))
+  base.register(new InvokeTool(importer))
   const tools = new SessionTools(base, '.')
   tools.setExecutionScope('session', [])
   context.tools = tools
   return { tool, tools, context, provider, calls, published: published.promise,
+    invoke: (overrides: Partial<ExecutionContext> = {}, imageArgs: Record<string, unknown> = args) =>
+      tools.execute('invoke_tool', { name: 'generate_image', args: imageArgs }, { ...context, toolCallName: 'invoke_tool', ...overrides }),
+    contract: () => importer.readVirtual('generate_image', context),
     answer: (request: YieldRequest, option: string) => yields.answerUser(context.sessionId, request.id, option) }
 }
 
-test('discoverable tool waits for exact owner confirmation then returns a validated chat image part', async () => {
+test('catalog discovery is passive; lazy invocation waits for confirmation and returns a chat image', async () => {
   const f = fixture()
-  assert.ok(f.tools.getDefinitions().some(definition => definition.function.name === 'generate_image'))
-  const result = f.tools.execute('generate_image', args, f.context)
+  assert.equal(f.tools.has('generate_image'), false)
+  assert.match(await f.contract(), /"name": "generate_image"/)
+  assert.equal(f.tools.hasDynamic('generate_image'), false)
+  assert.equal(f.calls.length, 0)
+  const result = f.invoke()
   const request = await f.published
   assert.equal(request.ownerOnly, true)
   assert.match(request.question, /example\/image-model\.\n\nA tiny fox$/)
@@ -49,6 +61,8 @@ test('discoverable tool waits for exact owner confirmation then returns a valida
   await f.answer(request, request.options[0])
   const output = await result
   assert.equal(f.calls.length, 1)
+  assert.equal(f.tools.hasDynamic('generate_image'), true)
+  assert.ok(!f.tools.getDefinitions().some(definition => definition.function.name === 'generate_image'))
   const [{ url, init }] = f.calls
   assert.equal(url, OPENROUTER_IMAGES_URL)
   assert.equal(init?.method, 'POST')
@@ -61,9 +75,10 @@ test('discoverable tool waits for exact owner confirmation then returns a valida
 })
 
 test('rejects non-owner and replay contexts, decline, missing credentials and credentials changed while waiting', async () => {
-  for (const override of [{ admin: false }, { inputSource: 'event' as const }, { recoveringToolCall: true }]) {
+  for (const override of [{ admin: false }, { inputSource: 'event' as const }, { recoveringToolCall: true },
+    { scriptInvocation: true }, { javascriptInvocation: true }]) {
     const f = fixture()
-    assert.match(String(await f.tool.execute(args, { ...f.context, ...override })), /^Blocked:/)
+    assert.match(String(await f.invoke(override)), /^Blocked:/)
     assert.equal(f.calls.length, 0)
   }
   const missing = fixture()
@@ -71,7 +86,7 @@ test('rejects non-owner and replay contexts, decline, missing credentials and cr
   assert.match(String(await missing.tool.execute(args, missing.context)), /saved API key/)
   for (const changed of [false, true]) {
     const f = fixture()
-    const result = f.tool.execute(args, f.context)
+    const result = f.invoke()
     const request = await f.published
     if (changed) f.provider.apiKey = 'rotated'
     await f.answer(request, changed ? request.options[0] : request.defaultOption)
@@ -80,10 +95,16 @@ test('rejects non-owner and replay contexts, decline, missing credentials and cr
   }
 })
 
+test('the dynamic gateway rejects invalid image arguments without sending a request', async () => {
+  const f = fixture()
+  assert.match(String(await f.invoke({}, { model: 'example/image-model' })), /invalid arguments.*no tool was executed/)
+  assert.equal(f.calls.length, 0)
+})
+
 test('cancellation while awaiting confirmation sends no request', async () => {
   const f = fixture()
   const controller = new AbortController()
-  const result = f.tool.execute(args, { ...f.context, signal: controller.signal })
+  const result = f.invoke({ signal: controller.signal })
   const rejected = assert.rejects(result, { name: 'AbortError' })
   await f.published
   controller.abort()

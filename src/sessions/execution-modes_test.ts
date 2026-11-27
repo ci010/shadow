@@ -18,6 +18,7 @@ import type { AgentTypesManager } from '../agent/types/manager.ts'
 import type { ChannelManager } from '../channels/manager.ts'
 import type { ExecutionContext } from '../tools/context.ts'
 import { Tools, SessionTools } from '../tools/registry.ts'
+import { CallTool } from '../tools/call.ts'
 import { SubagentTool } from '../tools/subagent.ts'
 import { SessionTool } from '../tools/session.ts'
 import { TopicService } from './topics.ts'
@@ -125,6 +126,8 @@ function fixture(workspace: string, store: SessionStore, settings: {
   if (!settings.managedReview) sessions.configureTaskReview = async () => {}
   const subagent = new SubagentTool(bus, sessions, agentTypes, { createThread: async () => null } as unknown as ChannelManager)
   tools.register(subagent)
+  const callTool = new CallTool(subagent)
+  tools.register(callTool)
   tools.register(new TaskTool(sessions))
   tools.register(new AskTool(sessions.yields, sessions.inputs))
   tools.register(new ReplyTool(sessions.yields, sessions.inputs))
@@ -150,7 +153,7 @@ function fixture(workspace: string, store: SessionStore, settings: {
     assert.equal(Object.hasOwn(receipt, 'result'), false)
     return { child: receipt.sessionId as string, parent }
   }
-  return { sessions, requests, reports, facts, subagent, tools, bus, next, spawn }
+  return { sessions, requests, reports, facts, subagent, callTool, tools, bus, next, spawn }
 }
 
 function sourceContext(workspace: string, f: ReturnType<typeof fixture>): ExecutionContext {
@@ -664,7 +667,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.buildSession('web:root')
         const context = sourceContext(workspace, f)
         const schema = f.sessions.getToolDefinitions('web:root').find(tool => tool.name === 'subagent')!.parameters as typeof f.subagent.parameters
-        assert.deepEqual(schema.properties.mode.enum, ['task', 'call'])
+        assert(!('mode' in schema.properties))
+        assert.deepEqual(schema.required, ['title', 'task'])
         assert.match(await f.subagent.execute({ description: 'missing', mode: 'task' }, context), /task is required/)
         assert.match(await f.subagent.execute({ description: 'invalid', mode: 'unsupported', task: 'x' }, context), /mode must be task or call/)
         assert.match(await f.subagent.execute({ description: 'Reusable verifier', agent_type: 'verify', mode: 'session' }, context), /session creation/)
@@ -1079,8 +1083,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         await f.sessions.start()
         await f.sessions.deliver('web:root', input('Call a worker'))
-        ;(await f.next('web:root')).resolve(invoke('subagent', {
-          description: 'Blocking work', mode: 'call', agent_type: 'limited', task: 'Pending call',
+        ;(await f.next('web:root')).resolve(invoke('call', {
+          description: 'Blocking work', task: 'Pending call',
         }, 'call-for-deletion'))
         await waitFor(() => f.sessions.listSessions().some(state => state.mode === 'call'))
         const child = f.sessions.listSessions().find(state => state.mode === 'call')!.sessionId
@@ -1135,8 +1139,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.start()
         const { child, parent } = await f.spawn()
         parent.resolve(done())
-        ;(await f.next(child)).resolve(invoke('subagent', {
-          description: 'Nested call', mode: 'call', agent_type: 'limited', task: 'Still running',
+        ;(await f.next(child)).resolve(invoke('call', {
+          description: 'Nested call', task: 'Still running',
         }, 'nested-call'))
         await waitFor(() => f.sessions.listSessions().some(state => state.mode === 'call'))
         const leaf = f.sessions.listSessions().find(state => state.mode === 'call')!.sessionId
@@ -1177,13 +1181,9 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         ] as const
         for (const [owner, allowed] of rows) {
           assert.deepEqual(f.sessions.getAllowedSubagentModes(owner), allowed)
-          const definition = f.sessions.getToolDefinitions(owner).find(tool => tool.name === 'subagent')
-          if (allowed.length) {
-            const parameters = definition!.parameters as typeof f.subagent.parameters
-            assert.deepEqual(parameters.properties.mode.enum, allowed)
-            assert.equal(parameters.required?.includes('mode') ?? false, owner === 'virtual:task')
-          }
-          else assert.equal(definition, undefined)
+          const names = f.sessions.getToolDefinitions(owner).map(tool => tool.name)
+          assert.equal(names.includes('subagent'), (allowed as readonly string[]).includes('task'))
+          assert.equal(names.includes('call'), (allowed as readonly string[]).includes('call'))
           for (const mode of ['session', 'task', 'call'] as const) {
             const id = `${owner}-${mode}`
             const context = { ...sourceContext(workspace, f), sessionId: owner }
@@ -1202,7 +1202,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         for (const owner of ['virtual:task']) {
           const context = { ...sourceContext(workspace, f), sessionId: owner }
           const before = f.sessions.listSessions().length
-          assert.match(await f.subagent.execute({ description: 'Omitted mode', task: 'Work', agent_type: 'verify' }, context), /mode is required/)
+          assert.match(await f.subagent.execute({ description: 'Omitted mode', task: 'Work', agent_type: 'verify' }, context), /asynchronous delegation is not allowed/)
           assert.equal(f.sessions.listSessions().length, before)
         }
         await assert.rejects(f.sessions.buildSession('virtual:unowned', undefined, { mode: 'call' }), /structural owner/)
@@ -1250,15 +1250,17 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
             content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,c25hcHNob3Q=' } }] }])
           await f.sessions.deliver('web:worker', input('Worker context sentinel'))
           ;(await f.next('web:worker')).resolve(invoke('prepare', {}))
-          ;(await f.next('web:worker')).resolve(invoke('subagent', { mode: 'call', task: 'Inspect locally', description: 'Leaf work' }, 'leaf-tool'))
+          ;(await f.next('web:worker')).resolve(invoke('call', { task: 'Inspect locally' }, 'leaf-tool'))
           await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call'))
           const child = f.sessions.listSessions().find(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call')!.sessionId
           const leaf = await f.next(child)
+          assert.equal(f.sessions.getSessionState(child)?.parentToolCallId, 'leaf-tool')
+          assert.equal(f.sessions.getSessionState(child)?.description, 'Inspect locally')
           assert.equal(leaf.model, 'worker-model')
           assert.match(JSON.stringify(leaf.messages), /Worker context sentinel/)
           assert.match(JSON.stringify(leaf.messages), /data:image\/png;base64,c25hcHNob3Q=/)
           assert.ok(!JSON.stringify(leaf.messages).includes('leaf-tool'))
-          for (const denied of ['subagent', 'ask', 'reply', 'message', 'cron', 'event_subscribe', 'continuation']) assert.ok(!leaf.names.includes(denied))
+          for (const denied of ['subagent', 'call', 'ask', 'reply', 'message', 'cron', 'event_subscribe', 'continuation']) assert.ok(!leaf.names.includes(denied))
           assert.ok(leaf.names.includes('exec'))
           assert.equal(f.sessions.isWaitingForCall('web:worker'), true)
           assert.equal(callWaits.at(-1), true, 'Entering a blocking call publishes its wait state')
@@ -1359,10 +1361,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.buildSession('web:root')
         await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null })
         const controller = new AbortController()
-        const context = { ...sourceContext(workspace, f), sessionId: 'web:sub', signal: controller.signal, toolCallId: 'stable', toolCallName: 'subagent' }
-        const args = { mode: 'call', task: 'Work', description: 'Cancelled leaf' }
-        const first = f.subagent.execute(args, context)
-        const duplicate = f.subagent.execute(args, context)
+        const context = { ...sourceContext(workspace, f), sessionId: 'web:sub', signal: controller.signal, toolCallId: 'stable', toolCallName: 'call' }
+        const args = { task: 'Work', description: 'Cancelled leaf' }
+        const first = f.callTool.execute(args, context)
+        const duplicate = f.callTool.execute(args, context)
         await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call'))
         const child = f.sessions.listSessions().find(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call')!.sessionId
         const request = await f.next(child)
@@ -1375,7 +1377,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal(f.reports.length, 0)
         await f.sessions.stop()
         await f.sessions.start()
-        assert.deepEqual(JSON.parse(await f.subagent.execute(args, context)), receipt)
+        assert.deepEqual(JSON.parse(await f.callTool.execute(args, context)), receipt)
         assert.equal(f.reports.length, 0)
       } finally { await f.sessions.stop(); store.close?.() }
     })
@@ -1491,10 +1493,12 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await f.sessions.buildSession('web:sub', { id: 'web:root' }, { mode: 'session', parentSessionId: null, agentType: 'limited' })
         const context = { ...sourceContext(workspace, f), sessionId: 'web:sub',
           tools: new SessionTools(f.tools, workspace, ['subagent', 'read']) }
-        const args = { mode: 'call', task: 'Work', description: 'Intersection', agent_type: 'general' }
-        await assert.rejects(f.subagent.execute(args, { ...context, toolCallName: 'exec' }), /native subagent/)
+        const args = { task: 'Work', description: 'Intersection' }
+        assert.match(await f.callTool.execute({ ...args, agent_type: 'general' }, context), /accepts only/)
+        await assert.rejects(f.callTool.execute(args, { ...context, toolCallName: 'exec' }), /native call/)
+        await assert.rejects(f.callTool.execute(args, { ...context, toolCallName: 'call', scriptInvocation: true }), /native call/)
         assert.equal(f.sessions.listSessions().length, 2)
-        const work = f.subagent.execute(args, context)
+        const work = f.callTool.execute(args, { ...context, toolCallName: 'call' })
         await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call'))
         const child = f.sessions.listSessions().find(state => f.sessions.getSessionState(state.sessionId)?.mode === 'call')!.sessionId
         const leaf = await f.next(child)
@@ -1509,7 +1513,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           ['{"status":"failed","error":"Operation failed"}', 'failed'],
           ['Failed: operation could not complete.', 'failed'],
         ]) {
-          const declared = f.subagent.execute({ ...args, description: content }, context)
+          const declared = f.callTool.execute({ ...args, description: content }, context)
           await waitFor(() => f.sessions.listSessions().some(state => f.sessions.getSessionState(state.sessionId)?.description === content))
           const id = f.sessions.listSessions().find(state => f.sessions.getSessionState(state.sessionId)?.description === content)!.sessionId
           ;(await f.next(id)).resolve(done(content))
@@ -1705,7 +1709,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.deepEqual(sorted(preview.tools), sorted(actual.tools))
         for (const name of ['cron', 'event_subscribe', 'continuation']) assert(!request.names.includes(name))
         assert(request.names.includes('ask'))
-        assert(request.names.includes('subagent'))
+        assert(request.names.includes('call'))
+        assert(!request.names.includes('subagent'))
         request.resolve(done())
         await waitFor(() => f.sessions.getSessionState(id)?.executionStatus === 'completed')
         const historical = await f.sessions.getContext({ sessionId: id, preview: true })
@@ -1926,7 +1931,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       const f = fixture(workspace, store, { managedReview: true })
       try {
         await f.sessions.start(); await f.sessions.buildSession('web:root')
-        const receipt = JSON.parse(await f.subagent.execute({ mode: 'task', task: 'Original requirement sentinel', description: 'Reviewed', review: { mode: 'agent', criteria: 'Acceptance sentinel', max_rounds: 3 } }, sourceContext(workspace, f)))
+        const receipt = JSON.parse(await f.subagent.execute({ task: 'Original requirement sentinel', title: 'Reviewed', review: { mode: 'agent', criteria: 'Acceptance sentinel', max_rounds: 3 } }, sourceContext(workspace, f)))
         const child = receipt.sessionId
         ;(await f.next(child)).resolve(done('first submission'))
         await waitFor(() => !!f.sessions.getSessionState(child)?.task?.workflow?.reviewerSessionId)

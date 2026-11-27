@@ -1,6 +1,6 @@
 ---
 description: Encapsulate valuable retained challenges and procedures as discoverable skills
-allowedTools: [read, search, write, view_edit, learning_memory, learned_skill, invoke_tool, agent_tool_test, learning_result]
+allowedTools: [read, search, write, learning_memory, learned_skill, invoke_tool, agent_tool_test, learning_result]
 defaultMode: task
 soul: false
 root: true

@@ -37,13 +37,12 @@ an independently hosted CLI bridge does not require the coding application's UI.
 
 ## Delegate and continue
 
-Use a discovered remote agent name with asynchronous task mode:
+Use a discovered remote agent name with `subagent`:
 
 ```javascript
 subagent({
   agent_type: "a2a:codex",
-  mode: "task",
-  description: "Review the supplied design",
+  title: "Review the supplied design",
   task: "Review only this explicitly supplied design: ..."
 })
 ```

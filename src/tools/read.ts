@@ -13,6 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { NodeHtmlMarkdown } from 'node-html-markdown'
+import { SELF_EDIT_PATCH_ROUTE } from '../sessions/file-change-path.ts'
 import type { ExecutionContext } from './context.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import type { Tool, ToolParameters, ToolResult } from './tool.ts'
@@ -298,7 +299,9 @@ export class ReadTool implements Tool<ToolResult> {
             return page
           }
         }
-        if (!listMode && /^v:sessions\/(?!remote:)[^?]+$/.test(rel.replace(/\\/g, '/')) && !rel.endsWith('/brief')) {
+        const isEditPatch = rel.replace(/\\/g, '/').startsWith(`v:sessions/${SELF_EDIT_PATCH_ROUTE}`)
+        if (isEditPatch && listMode) throw new Error('Session edit patches use line paging, not list mode.')
+        if (!isEditPatch && !listMode && /^v:sessions\/(?!remote:)[^?]+$/.test(rel.replace(/\\/g, '/')) && !rel.endsWith('/brief')) {
           const entries = await this.virtualFs.list(rel, context)
           const entry = entries?.find(entry => entry.path === rel.replace(/\\/g, '/'))
           if (!entry) throw new Error('Session search view not found. Use the returned session reference; use read.offset/read.limit for line paging.')

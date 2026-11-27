@@ -440,7 +440,7 @@ Current remote support is deliberately limited:
   JavaScript reads remain text-only, and remote encoding overrides are unsupported.
 
 `write` records the selected node/workdir and Folder ID with its historical edit, including
-remote writes from an ordinary local session. `view_edit` continues to read the
+remote writes from an ordinary local session. `read` on the receipt’s `patchPath` reads the
 session's persisted patch (not a current file on either device) and displays
 that recorded identity. Old records without identity remain readable; their
 device is not inferred from the session's current locality. Existing JSONL and
@@ -865,11 +865,15 @@ a semantic DAG optimizer and does not reinterpret relationship cycles as ownersh
 
 Automatic title/goal observation has been removed. Sessions publish explicit metadata via `write` of `v:sessions/self.json`; independent topic organization remains available.
 
-Fresh local asynchronous `subagent` tasks have parent-owned identity: supply `title`
-and `description` when creating one. `title` is a one-line display name (up to 120
-characters); `description` is discovery text (up to 4000 characters). For compatibility,
-existing description-only calls derive the title from its first 120 characters,
-flattening control characters. Both are persisted as the task's name and description.
+Use `subagent({title, task, description?})` to start an asynchronous task. `task`
+is the worker's first assignment; put scope, constraints and the expected result
+there. `title` is the parent-owned one-line display name (up to 120 characters).
+`description` is optional discovery text (up to 4000 characters), not the worker's
+assignment. For compatibility, existing invocations without a title derive it
+from the first 120 characters of the description, flattening control characters.
+Use `call({task, description?})` directly for a blocking leaf. It inherits the
+caller's role and inference settings and returns through the original tool call,
+not through task review or a completion event.
 The task may use `write` of `v:sessions/self.json` with `completed:true` or
 `completed:false` for non-reviewable tasks; unchanged adapted topic may be included in a full JSON roundtrip; focus may describe the current step. Reviewable tasks submit a final response instead of self-completing. Title and description are immutable to
 the child, including through legacy update. This does not grant parents a new
@@ -908,7 +912,7 @@ records the original failure, deterministic runtime replay commands and limits.
 
 `subagent` accepts optional `model` and `effort` (`low`, `medium`, `high`, `xhigh`,
 `max`). Explicit overrides are validated against the provider catalog before
-admission. Omitted values retain task-role defaults or call inheritance. These
+admission. Omitted values retain task-role defaults. `call` does not accept overrides. These
 parameters do not change execution mode, permissions or workspace ownership.
 
 Work is optional scaffolding, not tool admission. Untracked sessions execute

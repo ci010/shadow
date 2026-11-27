@@ -7,7 +7,7 @@ import { isSelectableAgentType } from '../agent/types/types.ts'
 import type { ChannelManager } from '../channels/manager.ts'
 import type { Tool, ToolParameters } from './tool.ts'
 import { physicalSessionId } from '../sessions/session-identity.ts'
-import { isExecutionMode } from '../sessions/execution-mode.ts'
+import { isExecutionMode, isNativeCallInvocation } from '../sessions/execution-mode.ts'
 import { channelAddressFromSessionId } from '../bus/events.ts'
 import { parseWorkRoot } from '../sessions/initiative-metadata.ts'
 import type { A2aSessions } from '../a2a/sessions.ts'
@@ -58,23 +58,19 @@ export class SubagentTool implements Tool {
   // workdir/folder binding and child tools dispatch through its remote executor.
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
-  readonly description = 'Create an asynchronous reviewable local task, or invoke a blocking bounded leaf call. Declare review at creation: parent (default) or an independently managed agent. Structured verdicts automatically rerun requested changes in the same worker history; only PASS delivers success. Remote A2A tasks remain legacy one-shot and do not support this review lifecycle. Use session creation for independent long-lived conversations. These are executions, not work items. Blocking calls must use this tool directly, not an exec/invoke bridge.'
+  readonly description = 'Start an asynchronous task. The result is an admitted ID, not completion. Local submissions require parent or independent agent review; only PASS delivers success. Remote A2A tasks are one-shot and do not support local review.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
-      mode: {
-        type: 'string', enum: ['task', 'call'],
-        description: 'Task returns an executionId immediately; inspect v:bg without polling. Call waits for its final result and cannot coordinate, ask, or delegate. Remote workdirs support task only; call is rejected before creation because remote exec has no foreground lifecycle. Omission defaults to task in a long-lived session; tasks must explicitly choose call.',
-      },
       prompt_revision: { type: 'string', description: 'Exact Project draft revision for the selected local role definition. Omission uses its normal prompt. Not supported for remote A2A.' },
       sub_revision: { type: 'string', description: 'Exact Project draft revision (built-in sub only). Missing explicit revisions fail closed; omission uses built-in behavior.' },
-      task: { type: 'string', description: 'Initial work. Required for task/call.' },
-      model: { type: 'string', description: 'Task only: optional exact model ID from v:models; omission preserves role defaults. Forbidden in call mode, which always inherits caller settings.' },
-      effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Task only: optional reasoning effort supported by the selected model. Omission inherits existing defaults. Forbidden in call mode, which always inherits caller settings.' },
-      title: { type: 'string', description: 'Task only: parent-owned display title, max 120 characters. Supply title and description explicitly; legacy omission derives a title from description. Ignored for call.' },
+      task: { type: 'string', description: 'First assignment for the worker: outcome, scope, constraints and expected result.' },
+      model: { type: 'string', description: 'Optional exact model ID from v:models; omission preserves role defaults.' },
+      effort: { type: 'string', enum: [...REASONING_EFFORTS], description: 'Optional reasoning effort supported by the selected model. Omission inherits existing defaults. Forbidden in call mode, which always inherits caller settings.' },
+      title: { type: 'string', description: 'Parent-owned display title, max 120 characters.' },
       description: {
         type: 'string',
-        description: 'Parent-owned task discovery description (max 4000 characters); the task child cannot change title or description. Call purpose is unchanged.',
+        description: 'Optional parent-owned discovery context, max 4000 characters. Put worker instructions in task instead.',
       },
       workRoot: {
         type: 'string',
@@ -83,7 +79,7 @@ export class SubagentTool implements Tool {
       agent_type: {
         type: 'string',
         description:
-          'Task only: agent role, defaults to "general". Call inherits the caller role and does not accept this parameter. ' +
+          'Agent role, defaults to "general". ' +
           'Built-in specialist roles use their configured default for new ordinary delegations; use role@version to pin one explicitly. ' +
           'Discover local roles and configured a2a:<agent> targets with read("v:agents"). Remote targets support task mode only and inherit no local resources.',
       },
@@ -103,7 +99,7 @@ export class SubagentTool implements Tool {
       },
       work: { type: 'object', description: 'Optional {key:string}: shared note assigned to the durable owner. Links this execution and its questions to that goal; does not require adoption or constrain tools. Omission inherits an unambiguous parent focus.' },
     },
-    required: ['description', 'task'],
+    required: ['title', 'task'],
   }
 
   constructor(
@@ -123,8 +119,9 @@ export class SubagentTool implements Tool {
     if (args.mode === 'session') return 'Error: mode=session is no longer supported by subagent. Use session creation for an independent long-lived conversation.'
     const denied = ctx.tools?.executionDenial?.('subagent', args)
     if (denied) return denied
-    const description = args.description != null ? String(args.description) : ''
-    if (!description) return 'Error: description is required'
+    const description = args.description
+    if (description !== undefined && typeof description !== 'string') return 'Error: description must be a string.'
+    if (args.mode !== 'call' && description !== undefined && description.length > 4000) return 'Error: task description must be at most 4000 characters.'
 
     if (args.mode !== undefined && !isExecutionMode(args.mode)) return 'Error: mode must be task or call.'
     if (args.mode === 'call') {
@@ -141,16 +138,20 @@ export class SubagentTool implements Tool {
     }
     const allowedModes = this.sessions.getAllowedSubagentModes(ctx.sessionId)
     if (args.mode === undefined && !allowedModes.includes('task')) {
-      return `Error: mode is required in this scope; choose ${allowedModes.join(', ') || 'nothing'}.`
+      return 'Error: asynchronous delegation is not allowed in this scope. Use call if available.'
     }
+    // Existing callers may supply description instead of title; the new schema requires title.
+    const display = args.title ?? description?.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120)
+    if (args.mode !== 'call' && display === undefined) return 'Error: title is required.'
+    const title = args.mode === 'call' ? undefined : parseSessionName(display)
     if (args.prompt_revision !== undefined && args.sub_revision !== undefined) throw new Error('Choose prompt_revision or sub_revision, not both.')
     if (typeof args.agent_type === 'string' && args.agent_type.startsWith('a2a:')) {
       if (args.prompt_revision !== undefined || args.sub_revision !== undefined) throw new Error('Remote A2A does not support local prompt drafts.')
       if (this.sessions.alignment?.required(ctx.sessionId)) throw new Error('Remote A2A execution does not enforce local Work bindings; managed delegation is unavailable.')
       if (!this.remote) throw new Error('A2A is not configured in this Project.')
       if (args.mode !== undefined && args.mode !== 'task') throw new Error('Remote agents support asynchronous task mode only.')
-      if (Object.keys(args).some(key => !['agent_type', 'task', 'description', 'mode'].includes(key))) {
-        throw new Error('Remote delegation accepts only agent_type, task, description and task mode; local work context, report_to and preload_tools are not forwarded.')
+      if (Object.keys(args).some(key => !['agent_type', 'task', 'title', 'description', 'mode'].includes(key))) {
+        throw new Error('Remote delegation accepts only agent_type, task, title, optional description and legacy task mode; local work context, report_to and preload_tools are not forwarded.')
       }
       if (typeof args.task !== 'string' || !args.task.trim()) throw new Error('Remote delegation requires task text.')
       this.sessions.assertCanCreateChild(ctx.sessionId, 'task')
@@ -199,8 +200,6 @@ export class SubagentTool implements Tool {
       return `Error: unknown agent type "${typeName}". Available: ${this.agentTypes.all().filter(isSelectableAgentType).map(type => type.name).join(', ')}`
     }
     const mode = args.mode ?? 'task'
-    const title = mode === 'task' ? parseSessionName(args.title ?? description.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 120)) : undefined
-    if (mode === 'task' && description.length > 4000) return 'Error: task description must be at most 4000 characters.'
     const overrides: InferenceSettings = {
       ...(args.model === undefined ? {} : { model: z.string().trim().min(1).max(512).parse(args.model) }),
       ...(args.effort === undefined ? {} : { reasoningEffort: z.enum(REASONING_EFFORTS).parse(args.effort) }),
@@ -224,7 +223,8 @@ export class SubagentTool implements Tool {
     const task = typeof args.task === 'string' ? args.task.trim() : ''
     if (!task) return `Error: task is required for mode="${mode}".`
     if (reportTo !== undefined && !/^[^:]+:.+$/.test(reportTo)) return 'Error: report_to must be a session ID in channel:chatId format.'
-    const executionKey = ctx.toolCallId && ctx.toolCallName === 'subagent'
+    const nativeTool = !ctx.scriptInvocation && (ctx.toolCallName === 'subagent' || (mode === 'call' && ctx.toolCallName === 'call'))
+    const executionKey = ctx.toolCallId && nativeTool
       ? `${ctx.physicalSessionId}:${ctx.messageId}:${ctx.toolCallId}` : crypto.randomUUID()
     return this.sessions.executeOnce(executionKey, async () => {
     this.sessions.assertCanCreateChild(ctx.sessionId, mode)
@@ -253,8 +253,8 @@ export class SubagentTool implements Tool {
         ...inference,
       })
     }
-    if (mode === 'call' && ctx.toolCallName && ctx.toolCallName !== 'subagent') {
-      throw new Error('Blocking calls require native subagent invocation; a script bridge cannot guarantee the caller remains attached.')
+    if (mode === 'call' && !isNativeCallInvocation(ctx)) {
+      throw new Error('Blocking calls require native call invocation; a script bridge cannot guarantee the caller remains attached.')
     }
 
     const originChannel = ctx.channel ?? 'system'
@@ -266,7 +266,7 @@ export class SubagentTool implements Tool {
     }
 
     const workPolicy = this.sessions.alignment?.prepareDelegation(ctx.sessionId, work, mode)
-    console.info(`[subagent] Spawning ${typeName} subagent: ${description.slice(0, 100)}`)
+    console.info(`[subagent] Spawning ${typeName} subagent: ${(title ?? description ?? task).slice(0, 100)}`)
 
     const sessionId = `virtual:${typeName}-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
 
@@ -287,7 +287,7 @@ export class SubagentTool implements Tool {
         mode,
         workPolicy,
         executionKey,
-        parentToolCallId: ctx.toolCallName === 'subagent' ? ctx.toolCallId : undefined,
+        parentToolCallId: nativeTool ? ctx.toolCallId : undefined,
         parentSessionId,
         reportTo: mode === 'call' ? undefined : reportTo ?? parentSessionId,
         config: inference,
@@ -324,6 +324,6 @@ export class SubagentTool implements Tool {
   }
 
   getChatTextDisplay(args: Record<string, unknown>): string {
-    return `🤖 ${args.agent_type ? `(${args.agent_type}) ` : ''}${String(args.description ?? '').slice(0, 80)}`
+    return `🤖 ${args.agent_type ? `(${args.agent_type}) ` : ''}${String(args.title ?? args.description ?? args.task ?? '').slice(0, 80)}`
   }
 }

@@ -161,7 +161,6 @@ import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
 import { registerInternalEventTools } from '../../tools/internal-events.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
-import { ViewEditTool } from '../../tools/view-edit.ts'
 import type { LoadableEntry } from '../../tools/load-tool.ts'
 import { InvokeTool } from '../../tools/invoke-tool.ts'
 import { ImportTool } from '../../tools/load-tool.ts'
@@ -187,6 +186,7 @@ import { githubPlugin } from '../../projects/github/routes.ts'
 import { ReadTool } from '../../tools/read.ts'
 import { Tools } from '../../tools/registry.ts'
 import { ExecTool } from '../../tools/shell.ts'
+import { CallTool } from '../../tools/call.ts'
 import { SubagentTool } from '../../tools/subagent.ts'
 import { AskTool } from '../../tools/ask.ts'
 import { createGenerateImageTool } from '../../tools/generate-image.ts'
@@ -428,7 +428,6 @@ export async function createProjectRuntime(
     ),
   )
   tools.register(new PlanWriteTool(workspace))
-  tools.register(new ViewEditTool())
 
   // ── Execution hooks ───────────────────────────────────────────────
   tools.addHook(new MemoryLinkCheckHook(workspace))
@@ -1587,7 +1586,7 @@ export async function createProjectRuntime(
     ),
   )
   tools.register(new AskTool(sessions.yields, sessions.inputs, () => alignment))
-  if (!coordinator) tools.register(createGenerateImageTool({
+  if (!coordinator) importTool.registerBuiltin('generate_image', createGenerateImageTool({
     providers: () => activeConfig.providers,
     ownerSession: context => context.projectId === project.id && canAuthor(context.sessionId),
     askOwner: (...args) => sessions.yields.askOwner(...args),
@@ -2287,18 +2286,17 @@ export async function createProjectRuntime(
     projectActionsPlugin(userActions, dependencies.authorize),
   ]) plugin(app)
 
-  // Register subagent tool (requires ChannelManager for thread creation)
-  tools.register(
-    new SubagentTool(bus, sessions, agentTypes, channels, a2a.sessions, subOverrides, project.id),
-  )
+  const subagentTool = new SubagentTool(bus, sessions, agentTypes, channels, a2a.sessions, subOverrides, project.id)
+  tools.register(subagentTool)
+  tools.register(new CallTool(subagentTool))
 
   // Fail closed for new/custom tools. These exact built-in objects provide data and
   // coordination, not arbitrary executable loading. File/search helpers remain Main
   // infrastructure; this profile is deliberately not a filesystem or network sandbox.
   if (coordinator) {
     for (const name of [
-      'read', 'write', 'plan_write', 'view_edit', 'search', 'invoke_tool',
-      'sql', 'session', 'work', 'message', 'ask', 'reply', 'cancel', 'continuation', 'subagent',
+      'read', 'write', 'plan_write', 'search', 'invoke_tool',
+      'sql', 'session', 'work', 'message', 'ask', 'reply', 'cancel', 'continuation', 'subagent', 'call',
     ]) {
       const tool = tools.get(name)
       if (tool) coordinator.allow(tool)

@@ -4,7 +4,7 @@ import { Tools, SessionTools } from './registry.ts'
 import { allowedSubagentModes, executionModeAllowsTool, type ExecutionMode } from '../sessions/execution-mode.ts'
 import type { ExecutionContext } from './context.ts'
 
-const names = ['read', 'write', 'exec', 'ask', 'reply', 'message', 'cancel', 'subagent',
+const names = ['read', 'write', 'exec', 'ask', 'reply', 'message', 'cancel', 'subagent', 'call',
   'session', 'work', 'initiative', 'continuation', 'cron', 'cron_add', 'cron_list', 'cron_remove',
   'event_subscribe', 'signal_provider', 'skill_save']
 
@@ -21,7 +21,7 @@ for (const mode of ['session', 'task', 'call'] as ExecutionMode[]) {
     for (const name of names) {
       const allowed = executionModeAllowsTool(mode, name)
       assert.equal(tools.has(name), allowed, name)
-      assert.equal(tools.getDefinitions().some(def => def.function.name === name), allowed, name)
+      assert.equal(tools.getDefinitions().some(def => def.function.name === name), allowed && !(mode === 'task' && name === 'subagent'), name)
       tools.registerDynamic(base.get(name)!)
       assert.equal(tools.canUseDynamic(name), allowed, name)
       assert.equal(tools.activeDynamicTools().some(tool => tool.name === name), allowed, name)
@@ -44,8 +44,7 @@ test('scope metadata cannot widen the delegation modes of a task or leaf', () =>
     parameters: { type: 'object', properties: { mode: { type: 'string' } } }, execute: async () => 'ok' })
   const task = new SessionTools(base, process.cwd())
   task.setExecutionScope('task', ['session', 'task', 'call'])
-  const definition = task.getDefinitions()[0].function
-  assert.deepEqual(definition.parameters.properties.mode.enum, ['call'])
+  assert.equal(task.getDefinitions().length, 0)
   assert.match(task.executionDenial('subagent', { mode: 'task' })!, /only: call/)
   assert.match(task.executionDenial('subagent', { mode: 'session' })!, /only: call/)
   const call = new SessionTools(base, process.cwd())

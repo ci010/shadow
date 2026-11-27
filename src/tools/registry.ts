@@ -9,6 +9,8 @@ import { imageFromDataUrl, MAX_TOOL_IMAGES } from '../utils/image-input.ts'
 import type { ExecutionContext } from './context.ts'
 import type { McpConnection } from '../mcp/client.ts'
 import { allowedSubagentModes, executionModeAllowsTool, type ExecutionMode } from '../sessions/execution-mode.ts'
+import { CallTool } from './call.ts'
+import { isDelegationToolAllowed } from '../utils/tool-allow.ts'
 import { MAX_CALL_TIMEOUT_MS } from '../sessions/execution-scope.ts'
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js'
 import type { JsonSchemaType, JsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/types.js'
@@ -385,6 +387,11 @@ export class SessionTools extends Tools {
     if (name === 'ask' && !this.askAvailable) return false
     if (!executionModeAllowsTool(this.scope?.mode, name)) return false
     if (name === 'subagent' && this.scope?.modes.length === 0) return false
+    if (name === 'call' && this.base.get(name) instanceof CallTool) {
+      return (!this.scope || this.scope.modes.includes('call')) && isDelegationToolAllowed({
+        allowedTools: this.allowed && [...this.allowed], blockedTools: this.blocked && [...this.blocked],
+      }, name)
+    }
     if (name === 'invoke_tool' && this.allowed?.has('work')) return true
     if (this.allowed) return this.allowed.has(name)
     // Opt-in tools are hidden unless explicitly in allowedTools
@@ -595,7 +602,10 @@ export class SessionTools extends Tools {
       return this.rejectExecution('Task session metadata is parent-owned; read/write v:sessions/self.json for completion only.')
     }
     if (name === 'subagent' && this.scope && !this.scope.modes.includes('task') && args.mode === undefined) {
-      return `Error: mode is required in this scope; choose ${this.scope.modes.join(', ')}.`
+      return 'Error: asynchronous delegation is not allowed in this scope. Use call if available.'
+    }
+    if (name === 'call' && this.base.get(name) instanceof CallTool && this.scope && !this.scope.modes.includes('call')) {
+      return this.rejectExecution('Blocking delegation is not allowed in this scope.')
     }
 
     if (name === 'subagent' && this.scope && typeof args.mode === 'string'
@@ -696,32 +706,8 @@ export class SessionTools extends Tools {
     const scope = this.scope
     return this.base.getDefinitions().filter((d) =>
       this.isToolAllowed(d.function.name)
-    ).map(def => def.function.name === 'subagent' && scope
-      ? { ...def, function: { ...def.function,
-        description: scope.modes.includes('call')
-          ? `${scope.modes.includes('task') ? 'Start an asynchronous task, or invoke' : 'Invoke'} a blocking bounded leaf call directly. Available modes: ${scope.modes.join(', ')}.`
-          : 'Create an asynchronous bounded task. Durable conversations use the session tool.',
-        parameters: {
-        ...def.function.parameters,
-        required: [...new Set([...(def.function.parameters.required ?? []), 'task',
-          ...(scope.modes.includes('task') ? [] : ['mode'])])],
-        properties: {
-          ...Object.fromEntries(Object.entries(def.function.parameters.properties)
-            .filter(([name]) => !['agent_type', 'report_to', 'review'].includes(name) || scope.modes.includes('task'))),
-          mode: { ...def.function.parameters.properties.mode, enum: [...scope.modes],
-            description: scope.modes.includes('task')
-              ? 'Omission defaults to task, which returns an admitted ID immediately. Call waits for its final result.'
-              : 'Required. Call waits for the final result and cannot ask, reply, message, or delegate.',
-          },
-          task: { ...def.function.parameters.properties.task,
-            description: 'Required initial work: a bounded assignment with an expected result.',
-          },
-          ...(scope.modes.includes('task') ? { agent_type: {
-            ...def.function.parameters.properties.agent_type,
-            description: 'Task only: agent role from Runtime or read("v:agents"). Call inherits your role; omit agent_type.',
-          } } : {}),
-        },
-      } } } : def.function.name === 'exec' && this.scope?.mode === 'call'
+      && (d.function.name !== 'subagent' || !scope || scope.modes.includes('task'))
+    ).map(def => def.function.name === 'exec' && this.scope?.mode === 'call'
       ? { ...def, function: { ...def.function, description: `${def.function.description} In calls, execution stays foreground; timeout or cancellation terminates owned processes.`,
         parameters: { ...def.function.parameters, properties: { ...def.function.parameters.properties,
           timeout_ms: { type: 'integer', minimum: 1, maximum: MAX_CALL_TIMEOUT_MS, default: MAX_CALL_TIMEOUT_MS,

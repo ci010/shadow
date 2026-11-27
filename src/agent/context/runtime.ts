@@ -181,7 +181,7 @@ export function runtimeIdentityProvider(
           ] : [
           '- The Child chooses its default OS shell. Omit shell unless its availability on the Child is known; Main shell detection does not apply.',
           '- Remote OS-shell exec is bounded: timeout_ms must be an integer from 1 to 120000 (default 120000). Unlike local exec, timeout terminates the Child command; it does not continue in the background. JavaScript does not start background jobs. JavaScript orchestration requires Main compute permission and keeps bridged filesystem tools and authorized nested OS commands on the Child.',
-          '- For delegated Child work, use subagent mode=task: it inherits the selected Workspace and opaque remote workdir automatically, including review/retry. Do not copy paths to Main or switch away from the Child to delegate. Execution, cancellation and review are Main control-plane services; task OS commands still run on the Child.',
+          '- For delegated Child work, use the `subagent` tool: it inherits the selected Workspace and opaque remote workdir automatically, including review/retry. Do not copy paths to Main or switch away from the Child to delegate. Execution, cancellation and review are Main control-plane services; task OS commands still run on the Child.',
           '- The Child resolves initial cwd from the selected directory. Use relative paths; never use Main paths or display-path snapshots as remote cwd. Paired devices execute supported operations without per-operation approval; shell execution is not an OS sandbox.',
           ]),
         ] : [

@@ -79,8 +79,12 @@ Prefer an asynchronous task when you can continue independent work or the assign
 <!-- /fragment -->
 
 <!-- fragment: execution-coordination -->
-<!-- when: tools=subagent; modes=session,task -->
-Invoke `subagent` directly, never through scripts. For an asynchronous assignment, continue independent work or end the turn rather than waiting. Wait for completion or confirmed cancellation, then reread affected files before taking over a worker’s scope.
+<!-- when: tools=subagent; modes=session -->
+Invoke `subagent` directly. For an asynchronous assignment, continue independent work or end the turn rather than waiting. Wait for completion or confirmed cancellation, then reread affected files before taking over a worker’s scope.
+<!-- /when -->
+
+<!-- when: tools=call; modes=session,task -->
+Invoke `call` directly, never through scripts. Use it when your next step depends on the blocking result.
 <!-- /when -->
 
 <!-- when: tools=cancel; modes=session,task -->

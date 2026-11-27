@@ -16,7 +16,10 @@ import { SessionTools, Tools } from '../tools/registry.ts'
 import { BaseSession } from './base-session.ts'
 import { fileChangeSchema, MAX_FILE_CHANGE_CHARS, parseFilePatch, formatFilePatch } from './file-change-contract.ts'
 import { readSessionFileChange, readSessionFileChanges } from './file-changes.ts'
-import { ViewEditTool } from '../tools/view-edit.ts'
+import { ReadTool } from '../tools/read.ts'
+import { createSessionsHandler } from '../vfs/mounts.ts'
+import { VirtualFs } from '../vfs/virtual-fs.ts'
+import { readSessionEditPatch } from '../vfs/session-edit-patch.ts'
 import { physicalSessionId } from './session-identity.ts'
 import { JsonlSessionStore } from './session-store-jsonl.ts'
 import { SqliteSessionStore } from './session-store-sqlite.ts'
@@ -53,7 +56,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         await writeFile(join(root, 'memory', 'notes.md'), 'context\n  old  \r\n')
         const tools = new Tools(root)
         tools.register(new WriteTool(root))
-        tools.register(new ViewEditTool())
+        const vfs = new VirtualFs()
+        const history = createSessionsHandler({ listSessions: () => [], getSessionState: () => state,
+          getHistory: async () => ({ messages: [], total: 0 }) })
+        vfs.mount('v:sessions', 'session history', history.read, history.list)
+        tools.register(new ReadTool(root, vfs))
         tools.register({
           name: 'exec', description: '', parameters: { type: 'object', properties: {} },
           async execute(_args, context) {
@@ -75,10 +82,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           if (!requestedDetail) {
             const receipts = messages.filter(message => message.role === 'tool').map(message => String(message.content))
             assert.ok(receipts.every(text => !text.includes('@@')))
-            const id = /edit=(\S+)/.exec(receipts.at(-1)!)?.[1]
-            assert.ok(id)
+            const path = /patchPath: (\S+)/.exec(receipts.at(-1)!)?.[1]
+            assert.ok(path)
             requestedDetail = true
-            return { content: '', toolCalls: [{ id: 'detail', name: 'view_edit', arguments: { edit_id: id } }] }
+            return { content: '', toolCalls: [{ id: 'detail', name: 'read', arguments: { path } }] }
           }
           assert.match(String(messages.find(message => message.tool_call_id === 'detail')?.content), /^@@ /)
           return { content: 'Done', toolCalls: [] }
@@ -118,7 +125,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           try {
             assert.deepEqual(await readSessionFileChanges(reopened, state, 0, 30, context.signal), page)
             const detailContext = { ...context, readFileChange: (id: string) => readSessionFileChange(reopened, state, id, context.signal) }
-            assert.equal(await new ViewEditTool().execute({ edit_id: page.changes[1].id }, detailContext), page.changes[1].patch)
+            assert.equal(await readSessionEditPatch(`self/edits/${page.changes[1].id}`, detailContext), page.changes[1].patch)
           }
           finally { reopened.close?.() }
         } finally { if (!closed) store.close?.() }
@@ -289,7 +296,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const change = await readSessionFileChange(reopened, state, id, new AbortController().signal)
         assert.equal(change?.folderId, 'explicit-workspace')
         assert.ok(change?.patch.includes('-old'))
-        assert.equal(await new ViewEditTool().execute({ edit_id: id }, {
+        assert.equal(await readSessionEditPatch(`self/edits/${id}`, {
           sessionId: state.sessionId, physicalSessionId: physicalSessionId(state),
           channel: 'test', chatId: 'fixture', senderId: 'fixture', messageId: 'read',
           tools: new SessionTools(new Tools(root), root), signal: new AbortController().signal,

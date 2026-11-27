@@ -85,8 +85,8 @@ test('subagent only creates temporary work, preserving explicit workdir and igno
     channel: 'discord', chatId: 'parent', senderId: 'user', messageId: 'input',
     sessionId: parent.sessionId, physicalSessionId: 'physical',
   } as ExecutionContext
-  assert.deepEqual(tool.parameters.properties.mode.enum, ['task', 'call'])
-  assert.deepEqual(tool.parameters.required, ['description', 'task'])
+  assert(!('mode' in tool.parameters.properties))
+  assert.deepEqual(tool.parameters.required, ['title', 'task'])
   assert.match(await tool.execute({ mode: 'session', description: 'Legacy' }, context), /session creation/)
   assert.equal(createdId, '')
   assert.match(await tool.execute({ description: 'No task' }, context), /task is required/)
@@ -99,13 +99,17 @@ test('subagent only creates temporary work, preserving explicit workdir and igno
   await tool.execute({ mode: 'task', title: 'Parent title', description: 'Parent description', task: 'Do work' }, context)
   assert.equal(fields?.name, 'Parent title')
   assert.equal(fields?.description, 'Parent description')
+  await tool.execute({ title: 'No discovery description', task: 'Worker instruction' }, context)
+  assert.equal(fields?.name, 'No discovery description')
+  assert.equal(fields?.description, undefined)
+  assert.match(await tool.execute({ task: 'Missing title' }, context), /title is required/)
   await assert.rejects(tool.execute({ mode: 'task', title: ' ', description: 'Purpose', task: 'Work' }, context), /session name/)
   assert.match(await tool.execute({ mode: 'task', title: 'Title', description: 'x'.repeat(4001), task: 'Work' }, context), /4000/)
   assert.equal(fields?.workspaceRoot, 'discord:root')
   assert.equal(fields?.workdir, workdir)
   assert.equal(fields?.folderId, 'folder-a')
   assert.equal(fields?.parentSessionId, parent.sessionId)
-  assert.equal(starts, 2)
+  assert.equal(starts, 3)
   parent.agentType = 'general'
   assert.equal(await tool.execute({ mode: 'call', title: 'Ignored call title', description: 'Leaf', task: 'Inspect' }, context), 'Call result')
   assert.equal(calls, 1)

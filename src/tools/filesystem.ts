@@ -155,7 +155,7 @@ export class WriteTool implements Tool {
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description =
-    'Write or edit a file. With `match`: find and replace. Creates directories as needed. Returns a short receipt; use view_edit with the returned edit ID for the recorded patch.'
+    'Write or edit a file. With `match`: find and replace. Creates directories as needed. Returns a short receipt; use read on the returned patchPath for the recorded patch.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {

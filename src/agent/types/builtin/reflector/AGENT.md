@@ -1,6 +1,6 @@
 ---
 description: Organize useful knowledge and logs, and retain evidenced conditional memories
-allowedTools: [read, search, view_edit, log, learning_memory, learning_result]
+allowedTools: [read, search, log, learning_memory, learning_result]
 defaultMode: task
 soul: false
 root: true
