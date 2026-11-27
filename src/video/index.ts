@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto'
 import { readFile, stat, lstat, mkdtemp, rm, link } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseOtio, otioPictureSpans, type OtioNode, MAX_OTIO_BYTES } from '../shared/otio-model.ts'
+import { otioPictureSpans, type OtioNode, MAX_OTIO_BYTES } from '../shared/otio-model.ts'
 import { run } from './process.ts'
+import { prepareOtioProfile } from '../shared/otio-effects.ts'
 export const revisionOf = (text: string) => createHash('sha256').update(text).digest('hex')
 export interface Options { ffmpeg?: string; ffprobe?: string; signal?: AbortSignal }
 export interface RenderOptions extends Options { revision: string; start?: number; end?: number; width?: number; height?: number }
@@ -25,19 +26,14 @@ export function initialTimeline(duration = 5, rate = 24) {
 export async function plan(file: string, options: Options = {}) {
   options.signal?.throwIfAborted()
   if ((await stat(file)).size > MAX_OTIO_BYTES) throw new Error('OTIO file exceeds size limit')
-  const text = await readFile(file, 'utf8'), model = parseOtio(text)
-  if (model.warnings.length) throw new Error(`Unsupported OTIO features: ${model.warnings.join(', ')}`)
+  const text = await readFile(file, 'utf8'), profile = prepareOtioProfile(text), { model } = profile
   if (!(model.duration > 0) || model.duration > 86400 || model.rate < 1 || model.rate > 120) throw new Error('Supported timeline: duration > 0 and <= 24h, rate 1..120')
-  const inspect = (v: unknown): void => {
-    if (!v || typeof v !== 'object') return
-    if (Array.isArray(v)) { v.forEach(inspect); return }
-    const o = v as Record<string, unknown>
-    if (Array.isArray(o.effects) && o.effects.length) throw new Error('Effects/time warps are unsupported')
-    if (String(o.OTIO_SCHEMA).startsWith('Transition.')) throw new Error('Transitions are unsupported')
-    for (const [k, value] of Object.entries(o)) if (k !== 'metadata') inspect(value)
+  const placements = new Map(model.nodes.filter(n => n.kind === 'Clip').map(n => [n.id, { start: n.start, end: n.end }]))
+  for (const t of Object.values(profile.transitions)) {
+    placements.get(t.from)!.end += t.outOffset
+    placements.get(t.to)!.start -= t.inOffset
   }
-  inspect(JSON.parse(text))
-  const assets: Record<string, { file: string; format: string; image: boolean; video: boolean; audio: boolean; duration: number | null }> = {}
+  const assets: Record<string, { file: string; format: string; image: boolean; video: boolean; audio: boolean; duration: number | null; aspect: number; alpha: boolean }> = {}
   const clips = model.nodes.filter(n => n.kind === 'Clip' && n.enabled && n.end > n.start)
   if (clips.length > 256) throw new Error('At most 256 active clips supported')
   for (const n of clips) {
@@ -48,20 +44,31 @@ export async function plan(file: string, options: Options = {}) {
     if (!(await stat(local)).isFile()) throw new Error(`Not a regular media file: ${local}`)
     const image = images.has(format)
     const probe = JSON.parse(await run(options.ffprobe ?? 'ffprobe', ['-v', 'error', ...inputArgs(local, format), ...(image ? ['-count_frames'] : []), '-show_streams', '-show_format', '-of', 'json'], options.signal, 60000))
-    const streams = probe.streams as { codec_type: string; nb_read_frames?: string }[]
+    const streams = probe.streams as { codec_type: string; nb_read_frames?: string; width?: number; height?: number; pix_fmt?: string; sample_aspect_ratio?: string; tags?: Record<string, string>; side_data_list?: { rotation?: number }[] }[]
     if (image && (streams.length !== 1 || Number(streams[0]?.nb_read_frames) !== 1)) throw new Error(`Only single-frame images are supported: ${local}`)
     const duration = Number(probe.format?.duration)
-    const asset = { file: local, format, image, video: streams.some(s => s.codec_type === 'video'), audio: streams.some(s => s.codec_type === 'audio'), duration: Number.isFinite(duration) ? duration : null }
-    const source = sourceOffset(n)
-    if (source < -1e-8 || (!image && (asset.duration === null || source + n.end - n.start > asset.duration + 0.001))) throw new Error(`Source range outside media duration: ${n.id}`)
+    const visual = streams.find(s => s.codec_type === 'video')
+    const square = !visual?.sample_aspect_ratio || ['1:1', 'N/A', '0:1'].includes(visual.sample_aspect_ratio)
+    const alpha = !/^(?:yuv(?:j)?(?:420|422|444|440|411|410)p(?:\d+(?:le|be))?|rgb24|bgr24|gray(?:\d+(?:le|be))?|gbrp(?:\d+(?:le|be))?|nv12|nv21)$/.test(visual?.pix_fmt ?? '') || visual?.tags?.alpha_mode === '1' || !square || !!visual?.side_data_list?.some(s => s.rotation)
+    const asset = { aspect: (visual?.width ?? 0)/(visual?.height ?? 1), alpha, file: local, format, image, video: streams.some(s => s.codec_type === 'video'), audio: streams.some(s => s.codec_type === 'audio'), duration: Number.isFinite(duration) ? duration : null }
+    const placement = placements.get(n.id)!
+    const source = sourceOffset(n) + placement.start - n.start
+    if (source < -1e-8 || (!image && (asset.duration === null || source + placement.end - placement.start > asset.duration + 0.001))) throw new Error(`Source range outside media duration: ${n.id}`)
     if (n.trackKind === 'Video' ? !asset.video : !asset.audio || image) throw new Error(`Missing ${n.trackKind} stream: ${n.id}`)
     assets[n.id] = asset
   }
+  for (const t of Object.values(profile.transitions)) {
+    const a = assets[t.from]!, b = assets[t.to]!
+    if (a.alpha || b.alpha) throw new Error(`Unsupported transition endpoint at ${a.alpha ? t.from : t.to}: alpha-capable/unknown pixel format or non-square/rotated pixels; only proven opaque endpoints supported`)
+    if (Math.abs(a.aspect-b.aspect) > 1e-8) throw new Error(`Unsupported transition endpoints at ${t.from} and ${t.to}: matching aspect ratio required`)
+  }
+  // Check all layers, not just the highest visible clip.
+  if (model.nodes.filter(n => n.kind === 'Clip' && n.trackKind === 'Video' && n.enabled).some(n => { const s = placements.get(n.id)!; return [s.start, s.end].some(t => Math.abs(t * model.rate - Math.round(t * model.rate)) >= 1e-6) })) throw new Error('Video cuts/handles must align to timeline frames')
   const pictures = otioPictureSpans(model)
   if (pictures.some(s => [s.start, s.end].some(t => Math.abs(t * model.rate - Math.round(t * model.rate)) >= 1e-6))) throw new Error('Video cuts must align to timeline frames; no implicit retiming')
   const explicitAudio = model.nodes.some(n => n.kind === 'Track' && n.trackKind === 'Audio' && n.enabled)
   const audio = explicitAudio ? clips.filter(n => n.trackKind === 'Audio').map(node => ({ node, start: node.start, end: node.end })) : pictures.filter(s => s.node && assets[s.node.id]?.audio).map(s => ({ ...s, node: s.node! }))
-  return { revision: revisionOf(text), duration: model.duration, rate: model.rate, model, assets, pictures, audio, audioPolicy: explicitAudio ? 'explicit-audio-tracks' : 'visible-video-embedded' }
+  return { profile, placements, revision: revisionOf(text), duration: model.duration, rate: model.rate, model, assets, pictures, audio, audioPolicy: explicitAudio ? 'explicit-audio-tracks' : 'visible-video-embedded' }
 }
 export async function render(file: string, output: string, options: RenderOptions) {
   try { await lstat(output); throw new Error(`EEXIST: output already exists: ${output}`) }
@@ -78,7 +85,7 @@ export async function render(file: string, output: string, options: RenderOption
   const directory = await mkdtemp(path.join(path.dirname(path.resolve(output)), '.shadow-video-'))
   const temp = path.join(directory, 'render.mp4')
   try {
-    const args = ['-hide_banner', '-nostdin', '-v', 'error', '-n'], filters: string[] = [], video: string[] = [], audio: string[] = []
+    const args = ['-hide_banner', '-nostdin', '-v', 'error', '-n'], filters: string[] = [], audio: string[] = []
     let index = 0
     const input = (n: OtioNode, at: number, duration: number) => {
       const a = p.assets[n.id]!, i = index++
@@ -87,27 +94,64 @@ export async function render(file: string, output: string, options: RenderOption
       args.push('-t', String(duration), ...inputArgs(a.file, a.format))
       return i
     }
-    for (const s of p.pictures) {
-      const a = Math.max(start, s.start), b = Math.min(end, s.end)
-      if (b <= a) continue
-      const label = `v${video.length}`, duration = b - a
-      if (s.node) {
-        const i = input(s.node, a, duration)
-        filters.push(`[${i}:v:0]setpts=PTS-STARTPTS,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${p.rate},trim=duration=${duration},format=yuv420p[${label}]`)
-      } else filters.push(`color=c=black:s=${width}x${height}:r=${p.rate}:d=${duration},setsar=1[${label}]`)
-      video.push(`[${label}]`)
+    // Compile from timeline zero, then trim the finished composition. This keeps
+    // effect clocks and transition samples identical for interval previews.
+    const duration = end
+    const byId = new Map(p.model.nodes.map(n => [n.id, n]))
+    const tracks = p.model.nodes.filter(n => n.kind === 'Track' && n.trackKind === 'Video' && n.enabled)
+    filters.push(`color=c=black:s=${width}x${height}:r=${p.rate}:d=${duration},format=rgba[base]`)
+    let composed = 'base', serial = 0
+    for (const track of tracks) {
+      const members = p.model.nodes.filter(n => n.kind === 'Clip' && n.enabled && n.trackKind === 'Video' && n.end > n.start && (() => { let current: OtioNode | undefined = n; while (current && current.parentId !== track.id) current = current.parentId === null ? undefined : byId.get(current.parentId); return !!current })())
+      filters.push(`color=c=black@0:s=${width}x${height}:r=${p.rate}:d=${duration},format=rgba[track${serial}]`)
+      let layer = `track${serial++}`
+      for (const n of members) {
+        const placement = p.placements.get(n.id)!, a = placement.start, b = Math.min(end, placement.end)
+        if (b <= a) continue
+        const i = input(n, a, b-a), label = `clip${serial++}`
+        const fx: string[] = []
+        let x = 0, y = 0, scale = 1
+        for (const e of p.profile.effects[n.id] ?? []) {
+          if (e.profile === 'crop') fx.push(`crop=iw*${1-e.left-e.right}:ih*${1-e.top-e.bottom}:iw*${e.left}:ih*${e.top}`)
+          if (e.profile === 'color') fx.push(`eq=brightness=${e.brightness}:contrast=${e.contrast}:saturation=${e.saturation}`)
+          if (e.profile === 'opacity') fx.push(`colorchannelmixer=aa=${e.value}`)
+          if (e.profile === 'transform') { x += e.x; y += e.y; scale *= e.scale }
+        }
+        const incoming = Object.entries(p.profile.transitions).find(([,t]) => t.to === n.id)
+        if (incoming) {
+          const t = incoming[1]
+          if (t.profile === 'dissolve') fx.push(`fade=t=in:st=0:d=${t.inOffset+t.outOffset}:alpha=1`)
+          else fx.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*lt(X/W,T/${t.inOffset+t.outOffset})'`)
+        }
+        // RGBA throughout: pixels outside fitted clips reveal lower layers.
+        filters.push(`[${i}:v:0]setpts=PTS-STARTPTS,fps=${p.rate},format=rgba,${fx.length ? fx.join(',')+',' : ''}scale=${Math.max(2,Math.round(width*scale/2)*2)}:${Math.max(2,Math.round(height*scale/2)*2)}:force_original_aspect_ratio=decrease,setsar=1,trim=duration=${b-a},setpts=PTS+${a}/TB[${label}]`)
+        const next = `layer${serial++}`
+        filters.push(`[${layer}][${label}]overlay=x=(W-w)/2+${x*width}:y=(H-h)/2+${y*height}:eof_action=pass:repeatlast=0:format=auto:enable='gte(t,${a})*lt(t,${b})'[${next}]`)
+        layer = next
+      }
+      const next = `stack${serial++}`
+      filters.push(`[${composed}][${layer}]overlay=eof_action=pass:repeatlast=0:format=auto[${next}]`)
+      composed = next
     }
-    filters.push(`${video.join('')}concat=n=${video.length}:v=1:a=0[vout]`)
+    filters.push(`[${composed}]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,format=yuv420p[vout]`)
     for (const s of p.audio) {
-      const a = Math.max(start, s.start), b = Math.min(end, s.end)
+      const a = s.start, b = Math.min(end, s.end)
       if (b <= a) continue
       const i = input(s.node, a, b - a), label = `a${audio.length}`
-      filters.push(`[${i}:a:0]atrim=duration=${b-a},asetpts=PTS-STARTPTS,aresample=48000,adelay=${Math.round((a-start)*48000)}S:all=1[${label}]`)
+      const fx: string[] = []
+      for (const e of p.profile.effects[s.node.id] ?? []) {
+        if (e.profile === 'volume') fx.push(`volume=${e.value}`)
+        if (e.profile === 'audioFade') {
+          if (e.in) fx.push(`afade=t=in:st=0:d=${e.in}`)
+          if (e.out) fx.push(`afade=t=out:st=${s.node.end-s.node.start-e.out}:d=${e.out}`)
+        }
+      }
+      filters.push(`[${i}:a:0]atrim=duration=${b-a},asetpts=PTS-STARTPTS,${fx.length ? fx.join(',')+',' : ''}aresample=48000,adelay=${Math.round(a*48000)}S:all=1[${label}]`)
       audio.push(`[${label}]`)
     }
-    filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${end-start}[silence]`)
-    filters.push(`[silence]${audio.join('')}amix=inputs=${audio.length+1}:normalize=0:duration=first:dropout_transition=0[aout]`)
-    args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', String(end-start), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', temp)
+    filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${end}[silence]`)
+    filters.push(`[silence]${audio.join('')}amix=inputs=${audio.length+1}:normalize=0:duration=first:dropout_transition=0,atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[aout]`)
+    args.push('-filter_complex_threads', '1', '-filter_complex', filters.join(';'), '-map', '[vout]', '-map', '[aout]', '-t', String(end-start), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', '+faststart', temp)
     await run(options.ffmpeg ?? 'ffmpeg', args, options.signal)
     const probe = JSON.parse(await run(options.ffprobe ?? 'ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-count_frames', '-show_entries', 'stream=nb_read_frames', '-of', 'json', temp], options.signal))
     const frames = Number(probe.streams?.[0]?.nb_read_frames), expected = Math.round((end-start)*p.rate)
@@ -115,6 +159,6 @@ export async function render(file: string, output: string, options: RenderOption
     options.signal?.throwIfAborted()
     if (revisionOf(await readFile(file, 'utf8')) !== p.revision) throw new Error('OTIO changed during rendering; output discarded')
     await link(temp, path.resolve(output))
-    return { output: path.resolve(output), revision: p.revision, start, end, width, height, frames, audioPolicy: p.audioPolicy }
+    return { output: path.resolve(output), revision: p.revision, start, end, width, height, rate: p.rate, frames, audioPolicy: p.audioPolicy }
   } finally { await rm(directory, { recursive: true, force: true }) }
 }
