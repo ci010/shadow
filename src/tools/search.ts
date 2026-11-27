@@ -1,3 +1,5 @@
+import { otioSubpath, readOtioIndex, otioSearch } from './otio-file-vfs.ts'
+import { resolveAgentPath } from '../utils/paths.ts'
 import { WEB_SEARCH_PROVIDERS } from '../config/web-search.ts'
 import type { RoutedWebSearchTool } from './web-provider.ts'
 import { executeRemoteFilesystemSearch } from '../execution/remote-filesystem-client.ts'
@@ -31,7 +33,7 @@ export class SearchTool implements Tool {
   readonly supportsRemoteWorkdir = true
   readonly supportsLayerFSWorkdir = true
   readonly readonly = true
-  readonly description = 'Search names with glob, content with grep, or the web. Virtual searches return read paths without activating skills, connecting services or launching browsers.'
+  readonly description = 'Search names with glob, content with grep, or the web. Virtual searches return read paths without activating skills, connecting services or launching browsers. Local .otio file scopes search derived view references; OTIO grep is literal, not regex.'
   readonly parameters: ToolParameters = {
     type: 'object',
     properties: {
@@ -137,6 +139,16 @@ export class SearchTool implements Tool {
     }
     const virtualPath = scheme !== 'web' && (root ? isVirtualPath(root)
       : scheme === 'glob' && isVirtualPath(query))
+    if (scheme !== 'web' && !virtualPath && root) {
+      const otio = otioSubpath(root)
+      if (otio || /\.otio$/i.test(root)) {
+        if (context.remoteWorkdir || context.layerfsWorkdir) throw new Error('OTIO derived search is not supported on Child/LayerFS yet. No Main filesystem fallback is allowed.')
+        if (include !== undefined) throw new Error('OTIO search does not support include; narrow the view path instead.')
+        const source = otio?.source ?? root
+        const entries = await readOtioIndex(resolveAgentPath(this.workspace, context.cwd ?? this.workspace, source), source, context.signal)
+        return otioSearch(entries, scheme, query, otio ? `${source}/${otio.view}` : source, Number(args.offset ?? 0), Number(args.limit ?? 100))
+      }
+    }
     if (scheme !== 'web' && !virtualPath) {
       const layerResult = await layerfsRoute('search', { ...args, handler: scheme, path: root, include }, context, this.workspace)
       if (layerResult !== undefined) {

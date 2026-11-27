@@ -1,3 +1,4 @@
+import { otioSubpath, readOtioIndex, otioPage } from './otio-file-vfs.ts'
 import { layerfsRoute } from './layerfs-route.ts'
 import { executionTargetContext, executionTargetParameters } from './execution-target.ts'
 import { sessionWebFetch } from '../execution/network/session-proxy.ts'
@@ -209,7 +210,7 @@ export class ReadTool implements Tool<ToolResult> {
   readonly supportsLayerFSWorkdir = true
   readonly supportsRemoteWorkdir = true
   readonly description =
-    'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. ' +
+    'Read a file, list a directory, or fetch a URL. Auto-detects mode from the path. Local .otio/overview exposes read-only timeline, tracks, clips, media and diagnostics references; .otio itself stays raw text. ' +
     'Text supports offset/limit, including URLs and virtual text. Local session paths default to /overview, which includes bounded collaboration previews and links exact /c/<message>.<call> details via short physical references (legacy /calls/<id> paths still work); /full retains payloads. Line ranges match grep on that path; omit ranges for the last 200 lines. PNG, JPEG, GIF and WebP files on local or approved Child workspaces return visual content (max 5 MiB, 25 million pixels); no line paging. Read images directly, not through exec/scripts.'
   readonly parameters: ToolParameters = {
     type: 'object',
@@ -261,6 +262,8 @@ export class ReadTool implements Tool<ToolResult> {
     }
     context = await executionTargetContext(args, context, 'filesystem.read')
     const raw = String(args.path)
+    const otio = otioSubpath(raw)
+    if (otio && (context.remoteWorkdir || context.layerfsWorkdir)) throw new Error('OTIO derived reads are not supported on Child/LayerFS yet. No Main filesystem fallback is allowed; read the source .otio instead.')
     if (!isVirtualPath(raw)) {
       const layerResult = await layerfsRoute('read', args, context, this.workspace)
       if (layerResult !== undefined) return layerResult
@@ -352,6 +355,13 @@ export class ReadTool implements Tool<ToolResult> {
         context,
         showLineNumbers,
       )
+    }
+
+    if (otio) {
+      if (listMode) throw new Error('OTIO views use line paging, not list mode.')
+      if (args.encoding !== undefined) throw new Error('OTIO derived views require UTF-8 source and do not accept encoding overrides.')
+      const index = await readOtioIndex(this.resolve(otio.source, context), otio.source, context.signal)
+      return otioPage(index, `${otio.source}/${otio.view}`, Number(args.offset ?? 1) - 1, Number(args.limit ?? 200), showLineNumbers)
     }
 
     // ── File or directory ──
