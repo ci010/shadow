@@ -1,3 +1,4 @@
+import { WORK_DISPATCH_ID, workDispatchConfigSchema } from '../cron/work-dispatch-contract.ts'
 import { WorkflowRuntime } from '../workflows/runtime.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -154,6 +155,23 @@ async function fixture(workspace: string, store: SessionStore) {
 }
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: host tool discovery suppresses ask for both automatic Work phases only`, async () => withTempWorkspace(async workspace => {
+    const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
+    try {
+      for (const phase of ['bootstrap', 'implementation'] as const) {
+        const sessionId = `work-executor:discovery-${phase}`
+        await f.sessions.buildSession(sessionId, undefined, { agentType: 'general', automaticWork: {
+          key: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', jobId: WORK_DISPATCH_ID, phase,
+          limits: workDispatchConfigSchema.parse({ kind: 'work-dispatch' }),
+        } })
+        const definitions = f.sessions.getToolDefinitions(sessionId, undefined, 'web')
+        assert(!definitions.some(tool => tool.name === 'ask'), `${phase} must not inherit channel ask from an incoming event`)
+      }
+      const ordinary = 'web:ordinary-discovery'
+      await f.sessions.buildSession(ordinary, undefined, { agentType: 'general' })
+      assert(f.sessions.getToolDefinitions(ordinary, undefined, 'web').some(tool => tool.name === 'ask'))
+    } finally { await f.close() }
+  }))
   test(`${Store.name}: explicit assignment receipts persist for new and reused ordinary peers`, async () => withTempWorkspace(async workspace => {
     const store: SessionStore = new Store(join(workspace, 'sessions')), f = await fixture(workspace, store)
     const folders = new FolderRegistry(workspace); await folders.init()

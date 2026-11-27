@@ -4064,6 +4064,7 @@ ${JSON.stringify(request)}`,
     const policy = behaviorOverride ?? (state ? this.resolveAgentTypeTools(state.agentType) : {})
     const scoped = new SessionTools(this.deps.tools, this.workspace, policy.allowedTools, policy.blockedTools)
     scoped.restrictChannelTools(channel, sessionId)
+    if (state?.automaticWork) scoped.restrictAutomaticWorkTools()
     const mode = modeOverride ?? state?.mode ?? 'session'
     scoped.setExecutionScope(mode, allowedSubagentModes(mode, !!delegationOwner(state)))
     const allDefs = scoped.getDefinitions()
@@ -4489,6 +4490,7 @@ ${JSON.stringify(request)}`,
     const executionPolicy = this.deps.tools.getExecutionPolicy()
     if (executionPolicy) sessionTools.setExecutionPolicy(executionPolicy)
     sessionTools.restrictChannelTools(msg.channel, sessionId)
+    if (automatic) sessionTools.restrictAutomaticWorkTools()
     if (!conversationPolicy) promptCtx.offeredTools = new Set(sessionTools.getDefinitions().map(def => def.function.name))
     const basePrompt = this.runtimeSystemPrompt(sessionId, promptCtx, conversationPolicy, state)
     const systemPrompt = state.channelBoundary && conversationPolicy

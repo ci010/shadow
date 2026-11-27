@@ -290,8 +290,15 @@ them as new authority. Already-running workers are not retroactively rewritten.
 
 Workers retain responsibility when unable to proceed. They record completed
 steps, artifacts, branch/commit references, attempts, concrete blocker and required
-input in Work, and ask the publisher/manager through existing controls. Work done
-reports execution delivery, not publisher acceptance.
+input in Work. Automatic executors have no question-delivery channel: in both
+bootstrap and implementation, the host hides `ask` and rejects direct or dynamic
+invocations, including after tool-snapshot copying. Workers instead read
+`v:tools/work_note_create` and invoke `work_note_create` with
+`{workKey, body, notifyManager:true}`. Check its notification receipt: queued is
+not delivered or approved; not_queued does not mean permission. Manager replies
+notify the original author through existing Work delivery without automatically
+clearing blocked status. Ordinary sessions with valid question channels retain
+`ask`. Work done reports execution delivery, not publisher acceptance.
 
 Provider retries and inference/tool/argument budgets remain bounded. Abnormal
 termination or an unfinished result records blocked progress without releasing the

@@ -229,3 +229,55 @@ test('scoped tool descriptions match the modes advertised to the model', () => {
   }
   assert.deepEqual(base.get('subagent')!.parameters.properties.mode.enum, ['task', 'call'])
 })
+
+
+for (const phase of ['bootstrap', 'implementation'] as const) {
+  test(`automatic Work ${phase}: ask is hidden and denied through all gateways; lazy comments remain callable`, async () => {
+    const base = new Tools(WORKSPACE)
+    let questions = 0, comments = 0
+    const ask = { name: 'ask', description: 'fixture question', parameters: { type: 'object' as const, properties: {} },
+      async execute() { questions++; return 'unexpected question delivery' } }
+    base.register(ask)
+    const importer = new ImportTool(new Map<string, LoadableEntry>(), WORKSPACE)
+    const alignment = { async createWorkNote(author: string, input: unknown) {
+      comments++; assert.equal(author, 'work-executor:fixture')
+      assert.deepEqual(input, { workKey: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', body: 'Need coordinator input', notifyManager: true })
+      return { notification: 'queued' }
+    } } as unknown as WorkAlignment
+    for (const tool of createWorkTools(alignment)) importer.registerBuiltin(tool.name, tool)
+    base.register(new InvokeTool(importer))
+    const tools = new SessionTools(base, WORKSPACE)
+    tools.setExecutionScope('session', ['call'])
+    // SessionManager applies this host restriction for both automatic phases,
+    // independent of the incoming event's channel label (even a misleading web label).
+    tools.restrictChannelTools('web', 'work-executor:fixture')
+    tools.restrictAutomaticWorkTools()
+    tools.registerDynamic(ask) // importing a same-named tool cannot lift the ceiling
+    const context = { tools, sessionId: 'work-executor:fixture', signal: new AbortController().signal } as ExecutionContext
+    try {
+      for (const scoped of [tools, tools.snapshot()]) {
+        const ctx = { ...context, tools: scoped }
+        assert(!scoped.getDefinitions().some(def => def.function.name === 'ask'))
+        assert(!scoped.activeDynamicTools().some(tool => tool.name === 'ask'))
+        assert.equal(scoped.canUseDynamic('ask'), false)
+        for (const result of [
+          await scoped.execute('ask', {}, ctx),
+          await scoped.executeDynamic('ask', {}, ctx),
+          await scoped.execute('invoke_tool', { name: 'ask', args: {} }, ctx),
+        ]) assert.match(requireToolText(result), /work_note_create.*notifyManager/)
+        assert.match(scoped.executionDenial('invoke_tool', { name: 'ask', args: {} })!, /no ask delivery channel/)
+      }
+      assert.equal(questions, 0)
+      const result = await tools.execute('invoke_tool', { name: 'work_note_create', args: {
+        workKey: 'work:d4557ed7-e276-52d1-8beb-59d95f7d7e39', body: 'Need coordinator input', notifyManager: true,
+      } }, context)
+      assert.deepEqual(JSON.parse(requireToolText(result)), { notification: 'queued' })
+      assert.equal(comments, 1)
+      assert(tools.hasDynamic('work_note_create'), 'actual catalog importer activated the comment tool')
+      const ordinary = new SessionTools(base, WORKSPACE)
+      ordinary.restrictChannelTools('web', 'web:ordinary')
+      assert(ordinary.getDefinitions().some(def => def.function.name === 'ask'))
+      assert.equal(ordinary.executionDenial('ask', {}), undefined, 'legitimate channel ask remains available')
+    } finally { await tools.resetDynamicAndWait() }
+  })
+}

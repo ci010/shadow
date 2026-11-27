@@ -330,6 +330,13 @@ export class SessionTools extends Tools {
   }
   override getExecutionPolicy(): ToolExecutionPolicy | undefined { return super.getExecutionPolicy() ?? this.base.getExecutionPolicy() }
   private askAvailable = true
+  private askDenial = CHAT_QUESTION_GUIDANCE
+
+  /** Host-bound automatic executors have no question delivery channel, in either phase. */
+  restrictAutomaticWorkTools(): void {
+    this.askAvailable = false
+    this.askDenial = 'Automatic Work has no ask delivery channel. Read v:tools/work_note_create and invoke work_note_create with {workKey, body, notifyManager:true}. Check the notification receipt; comments do not authorize or unblock Work.'
+  }
 
   restrictChannelTools(channel?: string, sessionId?: string): void {
     if (!channelSupportsAsk(channel, sessionId)) this.askAvailable = false
@@ -448,6 +455,7 @@ export class SessionTools extends Tools {
     if (policy) tools.setExecutionPolicy(policy)
     tools.scope = this.scope
     tools.askAvailable = this.askAvailable
+    tools.askDenial = this.askDenial
     return tools
   }
 
@@ -570,7 +578,7 @@ export class SessionTools extends Tools {
         args.args !== undefined || args.server !== undefined)) {
       return this.rejectExecution('Trusted executions may import only explicitly granted catalog sources without extra arguments.')
     }
-    if (name === 'ask' && !this.askAvailable) return this.rejectExecution(CHAT_QUESTION_GUIDANCE)
+    if (name === 'ask' && !this.askAvailable) return this.rejectExecution(this.askDenial)
     if (name === 'invoke_tool' && typeof args.name === 'string') {
       return this.executionDenial(args.name, typeof args.args === 'object' && args.args !== null ? args.args as Record<string, unknown> : {})
     }
@@ -619,6 +627,7 @@ export class SessionTools extends Tools {
     copy.scope = this.scope
     copy.borrowedOwner = this.dynamicOwner
     copy.askAvailable = this.askAvailable
+    copy.askDenial = this.askDenial
     copy.borrowedLifetime = this.ownerSignal
     for (const tool of this.tools.values()) {
       if (this.canUseDynamic(tool.name) && this.hasDynamic(tool.name)) {

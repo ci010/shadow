@@ -156,6 +156,7 @@ test('manual disabled Work automation dispatches fresh model rounds into exact i
       } else {
         assert.equal(body.model, 'worker-model'); assert.equal(body.reasoning_effort, 'max')
         assert(!names.includes('work_dispatch'), 'ordinary general worker must not inherit dispatcher grant')
+        assert(!names.includes('ask'), 'automatic implementation executor has no ask delivery channel')
         for (const name of ['read', 'write', 'exec', 'invoke_tool']) assert(names.includes(name), `remote general role exposes ${name}`)
         const assignment = body.messages.map(message => text(message.content)).find(content => content.includes('Assigned Work key:'))!
         const key = /Assigned Work key: (.+?)\. Read v:works\//.exec(assignment)![1]
