@@ -214,3 +214,25 @@ test('every page fragment and search receipt carries its actual snapshot without
     }
   })
 })
+
+
+test('profile-aware views preserve source mapping and expose supported effects without probing media', () => {
+  const raw = JSON.parse(text)
+  const clip = raw.tracks.children[0].children[0]
+  clip.effects = [{ OTIO_SCHEMA: 'Effect.1', effect_name: 'shadow.opacity', metadata: { shadow: { profile: 'opacity', value: 0.5 } } }]
+  const index = projectOtio(JSON.stringify(raw), 'edit.otio')
+  const overview = JSON.parse(otioPage(index, 'edit.otio/overview', 0, 200))
+  assert.equal(overview.renderProfile.supported, true)
+  assert.equal(overview.renderProfile.requiresCompositePreview, true)
+  const effects = JSON.parse(otioPage(index, 'edit.otio/effects', 0, 200)).effects
+  assert.equal(effects[0].parsed[0].value, 0.5)
+  const clips = JSON.parse(otioPage(index, 'edit.otio/clips', 0, 200)).clips
+  assert.deepEqual(clips[0].sourceStart, { value: 101, rate: 24000 / 1001 })
+  assert.equal(clip.media_reference.target_url, 'https://invalid.example/never-fetch.mov')
+  clip.effects[0].effect_name = 'unknown.plugin'
+  const unsupported = projectOtio(JSON.stringify(raw), 'edit.otio')
+  const diagnostics = JSON.parse(otioPage(unsupported, 'edit.otio/diagnostics', 0, 200))
+  assert.equal(diagnostics.renderProfile.supported, false)
+  assert.match(diagnostics.renderProfile.error, /effect/)
+  assert.equal(JSON.parse(otioPage(unsupported, 'edit.otio/clips', 0, 200)).clips[0].sourceStart, null)
+})

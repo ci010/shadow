@@ -27,6 +27,10 @@ Edit the actual OTIO file using normal file tools or a validated local script. R
 
 Unsupported effects, transitions or track semantics must be reported, not silently flattened. Viewer track solo, visibility and mute controls are review state, not persisted editing decisions. Never claim these transient controls changed the exported movie.
 
+## Effects and compositing
+
+Before adding transitions, opacity, transforms, crop, color or audio effects, read `v:skills/video-editing/reference/effects.md`. Use the validated Shadow profile, not invented OTIO plugin names or raw FFmpeg expressions. Inspect `/effects`, `/transitions` and `/diagnostics` after editing. Multi-layer alpha and profile effects require an accurate rendered preview; the legacy highest-source picture is not the final composite.
+
 ## Commands
 
 In a source checkout, use `pnpm exec node --import tsx scripts/video.ts --help`. With a built backend, use `node dist/src/index.js project-video --help`. Resolve the actual installation/checkout path rather than assuming it is the user's working directory. File arguments resolve from the executing process's cwd.
@@ -39,7 +43,7 @@ node dist/src/index.js project-video init edit.otio --duration 5 --rate 24
 node dist/src/index.js project-video plan edit.otio
 
 # Substitute the revision returned by plan; boundaries are timeline seconds.
-node dist/src/index.js project-video preview edit.otio --revision SHA256 --start 0 --end 2 --output preview-v1.mp4
+node dist/src/index.js project-video preview edit.otio --revision SHA256 --start 0 --end 2 --output preview-v1.mp4 --manifest edit.otio.preview.json
 node dist/src/index.js project-video export edit.otio --revision SHA256 --output final-v1.mp4
 ```
 

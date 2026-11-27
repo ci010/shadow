@@ -6,7 +6,7 @@ The edit is an OpenTimelineIO `.otio` file, not a separately registered video pr
 
 Keep timeline media references accessible on the execution device. The existing OTIO Viewer remains a review surface: selecting elements, navigating time and referencing marked pictures into chat. Track solo/mute/visibility used for review does not modify the source timeline and must not silently affect a render.
 
-The shared OTIO parser is used by the viewer, file projections and export planner. The initial picture model chooses the highest visible clip; it is not an alpha compositor. Export rejects unsupported effects and transitions rather than claiming that a hard-cut approximation is a faithful render. Source time is distinct from file seek time when a media reference has a nonzero available-range origin.
+The shared structural OTIO parser and validated [composition profile](otio-effects.md) are used by the Viewer, file projections and export planner. The render compiler composites video layers with alpha and executes supported clip effects and transitions. The legacy source-picture model still chooses a single clip for source inspection; it is not used as a substitute for accurate composite preview. Unknown effects and unsupported combinations fail explicitly. Source time is distinct from file seek time when a media reference has a nonzero available-range origin.
 
 Source JSON must retain unknown metadata. A parsed model is a lossy index, not a replacement serialization. JSON-pointer element IDs belong to a source revision; reorder and split edits require reading the new revision.
 
@@ -31,11 +31,13 @@ The built equivalent is `node dist/src/index.js project-video ...`. Run from the
 Use the returned revision for rendering:
 
 ```sh
-node dist/src/index.js project-video preview edit.otio --revision SHA256 --start 0 --end 2 --output preview-v1.mp4
+node dist/src/index.js project-video preview edit.otio --revision SHA256 --start 0 --end 2 --output preview-v1.mp4 --manifest edit.otio.preview.json
 node dist/src/index.js project-video export edit.otio --revision SHA256 --output final-v1.mp4
 ```
 
 `preview` requires an explicit interval. Both commands accept `--width`, `--height`, `--ffmpeg` and `--ffprobe`. Output dimensions are even integers; cuts and interval boundaries must align to the timeline's frame grid. The baseline uses H.264 video and AAC audio, mixing enabled explicit Audio tracks when present and otherwise using visible video embedded sound. Tracks mix additively without normalization. A silent timeline still receives a silent AAC track. File extensions and demuxers are restricted to the supported local-media profile; remote URLs are not fetched. A source revision mismatch prevents publishing the result.
+
+For effects/transitions or potentially transparent layers, the Viewer requires a matching rendered preview. It reads `<timeline>.preview.json` on load/refresh, checks its source SHA-256 and same-owner media path, and maps timeline time into the preview interval. A missing/stale/invalid or out-of-range preview is not permission to show a highest-layer approximation. Sidecar reading never launches a render. See the [composition profile](otio-effects.md) for exact effect names, units, transition handles and unsupported combinations.
 
 ## Three footage
 

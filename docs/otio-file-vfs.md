@@ -9,7 +9,9 @@ Local `read` accepts stateless, read-only views below a UTF-8 `.otio` file:
 - `./film/edit.otio/clips`: paged clip summaries and detail references (overview does not list every clip).
 - `./film/edit.otio/clips/<id>`: one clip, projected timing and authored object, subject to the record budget below.
 - `./film/edit.otio/media`: authored media references, active keys and target URLs.
-- `./film/edit.otio/diagnostics`: parser warnings and interpretation limits.
+- `./film/edit.otio/effects`: authored clip effects and their validated profile interpretation.
+- `./film/edit.otio/transitions`: transition nodes and their validated profile interpretation.
+- `./film/edit.otio/diagnostics`: structural warnings, profile support/errors and interpretation limits.
 
 Read `overview` first and follow the returned paths rather than constructing IDs.
 IDs are a reversible hex encoding of the parser's source JSON pointer. They are
@@ -75,8 +77,14 @@ Projected `start`, `end` and `duration` are seconds, not exact frame counts. The
 reported composition rate is the shared parser's selected rate, not a claim that
 all source media has that rate. Authored `RationalTime` value/rate pairs, source
 ranges and the authored timeline preserve source precision, including fractional
-rates; consumers must not round them to the composition rate. Transition hard-cut
-and unsupported effect warnings remain visible; this is not full OTIO evaluation.
+rates; consumers must not round them to the composition rate. The browser-safe
+`src/shared/otio-effects.ts` validates the supported composition profile and
+normalizes known effects before structural timing is calculated. `renderProfile`
+reports support, errors and whether accurate composite preview is required.
+Unknown profiles remain structurally inspectable where the base parser allows,
+but are marked unsupported; fallback source timing is not fabricated. Structural
+transition warnings refer to the legacy source-picture path, not proof that the
+render compiler ignored a supported transition. No view claims full OTIO evaluation.
 
 The source is bounded to 8 MiB, and the shared parser enforces its existing
 structure/depth/time validation. A read opens one regular file, bounds bytes,

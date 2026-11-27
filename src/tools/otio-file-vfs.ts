@@ -1,6 +1,7 @@
 import { open } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { MAX_OTIO_BYTES, parseOtio, type OtioNode } from '../shared/otio-model.ts'
+import { prepareOtioProfile, OTIO_PROFILE_VERSION, type OtioProfile } from '../shared/otio-effects.ts'
 
 export function otioSubpath(path: string): { source: string; view: string } | undefined {
   if (/^(?:v:|https?:)/i.test(path)) return
@@ -51,7 +52,14 @@ export interface OtioIndex {
 
 /** Parse once and index references only: O(nodes), no serialized views/descendant copies. */
 export function projectOtio(text: string, source: string, version = createHash('sha256').update(text).digest('hex')): OtioIndex {
-  const model = parseOtio(text)
+  let profile: OtioProfile | undefined, profileError: string | undefined
+  try { profile = prepareOtioProfile(text) }
+  catch (error) { profileError = error instanceof Error ? error.message : String(error) }
+  // Unsupported profiles remain inspectable under the legacy structural parser;
+  // this fallback does not approve their rendering or fabricate a source mapping.
+  const model = profile?.model ?? parseOtio(text)
+  const profileStatus = { version: OTIO_PROFILE_VERSION, supported: !!profile,
+    requiresCompositePreview: profile?.requiresCompositePreview ?? null, error: profileError }
   const raw: unknown = JSON.parse(text)
   const metrics = { viewsOpened: 0, recordsSerialized: 0 }
   const views = new Map<string, () => OtioView>()
@@ -104,16 +112,22 @@ export function projectOtio(text: string, source: string, version = createHash('
   const add = (path: string, factory: () => OtioView) => views.set(`${source}/${path}`, factory)
   // Factories capture nodes, never serialized content or filtered descendant arrays.
   add('overview', () => single({ name: model.root.name.slice(0, 512), rate: model.rate, duration: model.duration,
-    globalStart: model.globalStart, trackCount: tracks.length, clipCount: clips.length,
-    follow: ['timeline', 'tracks', 'clips', 'media', 'diagnostics'].map(p => `${source}/${p}`) }))
+    globalStart: model.globalStart, trackCount: tracks.length, clipCount: clips.length, renderProfile: profileStatus,
+    follow: ['timeline', 'tracks', 'clips', 'media', 'effects', 'transitions', 'diagnostics'].map(p => `${source}/${p}`) }))
   add('timeline', () => list('nodes', model.nodes))
   add('tracks', () => list('tracks', tracks))
   add('clips', () => list('clips', clips))
   add('media', () => list('media', clips, node => ({ clip: ref(node), sourcePointer: node.id,
     media_reference: authored(node).media_reference, media_references: authored(node).media_references,
     activeMediaKey: node.activeMediaKey, targetUrl: node.targetUrl, status: 'Reference only; not fetched or probed.' })))
-  add('diagnostics', () => single({ warnings: model.warnings, limitations: [
-    'Shared preview hard-cut transition approximations apply. No media probing, decoding or existence checks.',
+  add('effects', () => list('effects', model.nodes.filter(n => Array.isArray(authored(n).effects) && (authored(n).effects as unknown[]).length > 0), node => ({
+    sourcePointer: node.id, parsed: profile?.effects[node.id], authored: authored(node).effects,
+  })))
+  add('transitions', () => list('transitions', model.nodes.filter(n => n.kind === 'Transition'), node => ({
+    ...record(node), parsed: profile?.transitions[node.id], authored: authored(node),
+  })))
+  add('diagnostics', () => single({ warnings: model.warnings, renderProfile: profileStatus, profileDiagnostics: profile?.diagnostics, limitations: [
+    'Structural timing is not a composite image. Profile effects/transitions and alpha layers require rendered preview; source playback can only inspect media. No media probing, decoding or existence checks.',
     'IDs encode source JSON pointers. Structural edits may change IDs; compare sourceVersion across pages.',
     'Track details list direct children only; timeline contains projected nodes, not a second copy of raw JSON.',
     'Names/URLs in node summaries are capped at 512/2048 characters. Oversize records are replaced by explicit source-pointer omission records.',

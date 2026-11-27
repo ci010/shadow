@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { getBuiltinSkills } from './builtins.ts'
 import { SkillDisclosure } from './disclosure.ts'
+import { readFile } from 'node:fs/promises'
+import { initialTimeline } from '../video/index.ts'
+import { prepareOtioProfile } from '../shared/otio-effects.ts'
 
 test('video editing is discoverable and teaches stateless OTIO file views', async () => {
   const skills = await getBuiltinSkills()
@@ -12,4 +15,19 @@ test('video editing is discoverable and teaches stateless OTIO file views', asyn
   assert.match(skill.body, /No mount/)
   assert.match(skill.body, /lossy view/)
   assert.match(skill.body, /Child path is never a Main path/)
+})
+
+
+test('composition skill examples use accepted effects and preserve exact profile spelling', async () => {
+  const body = (await getBuiltinSkills()).get('video-editing')!.body
+  assert.match(body, /v:skills\/video-editing\/reference\/effects\.md/)
+  assert.match(body, /--manifest edit\.otio\.preview\.json/)
+  const guide = await readFile(new URL('./builtin/video-editing/reference/effects.md', import.meta.url), 'utf8')
+  const effect = JSON.parse(/```json\s+([^`]+)```/.exec(guide)![1]!)
+  const raw: any = initialTimeline(2)
+  const duration = raw.tracks.children[0].children[0].source_range
+  raw.tracks.children[0].children = [{ OTIO_SCHEMA: 'Clip.1', source_range: duration, media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: 'source.png' }, effects: [effect] }]
+  const prepared = prepareOtioProfile(JSON.stringify(raw))
+  assert.equal(prepared.effects['/tracks/children/0/children/0']![0]!.profile, 'opacity')
+  assert.equal(prepared.requiresCompositePreview, true)
 })
