@@ -323,11 +323,19 @@ export async function startProjectHost(
     localLiveSocketPath: REALTIME_SOCKET_PATH,
     launchCredentialExemptions: [...deviceIngress, { method: 'GET', path: REALTIME_SOCKET_PATH }],
   })
+  const liveOwners = new WeakSet<Request>()
   registerRealtimeRoute(app, realtimeHub, authorize, {
-    authorize: request => !!directUi?.authorize(request) || authorizeOwner(request),
+    authorize: async request => {
+      if (directUi?.authorize(request)) return true
+      if (!await authorizeOwner(request)) return false
+      // Topic checks are synchronous and receive this exact authenticated
+      // request, including when a one-use ticket owns the socket upgrade.
+      liveOwners.add(request)
+      return true
+    },
     ownerSignal: request => directUi?.ownerSignal(request),
     authorizeTopic: (request, topic) => authorizeLiveTopic(topic) &&
-      (!!directUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || authorizeOwner(request) === true),
+      (!!directUi?.authorize(request) || !!mobileAccess?.authorizeMain(request) || liveOwners.has(request)),
   })
   const hostDiagnostics = new Hono()
   otelPlugin(hostOtelStore)(hostDiagnostics)

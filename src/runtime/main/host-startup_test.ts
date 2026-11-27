@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { once } from 'node:events'
+import WebSocket from 'ws'
 import { DatabaseSync } from 'node:sqlite'
 import { ConfigSchema } from '../../config/schema.ts'
 import { withTempWorkspace } from '../../testing/workspace.ts'
@@ -19,6 +20,59 @@ import { SqliteSessionStore } from '../../sessions/session-store-sqlite.ts'
 import { projectPaths } from '../../projects/contracts.ts'
 import { projectStoragePath } from '../../utils/data-paths.ts'
 import { safeSessionId } from '../../utils/paths.ts'
+
+test('authenticated Main owner tickets authorize Project live subscriptions', async () => {
+  await withTempWorkspace(async root => {
+    const reservation = createServer().listen(0, '127.0.0.1')
+    await once(reservation, 'listening')
+    const address = reservation.address()
+    assert(address && typeof address !== 'string')
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()))
+    const base = `http://127.0.0.1:${address.port}`
+    const credential = 'synthetic-live-owner-credential'
+    const config = ConfigSchema.parse({ agent: { workspace: join(root, 'home') }, channels: {}, mcp: {} })
+    const runtime = await startProjectHost(config, {
+      localExecutor: false, gateway: { host: '127.0.0.1', port: address.port, launchCredential: credential },
+    }, async (_config, dependencies) => {
+      const publisher = dependencies.realtimeHub!.registerProject(dependencies.project.id, undefined, undefined, undefined,
+        topic => topic.kind === 'folders' ? { folders: [] } : { sessions: [] })
+      return {
+        app: new Hono(), folders: new FolderRegistry(dependencies.home), ready: Promise.resolve(),
+        async shutdown() { publisher.close() }, updateConfig() {},
+      }
+    })
+    let socket: WebSocket | undefined
+    try {
+      await runtime.ready
+      const ticket = (token: string) => fetch(`${base}/api/live/ws`, {
+        method: 'POST', headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000),
+      })
+      assert.equal((await ticket('invalid-credential')).status, 401)
+      const response = await ticket(credential)
+      assert.equal(response.status, 200)
+      const { protocol, proof } = await response.json()
+      socket = new WebSocket(`${base.replace('http:', 'ws:')}/api/live/ws`, [protocol, proof])
+      await once(socket, 'open', { signal: AbortSignal.timeout(5000) })
+      const subscriptions = [
+        { topic: { kind: 'projects' } },
+        { topic: { kind: 'sessions', projectId: 'default' } },
+        { topic: { kind: 'resources', projectId: 'default' } },
+        { topic: { kind: 'folders', projectId: 'default' } },
+        { topic: { kind: 'session-summary', projectId: 'default', scope: 'navigation' } },
+        { topic: { kind: 'sessions', projectId: 'missing-project' } },
+      ]
+      const message = once(socket, 'message', { signal: AbortSignal.timeout(5000) })
+      socket.send(JSON.stringify({ type: 'subscribe', id: 1, subscriptions }))
+      const [bytes] = await message
+      const acknowledgement = JSON.parse(String(bytes))
+      assert.equal(acknowledgement.type, 'subscribed')
+      assert.deepEqual(acknowledgement.rejected, [subscriptions[5].topic])
+      assert.deepEqual(acknowledgement.added.map((entry: { topic: unknown }) => entry.topic), subscriptions.slice(0, 5).map(entry => entry.topic))
+      assert(acknowledgement.added.every((entry: { unavailable?: boolean }) => !entry.unavailable))
+      assert.equal(acknowledgement.projections.length, 2)
+    } finally { socket?.terminate(); await runtime.shutdown() }
+  })
+})
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
   test(`${Store.name}: bad session storage isolates its Project, preserves data, and supports repair/retry`, async t => {
