@@ -18,6 +18,13 @@ export function isWorkingStage(stage: unknown): stage is WorkingStage {
   return stage === 'llm' || stage === 'tool' || stage === 'waiting' || stage === 'rate-limit' || stage === 'waiting-for-call' || stage === 'running'
 }
 
+/** An authoritative settled snapshot can replace a missed terminal stream event.
+ * Never settle while Main still reports an admitted input, or for unknown state. */
+export function isSettledRequestActivity(stage: SessionStage | undefined, activeRequestId?: string): boolean {
+  return !activeRequestId && (stage === 'idle' || stage === 'inactive' || stage === 'failed'
+    || stage === 'completed' || stage === 'cancelled')
+}
+
 export function prominentWorkingStage(stages: readonly (string | undefined)[]): WorkingStage | undefined {
   return stages.includes('waiting') ? 'waiting' : stages.find(isWorkingStage)
 }

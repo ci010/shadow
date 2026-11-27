@@ -667,7 +667,7 @@ import { isUserMessage, resendableUserMessage, messageHistoryMarkers, groupMessa
 import CommandResult from './CommandResult.vue'
 import { mergeCommandResults } from '../command-results.ts'
 import { isCommandReceipt, type CommandReceipt } from '../../../src/slash-commands/receipt.ts'
-import { conversationIconStage, displayedSessionStages as resolveDisplayedStages, isAnimatingStage, isWaitingStage, isWorkingStage, shouldRefreshReadonlyHistory, type ConversationActivity, type SessionStage, type WorkingStage } from '../session-activity.ts'
+import { conversationIconStage, displayedSessionStages as resolveDisplayedStages, isAnimatingStage, isWaitingStage, isWorkingStage, isSettledRequestActivity, shouldRefreshReadonlyHistory, type ConversationActivity, type SessionStage, type WorkingStage } from '../session-activity.ts'
 import type { SessionRecovery } from '../../../src/sessions/session-store.ts'
 import { canRedirectComposerKey, isComposerFocusKey } from '../composer-autofocus.ts'
 import { groupSenderNames, parseSessionMessage, sessionMessageTitle, sessionMessageSourceLabel, type SessionMessageSource } from '../message-author.ts'
@@ -1148,7 +1148,7 @@ function applySessionActivity(
   sessionRecoveries.value = { ...recoveries }
   stageError.value = ''
   if (observedActive && observedRequest === currentRequest.value && observedSessionId === activeSessionId.value
-    && (stages[observedSessionId] === 'idle' || stages[observedSessionId] === 'inactive')
+    && isSettledRequestActivity(stages[observedSessionId], identities[observedSessionId])
     && !sendRequest) {
     observedRequest?.finish()
     streaming.value = false

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { displayedSessionStages, isAnimatingStage, isWorkingStage, prominentWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, sessionActivity, shouldRefreshReadonlyHistory } from './session-activity.ts'
+import { displayedSessionStages, isSettledRequestActivity, isAnimatingStage, isWorkingStage, prominentWorkingStage, parseSessionStages, parseActiveRequestIds, parseSessionRecoveries, sessionActivity, shouldRefreshReadonlyHistory } from './session-activity.ts'
 
 test('sidebar groups prioritize yields over active work without confusing blocking calls with requests for a reply', () => {
   assert.equal(prominentWorkingStage(['llm', 'waiting-for-call', 'waiting']), 'waiting')
@@ -89,4 +89,14 @@ test('failed recovery replaces resting icons but never active work or intentiona
     assert.equal(parseSessionStages({ activity: { chat: { stage, recovery } } }).chat, stage)
   }
   assert.equal(parseSessionStages({ activity: {} }).chat, undefined)
+})
+
+test('settled activity releases stale request controls after a missed terminal event', () => {
+  for (const stage of ['idle', 'inactive', 'failed', 'completed', 'cancelled'] as const) {
+    assert.equal(isSettledRequestActivity(stage), true, stage)
+    assert.equal(isSettledRequestActivity(stage, 'new-input'), false, stage)
+  }
+  for (const stage of ['llm', 'tool', 'waiting', 'rate-limit', 'waiting-for-call', 'running', 'pending', undefined] as const) {
+    assert.equal(isSettledRequestActivity(stage), false, String(stage))
+  }
 })
