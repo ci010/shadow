@@ -2075,7 +2075,7 @@ export async function createProjectRuntime(
   }))
   discordIntegration.attach(sessions, channels.discordTransport(), (request, context) => channels.executeOperation(request, context))
   directoryBots.setChannelOperations((request,context)=>channels.executeOperation(request,context))
-  const botWork = new BotWork(initiatives, project.id)
+  const botWork = new BotWork(initiatives, project.id, {}, (author, input) => alignment.createWorkNote(author, input))
   const botMessages = new BotMessages(workspace, project.id, scope => {
     directoryBots.assertHostScope(scope, 'messages')
     channels.assertStreamAccess(scope.address.botInstanceId, scope.address.conversationId)

@@ -697,9 +697,10 @@ host-backed SDK methods. These do not import modules, expose credentials, allow
 arbitrary destinations or authorize local session management:
 
 - `ctx.work.call({ action: "create", idempotencyKey, title, definition: "Describe the reported issue and how to assess it" })` creates a **normal Project Work record** with
-  `pending`, `manager=null`, `assignee=null`. No session is created, selected,
-  assigned, focused or messaged by Bot intake itself. An explicitly configured and
-  enabled automatic Work dispatch may subsequently claim eligible unassigned Work
+  `pending`, `assignee=null`, and the host-derived stable source channel session as
+  `manager`. Deployment reloads and physical segments do not change that manager.
+  No executor session is created, assigned, focused or messaged by intake itself.
+  An explicitly configured and enabled automatic Work dispatch may subsequently claim eligible unassigned Work
   and start an isolated executor; see [automatic Work dispatch](work-auto-dispatch.md).
 - `ctx.work.call({ action: "query", key?, offset?, limit? })` reads only Work created
   by this Project/Bot/binding source. The projection contains the original submitted
@@ -709,6 +710,21 @@ arbitrary destinations or authorize local session management:
   source context only. It cannot change definition, authorization, assignment or
   status, even after an owner assigns the Work elsewhere. Owner-managed Work
   history retains source provenance. Supplementing someone else's Work fails.
+
+- `ctx.work.call({ action: "notes", key, before? })` pages existing Work comments
+  only while the current source session is still that Work's manager.
+- `ctx.work.call({ action: "reply", key, replyTo, body })` replies to an original
+  executor comment through the existing Work note API. This notifies its original
+  author, including a retained automatic executor. It does not unblock, reassign,
+  or grant permission. The BOT's approved custom tool must expose these operations
+  (and its own validated input schema); the host does not add arbitrary tools to
+  an existing deployment. No generic Project Work management is granted.
+- `ctx.work.call({ action: "recover_manager", key })` explicitly repairs historical
+  source Work with `manager=null` only when Project/Bot/binding **and original
+  source session** match the current trusted host scope. It records an audit event
+  and preserves status, blocker and assignment. Query never repairs data. Existing
+  non-null managers or ambiguous/replaced source identities are not overwritten;
+  those require owner investigation. This is not a cross-Project/bulk migration.
 
 Host provenance records Project, Bot, binding/source key, deployment revision,
 session and source input, never a group-supplied owner identity. The source key

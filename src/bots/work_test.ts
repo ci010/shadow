@@ -24,7 +24,7 @@ function fixture(t: TestContext, limits?: { works?: number; supplements?: number
   }
 }
 
-test('Bot intake is shared pending Work with host provenance, no owner, assignment, session link or authorization', t => {
+test('Bot intake binds only the trusted source manager, without assignment, session link or authorization', t => {
   const f = fixture(t)
   const receipt = f.execute(create)
   assert.equal(receipt.status, 'created')
@@ -33,13 +33,13 @@ test('Bot intake is shared pending Work with host provenance, no owner, assignme
   assert.equal(record.origin, 'agent_interpretation')
   assert.equal(record.definition, create.definition)
   assert.equal(record.title, create.title)
-  assert.equal(record.manager, null)
+  assert.equal(record.manager, scope.sessionId)
   assert.equal(record.assignee, null)
   assert.equal(record.assignmentRevision, 1)
   assert.equal(record.status, 'pending')
   assert.deepEqual(record.dependencies, [])
-  assert.deepEqual(f.store.workSessionKeys(scope.sessionId), [])
-  assert.deepEqual(f.store.workAuthority(record.key), { manager: null, executor: null, active: true })
+  assert.deepEqual(f.store.workSessionKeys(scope.sessionId), [record.key])
+  assert.deepEqual(f.store.workAuthority(record.key), { manager: scope.sessionId, executor: null, active: true })
   assert.equal(record.botSource?.projectId, scope.projectId)
   assert.equal(record.botSource?.botId, scope.botId)
   assert.equal(record.botSource?.bindingKey, scope.bindingKey)
@@ -187,4 +187,63 @@ test('retargeting a stable Discord binding ID cannot expose or supplement the pr
   assert.equal(handedOff.bindingKey, original.bindingKey)
   assert.equal(f.execute(create, handedOff).key, receipt.key)
   assert.equal(f.execute({ action: 'query' }, handedOff).total, 1)
+})
+
+
+test('host binds stable channel manager across reload and physical session changes', t => {
+  const f = fixture(t)
+  const host: BotHostScope = { projectId: scope.projectId, botId: scope.botId, revision: 'r1', bindingKey: 'group',
+    sessionId: 'physical-one', address: { projectId: scope.projectId, platform: 'qq', botInstanceId: 'connection', conversationId: 'group:one' } }
+  const first = botWorkScope(host, 'one')
+  f.execute(create, first)
+  f.reopen()
+  const next = botWorkScope({ ...host, sessionId: 'physical-two', revision: 'r2' }, 'two')
+  assert.equal(next.sessionId, first.sessionId)
+  assert.equal(f.store.workRecords()[0]!.manager, next.sessionId)
+  assert.deepEqual(f.execute(create, next).key, f.store.workRecords()[0]!.key)
+})
+
+test('legacy manager recovery requires exact original host source and never resets assignment or blocker', t => {
+  const f = fixture(t)
+  const { key } = f.execute(create)
+  const original = f.store.workRecords()[0]!
+  const legacy = { ...original, sequence: 2, manager: null, assignee: 'executor', status: 'blocked' as const, blockedReason: 'Need human authority' }
+  f.store.saveWork(legacy, 1, 'fixture', 'legacy')
+  assert.throws(() => f.execute({ action: 'recover_manager', key }, { ...scope, bindingKey: 'foreign' }), /source scope/)
+  assert.throws(() => f.execute({ action: 'recover_manager', key }, { ...scope, sessionId: 'replacement' }), /Original source session/)
+  assert.equal(f.execute({ action: 'query' }).total, 1)
+  assert.equal(f.store.workRecords()[0]!.manager, null, 'query must not repair')
+  f.execute({ action: 'recover_manager', key })
+  f.reopen()
+  const repaired = f.store.workRecords()[0]!
+  assert.equal(repaired.manager, scope.sessionId)
+  assert.equal(repaired.assignee, 'executor')
+  assert.equal(repaired.status, 'blocked')
+  assert.equal(repaired.blockedReason, legacy.blockedReason)
+  assert.equal(repaired.assignmentRevision, legacy.assignmentRevision)
+  f.execute({ action: 'recover_manager', key })
+  assert.equal(f.store.workRecords()[0]!.sequence, repaired.sequence)
+  f.store.saveWork({ ...repaired, sequence: repaired.sequence + 1, manager: 'human' }, repaired.sequence, 'human', 'assignment')
+  assert.throws(() => f.execute({ action: 'recover_manager', key }), /already has a manager/)
+})
+
+test('source-scoped manager reply reuses Work notifications without unblocking or authorization', async t => {
+  const f = fixture(t)
+  const { key } = f.execute(create)
+  const original = f.store.workRecords()[0]!
+  f.store.saveWork({ ...original, sequence: 2, assignee: 'executor', status: 'blocked', blockedReason: 'Need decision' }, 1, 'fixture', 'assignment')
+  const durable = (id: string) => [scope.sessionId, 'executor'].includes(id)
+  const question = f.store.createWorkNote('executor', { workKey: key, body: 'Which outcome?', notifyManager: true }, durable)
+  assert.equal(question.notification, 'queued')
+  assert.equal(f.store.pendingWorkNotifications()[0]!.target, scope.sessionId)
+  const bridge = new BotWork(f.store, scope.projectId, {}, (author, input) => f.store.createWorkNote(author, input, durable))
+  const notes = bridge.execute(scope, { action: 'notes', key }) as any
+  assert.equal(notes.items[0].id, question.note.id)
+  const reply = await bridge.execute(scope, { action: 'reply', key, replyTo: question.note.id, body: 'Investigate only; no publication.' }) as any
+  assert.equal(reply.notification, 'queued')
+  assert.ok(f.store.pendingWorkNotifications().some(n => n.kind === 'note_reply' && n.target === 'executor'))
+  assert.equal(f.store.workRecords()[0]!.status, 'blocked')
+  assert.equal(f.store.workRecords()[0]!.assignee, 'executor')
+  assert.throws(() => bridge.execute({ ...scope, bindingKey: 'foreign' }, { action: 'reply', key, replyTo: question.note.id, body: 'Forged' }), /source scope/)
+  assert.throws(() => bridge.execute(scope, { action: 'reply', key, replyTo: question.note.id, body: 'Forged', manager: 'executor' }))
 })

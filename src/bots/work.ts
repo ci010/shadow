@@ -1,3 +1,4 @@
+import { channelSessionId } from '../bus/events.ts'
 import { workKeySchema } from '../initiatives/work-key.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -18,7 +19,7 @@ export type BotWorkScope = z.infer<typeof scopeSchema>
 export function botWorkScope(scope: BotHostScope, sourceInputId: string): BotWorkScope {
   const bindingKey = createHash('sha256').update(JSON.stringify([scope.bindingKey, scope.address.projectId,
     scope.address.platform, scope.address.botInstanceId, scope.address.conversationId])).digest('hex')
-  return { projectId: scope.projectId, botId: scope.botId, bindingKey, revision: scope.revision, sessionId: scope.sessionId, sourceInputId }
+  return { projectId: scope.projectId, botId: scope.botId, bindingKey, revision: scope.revision, sessionId: channelSessionId(scope.address), sourceInputId }
 }
 const retryKey = z.string().trim().min(1).max(200)
 // External Markdown is data, not evidence of human authorization.
@@ -27,6 +28,10 @@ const requestSchema = z.discriminatedUnion('action', [
     title: z.string().trim().min(1).max(160), definition: workDefinitionSchema }).strict(),
   z.object({ action: z.literal('query'), key: workKeySchema.optional(),
     offset: z.number().int().min(0).max(1000).default(0), limit: z.number().int().min(1).max(50).default(20) }).strict(),
+  z.object({ action: z.literal('recover_manager'), key: workKeySchema }).strict(),
+  z.object({ action: z.literal('notes'), key: workKeySchema, before: z.string().uuid().optional() }).strict(),
+  z.object({ action: z.literal('reply'), key: workKeySchema, replyTo: z.string().uuid(),
+    body: z.string().trim().min(1).max(2000) }).strict(),
   z.object({ action: z.literal('append'), key: workKeySchema,
     idempotencyKey: retryKey, content: z.string().trim().min(1).max(4000) }).strict(),
 ])
@@ -38,16 +43,17 @@ function canonical(value: unknown): string {
 const fingerprint = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex')
 
 /** Narrow external intake into the existing Project Work store, not a second inbox.
- * This bridge grants no generic WorkAlignment authority. Creation has no manager,
- * executor, focus link or initial message. The normal Project dispatcher may
- * consider the Work later if enabled. Host must revalidate
+ * This bridge grants no generic WorkAlignment authority. The host-selected stable
+ * source conversation is manager; creation has no executor, focus link or initial
+ * message. The normal Project dispatcher may consider the Work later if enabled. Host must revalidate
  * deployment/binding authorization before each call. One Project runtime owns the
  * store; synchronous read/modify/save plus store sequence CAS prevents lost edits.
  */
 export class BotWork {
   private readonly limits: { works: number; supplements: number }
   constructor(private readonly store: InitiativeStore, private readonly projectId: string,
-    limits: { works?: number; supplements?: number } = {}) {
+    limits: { works?: number; supplements?: number } = {},
+    private readonly postNote?: (author: string, input: { workKey: string; body: string; replyTo: string }) => unknown) {
     identity.parse(projectId)
     this.limits = z.object({ works: z.number().int().min(1).max(1000).default(1000),
       supplements: z.number().int().min(1).max(100).default(100) }).strict().parse(limits)
@@ -98,7 +104,7 @@ export class BotWork {
         key: `work:${id}`, revision: 1, sequence: 1,
         definition: input.definition, kind: 'task', summary: '', artifacts: [], basis: [], origin: 'agent_interpretation',
         changedBy: actor, changedAt: at,
-        title: input.title, manager: null, assignee: null, assignmentRevision: 1,
+        title: input.title, manager: scope.sessionId, assignee: null, assignmentRevision: 1,
         status: 'pending', dependencies: [],
         botSource: { ...scope, idempotencyKey: input.idempotencyKey, fingerprint: hash,
           title: input.title, definition: input.definition, supplements: [] },
@@ -109,6 +115,23 @@ export class BotWork {
     const record = records.find(record => record.key === input.key)
     if (!record) throw new Error('Bot Work not found in this source scope.')
     const source = record.botSource!
+    if (input.action === 'recover_manager') {
+      // Explicit host-scoped repair, never a query side effect or a bulk migration.
+      // A matching binding alone cannot prove that a replacement session owns history.
+      if (source.sessionId !== scope.sessionId) throw new WorkConflict('Original source session must match for manager recovery.')
+      if (record.manager === scope.sessionId) return { status: 'recovered', key: record.key }
+      if (record.manager !== null) throw new WorkConflict('Work already has a manager.')
+      this.store.saveWork({ ...record, manager: scope.sessionId, sequence: record.sequence + 1,
+        changedBy: actor, changedAt: new Date().toISOString() },
+        record.sequence, actor, 'bot_manager_recovery', { source: scope })
+      return { status: 'recovered', key: record.key }
+    }
+    if (input.action === 'notes' || input.action === 'reply') {
+      if (record.manager !== scope.sessionId) throw new WorkConflict('Only the original source manager may access Work comments.')
+      if (input.action === 'notes') return this.store.workNotes(record.key, input.before)
+      if (!this.postNote) throw new WorkConflict('Work comment delivery is unavailable.')
+      return this.postNote(scope.sessionId, { workKey: record.key, body: input.body, replyTo: input.replyTo })
+    }
     const prior = source.supplements.find(note => note.idempotencyKey === input.idempotencyKey)
     if (prior) {
       if (prior.fingerprint !== hash) throw new WorkConflict('Bot Work append idempotency key conflicts with an earlier request.')
