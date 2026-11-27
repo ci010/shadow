@@ -126,6 +126,23 @@ failure labels and an optional numeric close code, not URLs, close reasons,
 tickets or payloads. These signals locate future failures; a network trace without
 WebSocket close information cannot establish the cause of prior disconnects.
 
+Automatic reconnects use exponential backoff (500 ms up to 10 seconds). A
+subscription acknowledgement does not reset that backoff: the connection must
+remain ready for 30 seconds, so repeatedly acknowledged short-lived connections
+cannot keep retrying at the minimum delay. Transport teardown cancels the
+stability timer. Reconnect diagnostics include numeric `retryAttempt` and
+`retryDelayMs` fields to make this behavior visible without exposing peer data.
+
+Main emits rate-limited `[realtime]` diagnostics for slow subscription conversation
+or projection reads (over two seconds), failed snapshot reads, projection push
+failure, subscription processing failure, and socket errors. These use fixed reason labels only, with
+no session/Project IDs, frame contents, credentials, or raw exception messages.
+Slow-read diagnostics do not change the acknowledgement deadline or terminate
+the connection. Each new reason is suppressed for 30 seconds across the hub to
+bound logging during reconnect storms. Correlate these server diagnostics with
+renderer `Live transport` stages; a successful `POST /api/live/ws` only proves
+ticket acquisition, not WebSocket upgrade or subscription acknowledgement.
+
 The global Project directory still uses the existing authorized `projects`
 notification topic and one shared HTTP catalog owner. Child workspace health
 probes acquire that same owner instead of issuing a second `/api/projects` GET;

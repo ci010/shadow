@@ -129,7 +129,9 @@ test('authorization is checked again after async inventory reads; revoked viewer
     release()
     const ack = await socket.frame()
     assert.equal(JSON.stringify(ack).includes('private'), false)
-    assert.equal(ack.projections[0].error, 'projection_unavailable')
+    assert.deepEqual(ack.rejected, [nodes])
+    assert.deepEqual(ack.projections, [])
+    assert.equal(JSON.stringify(ack).includes('snapshot'), false)
   } finally { f.hub.close() }
 })
 

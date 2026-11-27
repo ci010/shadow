@@ -12,7 +12,8 @@ const projectionTopic = (topic: RealtimeTopic): topic is ProjectionTopic => (pro
 export type LiveEvent = Extract<RealtimeEnvelope, { type: 'event' }>
 export type LiveResetReason = Extract<RealtimeEnvelope, { type: 'reset' }>['reason'] | 'subscription' | 'reconnect'
 type LiveFailure = { transport: 'ws' | 'sse'; stage: 'ticket' | 'open' | 'subscribe' | 'stream';
-  code: 'timeout' | 'send-failed' | 'error' | 'closed' | 'invalid-frame' | 'open-failed' | 'ticket-failed'; closeCode?: number }
+  code: 'timeout' | 'send-failed' | 'error' | 'closed' | 'invalid-frame' | 'open-failed' | 'ticket-failed'; closeCode?: number;
+  retryAttempt?: number; retryDelayMs?: number }
 export interface LiveStatus {
   phase: 'idle' | 'connecting' | 'live' | 'reconnecting' | 'error'
   error?: string
@@ -95,6 +96,16 @@ export function createLiveClient(base: string, options: {
   let timer: ReturnType<typeof setTimeout> | undefined
   let socketErrorTimer: ReturnType<typeof setTimeout> | undefined
   let watchdog: ReturnType<typeof setTimeout> | undefined
+  // An acknowledgement proves subscription, not transport stability. Short-lived
+  // acknowledged sockets must retain the same backoff as failed handshakes.
+  let stabilityTimer: ReturnType<typeof setTimeout> | undefined
+  function markReady() {
+    ready = true
+    if (stabilityTimer === undefined) stabilityTimer = setTimeout(() => {
+      stabilityTimer = undefined
+      if (ready && !disposed) attempt = 0
+    }, 30_000)
+  }
   let attempt = 0
   let recovering = false
   let disposed = false
@@ -112,6 +123,8 @@ export function createLiveClient(base: string, options: {
     } catch { /* diagnostic only */ }
   }
   function stopSource() {
+    clearTimeout(stabilityTimer)
+    stabilityTimer = undefined
     ready = false
     clearTimeout(watchdog)
     clearTimeout(socketErrorTimer)
@@ -177,16 +190,19 @@ export function createLiveClient(base: string, options: {
   }
   function reconnect(failure: LiveFailure) {
     if (disposed) return
-    diagnose(failure)
-    if (!subscribers.size) { stopSource(); update({ phase: 'idle' }); return }
+    if (!subscribers.size) { diagnose(failure); stopSource(); update({ phase: 'idle' }); return }
+    const retryDelayMs = Math.min(10_000, 500 * 2 ** Math.min(attempt++, 5))
+    diagnose({ ...failure, retryAttempt: attempt, retryDelayMs })
     recovering = true
     // A necessary reconnect also removes unused topics, without a later
     // cleanup-only reconnect. Active observers retain the replay cursor.
     clearRetained()
     stopSource()
     clearTimeout(timer)
+    // Install before notifying observers: a synchronous subscribe in status()
+    // must not schedule an immediate connection around this backoff.
+    timer = setTimeout(connect, retryDelayMs)
     update({ phase: 'reconnecting', error: t('Live updates disconnected. Reconnecting to Main; saved history remains available.') })
-    timer = setTimeout(connect, Math.min(10_000, 500 * 2 ** Math.min(attempt++, 5)))
   }
   function initialize(subscriber: Subscriber, reason: LiveResetReason) {
     subscriber.initialized = true
@@ -253,6 +269,8 @@ export function createLiveClient(base: string, options: {
     }
     cursor = envelope.cursor
     if (envelope.type === 'reset') {
+      clearTimeout(stabilityTimer)
+      stabilityTimer = undefined
       ready = false
       recovering = false
       unavailableTopics.clear()
@@ -267,8 +285,7 @@ export function createLiveClient(base: string, options: {
     } else if (envelope.type === 'ready') {
       pendingSseRemoval = false
       for (const key of connectedTopics) if (!unavailableTopics.has(key)) withheld.delete(key)
-      ready = true
-      attempt = 0
+      markReady()
       update({ phase: 'live' })
       for (const subscriber of [...subscribers]) {
         const key = subscriptionKey(subscriber)
@@ -400,8 +417,7 @@ export function createLiveClient(base: string, options: {
       pending = undefined
       for (const key of topicCursors.keys()) if (!connectedTopics.has(key) || unavailableTopics.has(key)) topicCursors.delete(key)
       for (const key of connectedTopics) if (!unavailableTopics.has(key)) topicCursors.set(key, watermark)
-      ready = true
-      attempt = 0
+      markReady()
       if (status.phase !== 'live') update({ phase: 'live' })
       const receivedSnapshots = new Set<Subscriber>()
       if (Array.isArray(frame.conversations) && frame.conversations.length <= opening.size) {

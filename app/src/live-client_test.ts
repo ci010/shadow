@@ -397,7 +397,7 @@ test('WS reconnect resends the current topic set once and records bounded failur
   recovered.ack(0); await Promise.all([first.ready(), second.ready()])
   t.mock.timers.tick(100)
   assert.equal(recovered.sent.length, 1)
-  assert.deepEqual(diagnostics, [{ transport: 'ws', stage: 'subscribe', code: 'closed', closeCode: 1006 }])
+  assert.deepEqual(diagnostics, [{ transport: 'ws', stage: 'subscribe', code: 'closed', closeCode: 1006, retryAttempt: 1, retryDelayMs: 500 }])
 })
 
 test('legacy SSE removal followed by EOF without scope fails closed until availability is known', async t => {

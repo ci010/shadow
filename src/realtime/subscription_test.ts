@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { on, once } from 'node:events'
+import { EventEmitter, on, once } from 'node:events'
 import { test } from 'node:test'
 import { Hono } from 'hono'
 import WebSocket, { type RawData } from 'ws'
@@ -187,4 +187,121 @@ test('dirty projection churn degrades an active topic without dropping chat, the
     assert.equal(hub.stats.clients, 1)
     await messages.return?.()
   } finally { socket?.terminate(); hub.close(); await server.shutdown(); await server.finished }
+})
+
+class DiagnosticSocket extends EventEmitter {
+  OPEN = 1
+  readyState = 1
+  bufferedAmount = 0
+  frames: string[] = []
+  send(text: string) { this.frames.push(text) }
+  close() { this.readyState = 3; this.emit('close') }
+  terminate() { this.close() }
+  subscribe(conversation = false) {
+    const topic = conversation
+      ? { kind: 'chat', projectId: 'private-project', sessionId: 'private-session' }
+      : { kind: 'folders', projectId: 'private-project' }
+    this.emit('message', Buffer.from(JSON.stringify({ type: conversation ? 'openConversation' : 'subscribe', id: 1,
+      subscriptions: [{ topic }], ...(conversation ? { conversations: [topic] } : {}) })), false)
+  }
+}
+const flushDiagnostics = async () => { for (let i = 0; i < 30; i++) await Promise.resolve() }
+
+test('socket diagnostics classify failures without leaking errors and throttle across reconnects', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 0 })
+  const diagnostics: string[] = []
+  const hub = new RealtimeHub({ diagnostic: reason => diagnostics.push(reason) })
+  hub.registerProject('private-project', undefined, async () => { throw new Error('secret ticket URL payload') }, undefined,
+    async () => { throw new Error('secret projection') })
+  const connect = (authorize = () => true) => {
+    const socket = new DiagnosticSocket()
+    hub.connectSocket(socket as unknown as WebSocket, authorize)
+    return socket
+  }
+  try {
+    for (let i = 0; i < 5; i++) {
+      const socket = connect()
+      socket.subscribe(true)
+      await flushDiagnostics()
+      socket.close()
+      const projection = connect()
+      projection.subscribe()
+      await flushDiagnostics()
+      projection.emit('error', new Error('secret socket URL'))
+      projection.emit('error', new Error('late secret'))
+      const fatal = connect(() => { throw new Error('secret authorization') })
+      fatal.subscribe()
+      await flushDiagnostics()
+    }
+    assert.deepEqual(diagnostics, ['subscription-conversation-failed', 'subscription-projection-failed', 'socket-error', 'subscription-failed'])
+    assert.equal(hub.stats.clients, 0)
+    t.mock.timers.tick(30_000)
+    connect().emit('error', new Error('secret'))
+    assert.equal(diagnostics.at(-1), 'socket-error')
+    assert.equal(diagnostics.length, 5)
+  } finally { hub.close() }
+})
+
+test('slow subscription diagnostics distinguish phases and clear on ACK, close and hub shutdown', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 0 })
+  for (const phase of ['conversation', 'projection'] as const) {
+    for (const ending of ['ack', 'close', 'hub'] as const) {
+      const diagnostics: string[] = []
+      const hub = new RealtimeHub({ diagnostic: reason => diagnostics.push(reason) })
+      let resolve!: (value: unknown) => void
+      const pending = new Promise<unknown>(done => { resolve = done })
+      hub.registerProject('private-project', undefined, async () => await pending as { data: unknown }, undefined, () => pending)
+      const socket = new DiagnosticSocket()
+      hub.connectSocket(socket as unknown as WebSocket, () => true)
+      socket.subscribe(phase === 'conversation')
+      t.mock.timers.tick(1999)
+      assert.deepEqual(diagnostics, [])
+      if (ending === 'ack') {
+        t.mock.timers.tick(1)
+        assert.deepEqual(diagnostics, [`subscription-slow-${phase}`])
+        t.mock.timers.tick(10_000)
+        assert.equal(diagnostics.length, 1)
+        resolve(phase === 'conversation' ? { data: {} } : [])
+        await flushDiagnostics()
+        assert.equal(JSON.parse(socket.frames.at(-1)!).type, 'subscribed')
+      } else if (ending === 'close') socket.close()
+      else hub.close()
+      const count = diagnostics.length
+      t.mock.timers.tick(60_000)
+      assert.equal(diagnostics.length, count, 'no late slow warning after cleanup')
+      if (ending !== 'ack') {
+        resolve(phase === 'conversation' ? { data: {} } : [])
+        await flushDiagnostics()
+        assert.equal(socket.frames.filter(frame => JSON.parse(frame).type === 'subscribed').length, 0)
+      }
+      hub.close()
+    }
+  }
+})
+
+test('successful ACK clears slow timer and later projection push failure is diagnosed once', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: 0 })
+  const diagnostics: string[] = []
+  const hub = new RealtimeHub({ diagnostic: reason => diagnostics.push(reason) })
+  let fail = false
+  const publisher = hub.registerProject('private-project', undefined, undefined, undefined, async () => {
+    if (fail) throw new Error('private payload URL ticket')
+    return []
+  })
+  try {
+    const socket = new DiagnosticSocket()
+    hub.connectSocket(socket as unknown as WebSocket, () => true)
+    socket.subscribe()
+    await flushDiagnostics()
+    assert.equal(JSON.parse(socket.frames.at(-1)!).type, 'subscribed')
+    t.mock.timers.tick(2500)
+    assert.deepEqual(diagnostics, [])
+    fail = true
+    publisher.invalidateResource!('folders')
+    await flushDiagnostics()
+    assert.deepEqual(diagnostics, ['projection-update-failed'])
+    assert.equal(hub.stats.clients, 0)
+    t.mock.timers.tick(60_000)
+    assert.deepEqual(diagnostics, ['projection-update-failed'])
+  } finally { hub.close() }
 })

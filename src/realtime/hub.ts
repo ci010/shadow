@@ -58,6 +58,16 @@ export class RealtimeHub {
   private projects = new Map<string, Project>()
   private closed = false
   private readonly encoder = new TextEncoder()
+  // Fixed reason vocabulary only; never retain peer-controlled identifiers/errors.
+  private readonly socketDiagnostics = new Map<string, number>()
+  private diagnoseSocket(reason: 'projection-update-failed' | 'subscription-failed' | 'socket-error' | 'subscription-conversation-failed' | 'subscription-projection-failed' | 'subscription-slow-conversation' | 'subscription-slow-projection'): void {
+    const now = Date.now()
+    const previous = this.socketDiagnostics.get(reason)
+    // Hub-wide suppression also bounds logging across a reconnect storm.
+    if (previous !== undefined && now - previous < 30_000) return
+    this.socketDiagnostics.set(reason, now)
+    this.options.diagnostic(reason)
+  }
   private readonly options: Required<RealtimeHubOptions>
 
   constructor(options: RealtimeHubOptions = {}) {
@@ -241,6 +251,20 @@ export class RealtimeHub {
     if (this.closed) { socket.close(1012); return }
     let ended = false
     let lastId = -1
+    let subscriptionTimer: ReturnType<typeof setTimeout> | undefined
+    const clearSubscriptionTimer = () => {
+      clearTimeout(subscriptionTimer)
+      subscriptionTimer = undefined
+    }
+    const watchSubscription = (phase: 'conversation' | 'projection') => {
+      clearSubscriptionTimer()
+      // Diagnostic only: do not alter ACK semantics or disconnect slow readers.
+      subscriptionTimer = setTimeout(() => {
+        subscriptionTimer = undefined
+        if (!ended) this.diagnoseSocket(`subscription-slow-${phase}`)
+      }, 2000)
+      subscriptionTimer.unref?.()
+    }
     const active = new Map<string, { topic: RealtimeTopic; release(): void }>()
     const decoder = new TextDecoder()
     const projected = new Map<string, { revision: string; data: unknown }>()
@@ -307,6 +331,7 @@ export class RealtimeHub {
           this.options.diagnostic('projection-update-unstable')
           retryProjection(topic)
         } else if (!ended && active.has(key)) {
+          this.diagnoseSocket('projection-update-failed')
           client.close(new Error('Realtime projection failed; reconnect and resnapshot'))
         }
       } finally { refreshing.delete(key) }
@@ -358,6 +383,7 @@ export class RealtimeHub {
     const cleanup = () => {
       if (ended) return
       ended = true
+      clearSubscriptionTimer()
       clearInterval(heartbeat)
       this.clients.delete(client)
       socket.off('message', onMessage)
@@ -443,6 +469,7 @@ export class RealtimeHub {
         let conversationMutation = this.mutation
         if ('conversations' in command && command.conversations) {
           updating = true
+          watchSubscription('conversation')
           const topics = command.conversations
           // A stable journal interval avoids publishing an async snapshot on
           // the wrong side of an append, rollover, or activity notification.
@@ -470,6 +497,8 @@ export class RealtimeHub {
             break
           }
           ack.conversations ??= topics.map(topic => ({ topic, error: 'conversation_changed' }))
+          if (ack.conversations.some(entry => entry.error)) this.diagnoseSocket('subscription-conversation-failed')
+          clearSubscriptionTimer()
           conversationMutation = this.mutation
           updating = false
         }
@@ -478,6 +507,7 @@ export class RealtimeHub {
         const projectionTopics = [...desired].flatMap(([key, { topic, snapshot }]) =>
           isProjection(topic) && (!active.has(key) || snapshot) ? [topic] : [])
         updating = true
+        if (projectionTopics.length) watchSubscription('projection')
         // Read a batch once in the common case. A single watermark covers all
         // results, so an earlier topic cannot become stale while a later awaits.
         for (let attempt = 0; projectionTopics.length && attempt < 3; attempt++) {
@@ -508,7 +538,9 @@ export class RealtimeHub {
           }
           break
         }
+        clearSubscriptionTimer()
         if (ended) return
+        if (!unstableBatch && ack.projections?.some(entry => entry.error)) this.diagnoseSocket('subscription-projection-failed')
         for (const topic of projectionTopics) {
           if (authorizeTopic(topic)) continue
           desired.delete(realtimeTopicKey(topic))
@@ -558,14 +590,23 @@ export class RealtimeHub {
           const topic = active.get(key)?.topic
           if (topic && isProjection(topic)) void refreshProjection(topic)
         }
-      } catch { client.close(new Error('Realtime subscription failed')) }
+      } catch {
+        if (!ended) this.diagnoseSocket('subscription-failed')
+        client.close(new Error('Realtime subscription failed'))
+      } finally {
+        clearSubscriptionTimer()
+      }
     }
     const heartbeat = setInterval(() => send(JSON.stringify({ type: 'heartbeat', cursor: this.cursor })), this.options.heartbeatMs)
     heartbeat.unref?.()
     this.clients.add(client)
     socket.on('message', onMessage)
     socket.once('close', cleanup)
-    socket.on('error', () => client.close(new Error('Realtime socket failed')))
+    socket.on('error', () => {
+      if (ended) return
+      this.diagnoseSocket('socket-error')
+      client.close(new Error('Realtime socket failed'))
+    })
   }
 
   connect(topics: RealtimeTopic[], signal: AbortSignal, cursor?: string): Response {
