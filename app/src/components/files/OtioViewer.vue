@@ -3,6 +3,11 @@
     <div v-if="!review" class="compact-tabs" role="group" :aria-label="t('Review panels')">
       <button v-for="panel in panels.filter(item => inlineOutline || item.id !== 'outline')" :key="panel.id" type="button" :aria-pressed="activePanel === panel.id" @click="pause(); compact = panel.id">{{ t(board && panel.id === 'monitor' ? 'Storyboard' : panel.label) }}</button>
     </div>
+    <div v-if="requiresCompositePreview" class="panel-bar" role="status">
+      <span>{{ t('Composite preview') }} · {{ t('Storyboard, source solo and per-track controls are unavailable for composited timelines.') }}</span>
+      <button class="btn btn-sm" type="button" :disabled="locked" @click="pause(); emit('refresh-preview')">{{ t('Reload preview') }}</button>
+      <span v-if="previewError">{{ previewError }}</span>
+    </div>
     <div class="bench" :class="{ reviewing: review, 'with-inline-outline': inlineOutline }" :data-panel="activePanel">
       <Teleport :to="outlineTarget ?? 'body'" :disabled="!outlineTarget">
         <OtioOutline v-show="outlineTarget || inlineOutline" :class="{ 'outline-pane': inlineOutline }" :explorer="!!outlineTarget"
@@ -12,10 +17,10 @@
         <header v-if="!board" class="panel-bar">
           <h3 v-if="review?.capture">{{ t('Frozen frame') }}</h3>
           <div v-else class="modes viewer-modes" role="group" :aria-label="t('Picture view')">
-            <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
+            <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked || (requiresCompositePreview && view.board)" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
           </div>
           <span v-if="review?.capture" class="readout">{{ t('Frame {frame}', { frame: format(frame) }) }} · {{ t('{rate} fps', { rate: format(model.rate) }) }}</span>
-          <div v-if="(canSolo || videoTrack) && !review" class="modes" role="group" :aria-label="t('Monitor source')">
+          <div v-if="!requiresCompositePreview && (canSolo || videoTrack) && !review" class="modes" role="group" :aria-label="t('Monitor source')">
             <button type="button" :aria-pressed="mode === 'timeline'" @click="setMode('timeline')">{{ t('Timeline') }}</button>
             <button v-if="videoTrack" type="button" :aria-pressed="mode === 'track'" @click="setMode('track')">{{ t('Solo video track') }}</button>
             <button v-if="canSolo" type="button" :aria-pressed="mode === 'clip'" @click="setMode('clip')">{{ t('Clip source') }}</button>
@@ -25,7 +30,7 @@
           :track="videoTrack" :hidden="hiddenVideoTracks" :media-for="mediaFor" :unlinked="unlinked" :current="seconds" :selected-id="selected.id" @position="boardPosition">
           <template #mode>
             <div v-if="board" class="modes viewer-modes" role="group" :aria-label="t('Picture view')">
-              <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
+              <button v-for="view in pictureViews" :key="view.label" type="button" :aria-pressed="board === view.board" :disabled="locked || (requiresCompositePreview && view.board)" @click="switchPictureView(view.board)">{{ t(view.label) }}</button>
             </div>
           </template>
         </OtioStoryboard>
@@ -33,20 +38,20 @@
           <ImageAnnotationPreview v-if="review?.capture" class="frame-editor" staged src="" :local-file="review.capture.file" :name="review.capture.file.name"
             :source-key="review.id" :context-key="review.id" :editable="reviewAvailable && !staging" :active="active"
             @image-context="marked" @image-busy="busy" />
-          <OtioMonitor v-else ref="monitor" class="picture" :picture-key="picture?.id ?? ''" :url="medium?.url ?? null" :media-kind="medium?.kind ?? null"
-            :source-seconds="position" :playing="playing" :muted="embeddedSuppressed || muted" :active="active" :label="picture?.name || t('Picture monitor')" :unavailable="unavailable" @capture-ready="captureReady = $event" />
+          <OtioMonitor v-else ref="monitor" class="picture" :picture-key="requiresCompositePreview ? renderedPreview?.url ?? 'composite-unavailable' : picture?.id ?? ''" :url="medium?.url ?? null" :media-kind="medium?.kind ?? null"
+            :source-seconds="position" :playing="playing" :muted="embeddedSuppressed || muted" :active="active" :label="requiresCompositePreview ? t('Composite preview') : picture?.name || t('Picture monitor')" :unavailable="unavailable" @capture-ready="captureReady = $event" />
           <div v-if="!review?.capture" class="transport">
             <div class="transport-buttons">
               <HoverInfo v-for="control in transport" :key="control.key" :text="control.label" v-slot="{ triggerProps }">
                 <button v-bind="triggerProps" type="button" :aria-label="control.label" :disabled="locked || control.disabled" @click="control.run"><span :class="control.icon" aria-hidden="true" /></button>
               </HoverInfo>
-              <HoverInfo v-if="medium?.kind === 'video' && !embeddedSuppressed" :text="muted ? t('Unmute clip audio') : t('Mute clip audio')" v-slot="{ triggerProps }">
-                <button v-bind="triggerProps" type="button" :aria-label="t('Clip audio')" :aria-pressed="!muted" :disabled="locked" @click="muted = !muted"><span :class="muted ? 'i-lucide-volume-x' : 'i-lucide-volume-2'" aria-hidden="true" /></button>
+              <HoverInfo v-if="medium?.kind === 'video' && !embeddedSuppressed" :text="requiresCompositePreview ? (muted ? t('Unmute composite audio') : t('Mute composite audio')) : (muted ? t('Unmute clip audio') : t('Mute clip audio'))" v-slot="{ triggerProps }">
+                <button v-bind="triggerProps" type="button" :aria-label="requiresCompositePreview ? t('Composite audio') : t('Clip audio')" :aria-pressed="!muted" :disabled="locked" @click="muted = !muted"><span :class="muted ? 'i-lucide-volume-x' : 'i-lucide-volume-2'" aria-hidden="true" /></button>
               </HoverInfo>
             </div>
             <span class="readout">{{ t('Frame {frame}', { frame: format(frame) }) }}</span><span class="rate">{{ t('{rate} fps', { rate: formatNumber(model.rate, { maximumFractionDigits: 3 }) }) }}</span>
           </div>
-          <p v-if="picture" class="picture-caption selectable-text">{{ t('Picture: {name}', { name: [picture.name, medium?.path].filter(Boolean).join(' · ') || picture.id }) }}</p>
+          <p v-if="picture && !requiresCompositePreview" class="picture-caption selectable-text">{{ t('Picture: {name}', { name: [picture.name, medium?.path].filter(Boolean).join(' · ') || picture.id }) }}</p>
         </template>
       </section>
       <section class="inspector" :aria-label="t('Selection')">
@@ -58,7 +63,7 @@
             <template v-if="selected.authoredRange"><dt>{{ t('Source in / duration') }}</dt><dd class="numeric">{{ displayTime(selected.authoredRange.start) }} / {{ displayTime(selected.authoredRange.duration) }}</dd></template>
             <dt>{{ t('Element path') }}</dt><dd class="pointer">{{ selected.id || t('Document root') }}</dd>
           </dl>
-          <p v-if="selected.kind === 'Transition'" class="destination cut-notice">{{ t('Transitions are shown as cuts, not rendered blends.') }}</p>
+          <p v-if="selected.kind === 'Transition' && !requiresCompositePreview" class="destination cut-notice">{{ t('Transitions are shown as cuts, not rendered blends.') }}</p>
           <template v-if="review">
             <p v-if="!reviewAvailable" class="warning" role="status">{{ t('The original conversation is not available. This review has not been added elsewhere.') }}</p>
             <p v-else-if="review.target && destination" class="destination">{{ t('Draft: {name}', { name: destination.label }) }}</p>
@@ -74,7 +79,7 @@
               </HoverInfo>
             </div>
             <p v-if="!canReference && active" class="destination">{{ t('This source cannot add a review to a local conversation.') }}</p>
-            <details v-if="model.warnings.length" class="limits"><summary>{{ t('Preview limits') }}</summary><ul><li v-for="warning in model.warnings" :key="warning">{{ t(warnings[warning]) }}</li></ul></details>
+            <details v-if="!requiresCompositePreview && model.warnings.length" class="limits"><summary>{{ t('Preview limits') }}</summary><ul><li v-for="warning in model.warnings" :key="warning">{{ t(warnings[warning]) }}</li></ul></details>
           </template>
         </div>
       </section>
@@ -86,6 +91,7 @@
 
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { renderedPreviewPosition, type RenderedOtioPreview } from '../../otio-rendered-preview.ts'
 import { formatNumber, t } from '../../i18n.ts'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { createOtioAudio, otioAudioPosition, otioAudioTracks } from '../../otio-audio.ts'
@@ -102,8 +108,8 @@ import OtioStoryboard from './OtioStoryboard.vue'
 import OtioTracks from './OtioTracks.vue'
 
 const props = defineProps<{ model: OtioModel; source: OtioDocument; apiBase: string; active: boolean; canReview: boolean;
-  mediaFor: (node: OtioNode) => (OtioMedium & { url: string }) | null; unlinked: string }>()
-const emit = defineEmits<{ added: [] }>()
+  mediaFor: (node: OtioNode) => (OtioMedium & { url: string }) | null; unlinked: string; requiresCompositePreview?: boolean; renderedPreview?: RenderedOtioPreview; previewError?: string }>()
+const emit = defineEmits<{ added: []; 'refresh-preview': [] }>()
 const warnings = { 'transition-cut': 'Transitions are shown as cuts, not rendered blends.', 'clip-effects': 'Clips with effects have no picture preview.',
   'unsupported-track': 'Some track kinds cannot be previewed.', 'unsupported-item': 'Some timed elements have no picture preview.' } as const
 const panels = [{ id: 'monitor', label: 'Picture monitor' }, { id: 'outline', label: 'Outline' }, { id: 'selection', label: 'Selection' }] as const
@@ -123,7 +129,9 @@ const afterSelected = computed(() => firstOtioFrame(selected.value.end, props.mo
 const canSolo = computed(() => selected.value.kind === 'Clip' && selected.value.trackKind !== 'Audio' && afterSelected.value > firstSelected.value)
 const seconds = computed(() => frame.value / props.model.rate)
 const picture = computed(() => mode.value === 'clip' ? selected.value : otioPictureAt(props.model, seconds.value, mode.value === 'track' ? videoTrack.value : undefined, hiddenVideoTracks.value))
+const compositePosition = computed(() => renderedPreviewPosition(props.renderedPreview, seconds.value))
 const medium = computed(() => {
+  if (props.requiresCompositePreview) return props.renderedPreview && compositePosition.value !== null ? { path: props.renderedPreview.path, url: props.renderedPreview.url, kind: 'video' as const } : null
   const media = picture.value?.sourceStart ? props.mediaFor(picture.value) : null
   return media?.kind === 'video' || media?.kind === 'image' ? { ...media, kind: media.kind } : null
 })
@@ -131,15 +139,16 @@ const audioTracks = computed(() => otioAudioTracks(props.model))
 const hiddenVideoTracks = shallowRef<ReadonlySet<string>>(new Set())
 const mutedAudioTracks = shallowRef<ReadonlySet<string>>(new Set())
 function toggleTrack(node: OtioNode) {
+  if (props.requiresCompositePreview) return
   const state = node.trackKind === 'Audio' ? mutedAudioTracks : hiddenVideoTracks
   const next = new Set(state.value)
   if (!next.delete(node.id)) next.add(node.id)
   state.value = next
 }
-const embeddedSuppressed = computed(() => mode.value === 'timeline' && audioTracks.value.explicit)
+const embeddedSuppressed = computed(() => !props.requiresCompositePreview && mode.value === 'timeline' && audioTracks.value.explicit)
 const audio = createOtioAudio()
 function syncAudio(time: number) {
-  if (!props.active || board.value || !embeddedSuppressed.value) return audio.stop()
+  if (props.requiresCompositePreview || !props.active || board.value || !embeddedSuppressed.value) return audio.stop()
   audio.sync(audioTracks.value.clips.flatMap(({ node, track }) => {
     if (mutedAudioTracks.value.has(track)) return []
     const seconds = otioAudioPosition(node, time)
@@ -148,8 +157,8 @@ function syncAudio(time: number) {
     return media && media.kind !== 'image' ? [{ id: node.id, url: media.url, seconds }] : []
   }))
 }
-const position = computed(() => picture.value ? mediaPosition(picture.value, seconds.value) : null)
-const unavailable = computed(() => !props.model.duration ? t('This timeline is empty.') : props.unlinked || (!picture.value ? t('No picture at this position.')
+const position = computed(() => props.requiresCompositePreview ? compositePosition.value : picture.value ? mediaPosition(picture.value, seconds.value) : null)
+const unavailable = computed(() => props.requiresCompositePreview ? (props.unlinked || props.previewError || t('Generate a composite preview for this timeline, then reload preview.')) : !props.model.duration ? t('This timeline is empty.') : props.unlinked || (!picture.value ? t('No picture at this position.')
   : !picture.value.sourceStart ? t('Source timing is unavailable for this element.') : t('No supported media in this workspace for this clip.')))
 const format = (n: number) => formatNumber(n, { maximumFractionDigits: 3, useGrouping: false })
 const displayTime = (time: OtioTime) => `${format(time.value)} @ ${format(time.rate)}`
@@ -173,7 +182,7 @@ const canAdd = computed(() => reviewAvailable.value && !staging.value && !export
 let raf = 0, generation = 0
 function pause() { audio.stop(); playing.value = false; cancelAnimationFrame(raf) }
 function setMode(next: typeof mode.value) {
-  if (locked.value) return
+  if (locked.value || props.requiresCompositePreview) return
   pause(); mode.value = next
   if (next === 'clip' && (frame.value < firstSelected.value || frame.value >= afterSelected.value)) frame.value = firstSelected.value
 }
@@ -192,13 +201,13 @@ function select(id: string) {
   pause(); error.value = ''; selection.value = id
   pickTrack(selected.value)
   if ((frame.value < firstSelected.value || frame.value >= afterSelected.value) && firstSelected.value < afterSelected.value) frame.value = firstSelected.value
-  mode.value = canSolo.value ? 'clip' : 'timeline'
+  mode.value = !props.requiresCompositePreview && canSolo.value ? 'clip' : 'timeline'
   if (compact.value === 'outline') compact.value = 'selection'
 }
 const monitorPane = ref<HTMLElement>()
 const pictureViews = [{ label: 'Monitor', board: false }, { label: 'Storyboard', board: true }] as const
 function switchPictureView(next: boolean) {
-  if (locked.value || board.value === next) return
+  if (locked.value || (props.requiresCompositePreview && next) || board.value === next) return
   showBoard(next)
   // The switch moves between the monitor header and the board toolbar.
   void nextTick(() => monitorPane.value?.querySelector<HTMLElement>('.viewer-modes [aria-pressed="true"]')?.focus({ preventScroll: true }))
@@ -246,7 +255,7 @@ async function begin(withFrame: boolean, event: MouseEvent) {
   const target = destination.value?.key ?? null
   if (event.detail > 1 || !canReference.value || locked.value || (withFrame && (board.value || playing.value || !captureReady.value || !monitor.value))) return
   pause(); error.value = ''; markedFile.value = undefined; exporting.value = false
-  const anchor = otioReviewAnchor(props.source, props.model, selected.value, frame.value, picture.value, mode.value, medium.value, mode.value === 'track' ? videoTrack.value : undefined)
+  const anchor = otioReviewAnchor(props.source, props.model, selected.value, frame.value, picture.value, mode.value, medium.value, mode.value === 'track' ? videoTrack.value : undefined, props.requiresCompositePreview ? { required: true, preview: props.renderedPreview, mediaSeconds: compositePosition.value } : undefined)
   if (!withFrame) {
     const name = selected.value.name || selected.value.schema
     const selectionFrame = anchor.element.referenceFrame?.relative.value
@@ -300,6 +309,12 @@ async function stage(target: string | null, label: string, text: string, file?: 
   } finally { if (stageRequest === request) { stageRequest = undefined; staging.value = false } }
   if (!request.signal.aborted) error.value = t('This review could not be added. Check that the local workspace is available and try again.')
 }
+// A re-read is a new document snapshot; never retain source/board modes or capture state across it.
+watch(() => props.model, () => {
+  pause(); cancelReview(); mode.value = 'timeline'; board.value = false; boardOpened.value = false
+  selection.value = props.model.root.id; frame.value = 0; trackId.value = undefined
+  hiddenVideoTracks.value = new Set(); mutedAudioTracks.value = new Set()
+}, { flush: 'sync' })
 watch(() => props.active, active => {
   if (!active) { pause(); ++generation; capturing.value = false; stageRequest?.abort() }
 }, { flush: 'sync' })

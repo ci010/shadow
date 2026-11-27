@@ -4721,5 +4721,13 @@
   "Published Work definitions": "发布时的工作定义",
   "No Work definitions were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.": "本次发布未记录工作定义。仅凭生命周期检查，无法确认功能覆盖完整。",
   "Unverified assumption": "未经验证的假设",
-  "No system prompt.": "没有系统提示词。"
+  "No system prompt.": "没有系统提示词。",
+  "Composite preview": "合成预览",
+  "Reload preview": "重新读取预览",
+  "Generate a composite preview for this timeline, then reload preview.": "请为此时间线生成合成预览，然后重新读取预览。",
+  "Storyboard, source solo and per-track controls are unavailable for composited timelines.": "合成时间线不提供原片分镜、独奏或单轨控制。",
+  "Composite audio": "合成音频",
+  "Unmute composite audio": "取消合成音频静音",
+  "Mute composite audio": "静音合成音频",
+  "Cannot verify the timeline source version. Open the viewer in a secure context with SHA-256 support.": "无法校验时间线源版本。请在支持 SHA-256 的安全上下文中打开查看器。"
 }

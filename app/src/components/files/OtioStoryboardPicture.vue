@@ -23,9 +23,26 @@ function visibility() { documentVisible.value = !document.hidden }
 onMounted(() => {
   visibility()
   document.addEventListener('visibilitychange', visibility)
-  observer = new IntersectionObserver(([entry]) => { visible.value = !!entry?.isIntersecting })
-  if (element.value) observer.observe(element.value)
+  observer = new IntersectionObserver(entries => {
+    // Native observers may batch several crossings while Vue Flow lays out a node.
+    // The last entry is the current state; using the first can strand a visible card.
+    visible.value = !!entries.at(-1)?.isIntersecting
+  })
+  observeCurrent()
 })
+// Vue Flow retains keyed thumbnails while sources/tasks and clipping ancestors change.
+// A fresh observation must admit each new task: a previously delivered `false`
+// must not strand it, and an old `true` must not eagerly load a now-clipped card.
+let observed: HTMLElement | undefined
+function observeCurrent() {
+  if (!observer) return
+  if (observed) observer.unobserve(observed)
+  visible.value = false
+  observed = element.value
+  if (observed && props.active && documentVisible.value) observer.observe(observed)
+}
+watch(() => [element.value, props.active, props.medium?.url, props.seconds, documentVisible.value] as const,
+  observeCurrent, { flush: 'post' })
 onBeforeUnmount(() => { observer?.disconnect(); document.removeEventListener('visibilitychange', visibility) })
 watch(() => [props.active, documentVisible.value, visible.value, props.medium?.url, props.medium?.kind, props.seconds, resolved.value] as const,
   ([active, shown, seen, rawUrl, kind, seconds, url], previous, cleanup) => {

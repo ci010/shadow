@@ -1,7 +1,7 @@
 <template>
   <div class="otio-file" :aria-busy="loading">
     <OtioViewer v-if="snapshot" :model="snapshot.model" :source="snapshot.source" :api-base="apiBase" :active="active"
-      :can-review="canReview" :media-for="mediaFor" :unlinked="unlinked" @added="emit('added')" />
+      :can-review="canReview" :media-for="mediaFor" :unlinked="unlinked" :requires-composite-preview="snapshot.composite" :rendered-preview="snapshot.preview" :preview-error="snapshot.previewError" @refresh-preview="load" @added="emit('added')" />
     <NodeOfflineState v-else-if="offline" :checking="loading" :description="t('This preview will be available when the owning node reconnects.')" @retry="load" />
     <div v-else-if="error" class="notice" role="alert"><p>{{ t('Could not open this timeline.') }}</p><p class="selectable-text">{{ error }}</p><button class="btn btn-sm" type="button" @click="load">{{ t('Retry preview') }}</button></div>
     <p v-else class="notice" role="status">{{ t('Loading timeline…') }}</p>
@@ -19,6 +19,8 @@ import { useSessionFiles } from '../../composables/useSessionFiles.ts'
 import { readAttachmentBytes } from '../../attachment-preview.ts'
 import { isNodeOfflineError } from '../../workdir-request-error.ts'
 import { MAX_OTIO_BYTES, parseOtio, type OtioModel, type OtioNode } from '../../otio-model.ts'
+import { prepareOtioProfile } from '../../../../src/shared/otio-effects.ts'
+import { validateOtioPreview, type RenderedOtioPreview } from '../../otio-rendered-preview.ts'
 import { isAbsoluteMedia, resolveOtioMedia, type OtioDocument } from '../../otio-review.ts'
 import NodeOfflineState from './NodeOfflineState.vue'
 import OtioViewer from './OtioViewer.vue'
@@ -34,7 +36,7 @@ if (groups && !props.attachmentUrl) provide(OtioDraftKey, createExplorerOtioDraf
     ? { apiBase: props.apiBase, projectId: liveProjectId(props.apiBase), folderId: props.folderId, sessionId: props.sessionId }
     : null, opener))
 const files = computed(() => useSessionFiles(props.apiBase, props.folderId, props.sessionWorkspace))
-const snapshot = shallowRef<{ model: OtioModel; source: OtioDocument; localRoot?: string }>()
+const snapshot = shallowRef<{ model: OtioModel; source: OtioDocument; localRoot?: string; composite: boolean; preview?: RenderedOtioPreview; previewError?: string }>()
 const unlinked = computed(() => props.attachmentUrl || props.sourceBlob ? t('Linked media is not loaded from a standalone attachment or archive.')
   : props.remote ? t('This remote workspace supports timeline inspection, not media streaming.') : '')
 const loading = ref(false), error = ref(''), offline = ref(false)
@@ -66,7 +68,10 @@ async function load() {
     if (blob.size > MAX_OTIO_BYTES) throw new Error(limit)
     const bytes = await blob.arrayBuffer()
     signal.throwIfAborted()
-    const model = parseOtio(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+    let model: OtioModel, composite = false, previewError = ''
+    try { const profile = prepareOtioProfile(text); model = profile.model; composite = profile.requiresCompositePreview }
+    catch (cause) { model = parseOtio(text); composite = true; previewError = cause instanceof Error ? cause.message : String(cause) }
     // A media ticket/URL is not a filesystem locator. Include only the admitted path for
     // this API's attachment, never the URL, bearer material, or an external query string.
     let sourcePath = props.path
@@ -89,11 +94,21 @@ async function load() {
       const listing = await files.value.listDir(props.sessionId, dir, signal).catch(() => undefined)
       if (listing?.workdir?.kind === 'local') localRoot = listing.workdir.displayPath ?? undefined
     }
-    if (!signal.aborted) snapshot.value = { model, source: document, localRoot }
+    if (composite && !unlinked.value && !document.sha256 && !previewError) previewError = t('Cannot verify the timeline source version. Open the viewer in a secure context with SHA-256 support.')
+    let preview: RenderedOtioPreview | undefined
+    if (composite && !unlinked.value && !previewError) {
+      try {
+        const sidecar = await files.value.readBlob(props.sessionId, `${props.path}.preview.json`, signal, 65536, 'Composite preview manifest is too large.')
+        const validated = validateOtioPreview(JSON.parse(await sidecar.text()), document.sha256, props.path, model.duration, model.rate)
+        preview = { ...validated, url: files.value.rawUrl(props.sessionId, validated.path) }
+      } catch { previewError = t('Generate a composite preview for this timeline, then reload preview.') }
+    }
+    if (!signal.aborted) snapshot.value = { model, source: document, localRoot, composite, preview, previewError }
   } catch (cause) {
-    if (!signal.aborted) { offline.value = isNodeOfflineError(cause); error.value = cause instanceof Error ? cause.message : t('Could not open this timeline.') }
+    if (!signal.aborted) { snapshot.value = undefined; offline.value = isNodeOfflineError(cause); error.value = cause instanceof Error ? cause.message : t('Could not open this timeline.') }
   } finally { if (request === controller) { request = undefined; loading.value = false } }
 }
+watch(() => props.mtime, () => { if (props.active) void load() })
 watch(() => props.active, active => { if (!active) request?.abort(); else if (!snapshot.value) void load() }, { immediate: true })
 onBeforeUnmount(() => request?.abort())
 </script>

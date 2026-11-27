@@ -1,3 +1,4 @@
+import type { RenderedOtioPreview } from './otio-rendered-preview.ts'
 import { otioSourceTime, type OtioModel, type OtioNode, type OtioTime } from './otio-model.ts'
 
 export const isOtioFile = (name: string) => /\.otio(?:\.json)?$/i.test(name)
@@ -61,7 +62,7 @@ export function mediaPosition(node: OtioNode, seconds: number): number | null {
   return source ? source.value / source.rate - (node.mediaStart ? node.mediaStart.value / node.mediaStart.rate : 0) : null
 }
 export function otioReviewAnchor(document: OtioDocument, model: OtioModel, node: OtioNode, frame: number,
-  picture: OtioNode | null, mode: 'timeline' | 'clip' | 'track', medium?: OtioMedium | null, track?: OtioNode) {
+  picture: OtioNode | null, mode: 'timeline' | 'clip' | 'track', medium?: OtioMedium | null, track?: OtioNode, composite?: { required: true; preview?: RenderedOtioPreview; mediaSeconds: number | null }) {
   const at: OtioTime = { value: frame, rate: model.rate }, seconds = frame / model.rate
   const first = firstOtioFrame(node.start, model.rate)
   const after = firstOtioFrame(node.end, model.rate)
@@ -87,10 +88,10 @@ export function otioReviewAnchor(document: OtioDocument, model: OtioModel, node:
       value: model.globalStart.value + seconds * model.globalStart.rate, rate: model.globalStart.rate,
     } }) },
     // Selection may be a parent, audio item, transition or a clip below the top layer.
-    monitor: { mode, ...(mode === 'track' && track && { track: { pointer: track.id, name: track.name } }), clip: picture ? { pointer: picture.id, name: picture.name, timing: 'calculated' as const, source: otioSourceTime(picture, seconds),
+    monitor: { mode, ...(composite && { renderedPreview: { required: true, available: composite.mediaSeconds !== null, manifestPath: composite.preview?.manifestPath, mediaPath: composite.preview?.path, manifest: composite.preview?.manifest, requestedMediaSeconds: composite.mediaSeconds } }), ...(mode === 'track' && track && { track: { pointer: track.id, name: track.name } }), clip: !composite && picture ? { pointer: picture.id, name: picture.name, timing: 'calculated' as const, source: otioSourceTime(picture, seconds),
       ...(medium && { mediaPath: medium.path }), ...(picture.mediaStart && { mediaStart: picture.mediaStart }),
       requestedMediaSeconds: mediaPosition(picture, seconds),
-    } : null, ...(model.warnings.length && { previewLimits: model.warnings }) },
+    } : null, ...(!composite && model.warnings.length && { previewLimits: model.warnings }) },
   }
 }
 export type OtioAnchor = ReturnType<typeof otioReviewAnchor>

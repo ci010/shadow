@@ -10,7 +10,18 @@ import { fileURLToPath } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import UnoCSS from 'unocss/vite'
 import { createServer } from 'vite'
-import { pngFixture } from '../../src/testing/image.ts'
+// Opaque 24-bit BMPs keep this a genuine legacy single-layer profile (no PNG alpha).
+function bitmapFixture(width: number, height: number) {
+  const stride = Math.ceil(width * 3 / 4) * 4, bytes = Buffer.alloc(54 + stride * height)
+  bytes.write('BM'); bytes.writeUInt32LE(bytes.length, 2); bytes.writeUInt32LE(54, 10)
+  bytes.writeUInt32LE(40, 14); bytes.writeInt32LE(width, 18); bytes.writeInt32LE(height, 22)
+  bytes.writeUInt16LE(1, 26); bytes.writeUInt16LE(24, 28); bytes.writeUInt32LE(stride * height, 34)
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const offset = 54 + y * stride + x * 3
+    bytes[offset] = x % 256; bytes[offset + 1] = y % 256; bytes[offset + 2] = 90
+  }
+  return bytes
+}
 
 const root = fileURLToPath(new URL('../..', import.meta.url))
 const desktopRequire = createRequire(new URL('../../desktop/package.json', import.meta.url))
@@ -22,10 +33,9 @@ const clip = (name: string, source: number, duration: number, url: string) => sc
 })
 const track = (name: string, children: unknown[]) => schema('Track', { name, kind: 'Video', children })
 const timeline = JSON.stringify(schema('Timeline', { name: 'Assembly', global_start_time: time(240), tracks: schema('Stack', { children: [
-  track('Lower', [clip('Repeated', 48, 48, 'lower.png'), schema('Transition', { in_offset: time(4), out_offset: time(4), transition_type: 'SMPTE_Dissolve' }),
-    clip('External', 12, 48, 'https://blocked.invalid/sentinel.png'), clip('Moonrise', 12, 96, 'moonrise.mp4'),
+  track('Lower', [clip('Repeated', 48, 24, 'lower.bmp'), clip('Repeated', 96, 24, 'upper.bmp'),
+    clip('External', 12, 48, 'https://blocked.invalid/sentinel.bmp'), clip('Moonrise', 12, 96, 'moonrise.mp4'),
     schema('Gap', { source_range: range(0, 48) })]),
-  track('Upper', [schema('Gap', { source_range: range(0, 24) }), clip('Repeated', 96, 24, 'upper.png')]),
   schema('Track', { name: 'A1', kind: 'Audio', children: [clip('Chime', 24, 96, 'tone.wav'),
     schema('Gap', { source_range: range(0, 24) }), clip('Repeat', 24, 48, 'tone.wav')] }),
   schema('Track', { name: 'A2', kind: 'Audio', children: [schema('Gap', { source_range: range(0, 144) }),
@@ -52,7 +62,7 @@ function waveFixture() {
 }
 const documentPath = 'cuts/assembly.OTIO'
 const modified = '2026-01-01T00:00:00Z'
-const images = { 'cuts/lower.png': pngFixture(240, 100), 'cuts/upper.png': pngFixture(180, 90) }
+const images = { 'cuts/lower.bmp': bitmapFixture(240, 100), 'cuts/upper.bmp': bitmapFixture(180, 90) }
 
 const entry = `import 'uno.css'; import '/src/styles.css';
 import {createApp,h,ref,reactive} from 'vue';
@@ -128,7 +138,7 @@ test('OTIO viewer renders reviews; the real shell stages into existing and fresh
           if (req.method === 'GET' && url.pathname === '/projects/review/api/folders/edit/raw') {
             if (path === 'assembly.OTIO') { res.end(timeline); return }
             const png = images[`cuts/${path}` as keyof typeof images]
-            if (png) { res.setHeader('Content-Type', 'image/png'); res.end(png); return }
+            if (png) { res.setHeader('Content-Type', 'image/bmp'); res.end(png); return }
           }
           if (req.method === 'GET' && (url.pathname === '/api/projects' || /^\/projects\/(review|other)\/api\//.test(url.pathname) || url.pathname.startsWith('/api/providers'))) {
             const json = (body: unknown) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(body)) }
@@ -155,7 +165,7 @@ test('OTIO viewer renders reviews; the real shell stages into existing and fresh
               } else { res.setHeader('Content-Length', media.length); res.end(media) }
               return
             }
-            if (path && Object.hasOwn(images, path)) { res.setHeader('Content-Type', 'image/png'); res.end(images[path as keyof typeof images]); return }
+            if (path && Object.hasOwn(images, path)) { res.setHeader('Content-Type', 'image/bmp'); res.end(images[path as keyof typeof images]); return }
           }
           res.statusCode = 403; res.end('Outside fixture scope')
         })
@@ -286,9 +296,9 @@ app.whenReady().then(async()=>{
   assert.ok(monitor.right<=inspector.left+1 && monitor.bottom<=tracks.top+1 && inspector.bottom<=tracks.top+1);
   assert.ok(await run(()=>{
     const limits=document.querySelector('.inspector details.limits'), actions=document.querySelector('.reference-actions');
-    return limits && !limits.open && actions.nextElementSibling===limits &&
+    return !limits &&
       document.querySelectorAll('.reference-actions').length===1 && actions.querySelectorAll('button').length===2;
-  }), 'both actions sit above the collapsed Preview limits in the inspector');
+  }), 'both actions remain available without spurious limits on the legacy cut-only profile');
   if(${JSON.stringify(desktopScreenshot || '')}) writeFileSync(${JSON.stringify(desktopScreenshot || '')},(await win.webContents.capturePage()).toPNG(),{flag:'wx'});
   await click('Storyboard','.viewer-modes');
   assert.ok(await run(()=>{
@@ -414,7 +424,7 @@ app.whenReady().then(async()=>{
   await run(()=>document.querySelectorAll('.otio-structure .row')[2].click());
   await click('Storyboard','.viewer-modes');
   await run(()=>{const source=document.querySelector('.storyboard select');source.selectedIndex=1;source.dispatchEvent(new Event('change'))});
-  assert.equal(await run(()=>document.querySelectorAll('.storyboard .card').length),3);
+  assert.equal(await run(()=>document.querySelectorAll('.storyboard .card').length),4);
   win.setSize(420,820);
   await wait('narrow storyboard tabs',()=>!!document.querySelector('.compact-tabs').getClientRects().length);
   await layout('.storyboard-pane','.tracks-pane');
@@ -429,7 +439,7 @@ app.whenReady().then(async()=>{
   await wait('narrow Flow wraps without clipping horizontally',()=>{
     const cards=[...document.querySelectorAll('.board-flow .card')].map(e=>e.getBoundingClientRect());
     const port=document.querySelector('.board-scroll');
-    return cards.length===3 && cards[0].x===cards[1].x && cards[1].top>cards[0].bottom && port.scrollWidth<=port.clientWidth+1;
+    return cards.length===4 && cards[0].x===cards[1].x && cards[1].top>cards[0].bottom && port.scrollWidth<=port.clientWidth+1;
   });
   assert.equal(await run(()=>{
     const port=document.querySelector('.board-scroll');
@@ -451,7 +461,7 @@ app.whenReady().then(async()=>{
   await wait('desktop monitor restored',()=>!document.querySelector('.compact-tabs').getClientRects().length);
   const initial=await state();
   const baseDocument={path:${JSON.stringify(documentPath)},owner:{session:'fixture',space:'workdir'},modified:${JSON.stringify(modified)},sha256:${JSON.stringify(createHash('sha256').update(timeline).digest('hex'))}};
-  const elements=[[0,'Timeline.1',''],[1,'Stack.1','/tracks'],[2,'Track.1','/tracks/children/0'],[3,'Clip.1','/tracks/children/0/children/0'],[4,'Transition.1','/tracks/children/0/children/1'],[9,'Gap.1','/tracks/children/1/children/0']];
+  const elements=[[0,'Timeline.1',''],[1,'Stack.1','/tracks'],[2,'Track.1','/tracks/children/0'],[3,'Clip.1','/tracks/children/0/children/0'],[4,'Clip.1','/tracks/children/0/children/1'],[7,'Gap.1','/tracks/children/0/children/4']];
   for(const [index,[row,schema,pointer]] of elements.entries()){
     await run(row=>document.querySelectorAll('.otio-structure .row')[row].click(),row);
     assert.equal(await run(()=>document.querySelector('.inspector .schema')?.textContent),schema);
@@ -470,14 +480,11 @@ app.whenReady().then(async()=>{
   }
   await click('Clip: External','.tracks');
   assert.ok(await run(()=>document.querySelector('.mark-action:disabled')&&!document.querySelector('.picture img,.picture video')));
-  await click('Clip: Repeated','.tracks .lane-row[data-kind=Video]:nth-child(3)');
-  await wait('upper still',()=>document.querySelector('.picture img')?.naturalWidth===180);
   await click('Clip: Repeated','.tracks .lane-row:nth-child(2)');
-  await wait('lower solo',()=>document.querySelector('.picture img')?.naturalWidth===240);
+  await wait('legacy clip source',()=>document.querySelector('.picture img')?.naturalWidth===240);
   await click('Timeline','.modes');
-  await wait('upper composite',()=>document.querySelector('.picture img')?.naturalWidth===180);
   const before=await state();
-  for(const [mode,width,height] of [['timeline',180,90],['clip',240,100]]){
+  for(const [mode,width,height] of [['timeline',240,100],['clip',240,100]]){
     if(mode==='clip'){
       win.setSize(420,820);
       await wait('compact panels',()=>!!document.querySelector('.compact-tabs').getClientRects().length);
@@ -529,15 +536,15 @@ app.whenReady().then(async()=>{
     const staged=await state(), record=staged.records.at(-1);
     assert.equal(staged.records.length,before.records.length+(mode==='clip'?2:1),await run(()=>document.querySelector('.review-error')?.textContent));
     assert.deepEqual(record.document,baseDocument);
-    assert.deepEqual(record.playhead,{relative:{value:24,rate:24},global:{value:264,rate:24}});
+    assert.deepEqual(record.playhead,{relative:{value:0,rate:24},global:{value:240,rate:24}});
     assert.equal(record.element.pointer,'/tracks/children/0/children/0');
-    assert.deepEqual(record.element.sourceAtPlayhead,{value:72,rate:24});
+    assert.deepEqual(record.element.sourceAtPlayhead,{value:48,rate:24});
     assert.equal(record.monitor.mode,mode);
-    assert.equal(record.monitor.clip.pointer,mode==='clip'?record.element.pointer:'/tracks/children/1/children/1');
-    assert.deepEqual(record.monitor.clip.source,{value:mode==='clip'?72:96,rate:24});
-    assert.equal(record.monitor.clip.requestedMediaSeconds,mode==='clip'?1.5:0.5);
+    assert.equal(record.monitor.clip.pointer,record.element.pointer);
+    assert.deepEqual(record.monitor.clip.source,{value:48,rate:24});
+    assert.equal(record.monitor.clip.requestedMediaSeconds,0.5);
     assert.deepEqual(record.markedFrame,{presentedMediaSeconds:null});
-    assert.equal(staged.labels.at(-1),'OTIO marked picture: Repeated · Frame 24');
+    assert.equal(staged.labels.at(-1),'OTIO marked picture: Repeated · Frame 0');
     assert.equal(staged.editorText,initial.initialText);
     const png=await run(async(px,py,path)=>{
       const file=window.fixture.references.at(-1).attachment.file;
@@ -549,8 +556,8 @@ app.whenReady().then(async()=>{
       const marked=sample(px,py), untouched=sample(20,20);
       ctx.drawImage(original,0,0);
       return {type:file.type,name:file.name,width:decoded.width,height:decoded.height,changed:marked.join()!==sample(px,py).join(),untouched:untouched.join()===sample(20,20).join()};
-    },pixelX,pixelY,'/api/sessions/fixture/raw?path=cuts/'+(mode==='clip'?'lower':'upper')+'.png');
-    assert.deepEqual(png,{type:'image/png',name:'assembly-f24-marked.png',width,height,changed:true,untouched:true});
+    },pixelX,pixelY,'/api/sessions/fixture/raw?path=cuts/lower.bmp');
+    assert.deepEqual(png,{type:'image/png',name:'assembly-f0-marked.png',width,height,changed:true,untouched:true});
   }
   const final=await state();
   assert.ok(final.text.startsWith(before.text));
@@ -688,7 +695,7 @@ app.whenReady().then(async()=>{
   assert.equal(await run(()=>[...document.querySelectorAll('.otio-reference-chip .attachment-preview')].find(e=>e.getClientRects().length)?.getAttribute('aria-label')),'View image: assembly-f0-marked.png');
   assert.equal(await run(async()=>{
     const img=[...document.querySelectorAll('.otio-reference-chip img')].find(e=>e.getClientRects().length);
-    const source=await createImageBitmap(await(await fetch('/projects/review/api/folders/edit/raw?path=lower.png')).blob());
+    const source=await createImageBitmap(await(await fetch('/projects/review/api/folders/edit/raw?path=lower.bmp')).blob());
     const c=document.createElement('canvas');c.width=240;c.height=100;
     const ctx=c.getContext('2d',{willReadFrequently:true});
     ctx.drawImage(source,0,0);const original=ctx.getImageData(117,47,6,6).data;

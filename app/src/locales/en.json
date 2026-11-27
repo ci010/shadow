@@ -4721,5 +4721,13 @@
   "Published Work definitions": "Published Work definitions",
   "No Work definitions were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.": "No Work definitions were recorded with this publication. Lifecycle checks alone do not establish complete feature coverage.",
   "Unverified assumption": "Unverified assumption",
-  "No system prompt.": "No system prompt."
+  "No system prompt.": "No system prompt.",
+  "Composite preview": "Composite preview",
+  "Reload preview": "Reload preview",
+  "Generate a composite preview for this timeline, then reload preview.": "Generate a composite preview for this timeline, then reload preview.",
+  "Storyboard, source solo and per-track controls are unavailable for composited timelines.": "Storyboard, source solo and per-track controls are unavailable for composited timelines.",
+  "Composite audio": "Composite audio",
+  "Unmute composite audio": "Unmute composite audio",
+  "Mute composite audio": "Mute composite audio",
+  "Cannot verify the timeline source version. Open the viewer in a secure context with SHA-256 support.": "Cannot verify the timeline source version. Open the viewer in a secure context with SHA-256 support."
 }
