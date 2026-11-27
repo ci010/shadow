@@ -135,23 +135,29 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await wait(visible('.reference-composer'));
     await wait('document.querySelector(".context-chip")?.textContent.includes("run:a")');
     assert.equal(await run('!!'+visible('.workflow-manager')),false,'Existing chat keeps the reference when the canvas is hidden');
-    assert.equal(await run('document.querySelectorAll(".diagnosis-document").length'),0,'diagnosis does not register by default');
-    await run('('+visible('.conversation-diagnosis')+').click()');await wait(editorTab('Diagnosis'));
-    await wait(visible('.session-diagnosis'));
-    assert.equal(await run(editorTab('Diagnosis')+'.getAttribute("aria-selected")'), 'true', 'heading opens and selects diagnosis');
+    const dialog = visible('dialog.diagnosis-dialog[open]');
+    const diagnosisTrigger = visible('.conversation-diagnosis');
+    assert.equal(await run('!!('+dialog+')'),false,'diagnosis is closed by default');
+    await run('window.fixture.beforeDiagnosisComposer=('+visible('.reference-composer')+');window.fixture.beforeDiagnosisHistory=('+visible('.chat-messages')+')');
+    await run('('+diagnosisTrigger+').focus();('+diagnosisTrigger+').click()');await wait(dialog);
+    assert.equal(await run('!!('+editorTab('Diagnosis')+')'),false,'diagnosis never adds a document tab');
+    assert.equal(await run('('+visible('.reference-composer')+')===window.fixture.beforeDiagnosisComposer'),true);
+    assert.equal(await run('('+visible('.chat-messages')+')===window.fixture.beforeDiagnosisHistory'),true);
     await run('('+visible('[id$="diagnosis-tools-tab"]')+').click()');
-    await run(editorTab('Diagnosis')+'.dispatchEvent(new MouseEvent("auxclick",{button:1,bubbles:true,cancelable:true}))');
-    await wait('!('+editorTab('Diagnosis')+')');
-    await run('('+visible('.conversation-diagnosis')+').click()');await wait(visible('.session-diagnosis'));
+    await wait('window.fixture.router.currentRoute.value.query.diagnosis==="tools"');
+    await run('('+visible('.diagnosis-close')+').click()');await wait('!('+dialog+')');
+    await wait('document.activeElement===('+diagnosisTrigger+')');
+    await wait('window.fixture.router.currentRoute.value.query.panel===undefined');
+    await run('('+diagnosisTrigger+').click()');await wait(dialog);
     await wait('('+visible('[id$="diagnosis-tools-tab"]')+').getAttribute("aria-selected")==="true"');
-    await run('window.fixture.diagnosisId=('+editorTab('Diagnosis')+').id');
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:second"}})');
-    await wait(visible('.conversation-diagnosis'));
-    assert.equal(await run('document.querySelectorAll(".diagnosis-document").length'),1,'hidden sessions do not register new diagnosis');
-    await run('('+visible('.conversation-diagnosis')+').click()');
-    await wait('document.querySelectorAll(".diagnosis-document").length===2');
-    assert.equal(await run('new Set([...document.querySelectorAll(".diagnosis-document")].map(e=>e.closest(".editor-view").dataset.editorId)).size'),2);
-    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"}})');
+    await wait('!('+dialog+')');
+    await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{panel:"diagnosis",diagnosis:"prompt",keep:"yes"}})');
+    await wait(dialog);
+    await wait('('+visible('[id$="diagnosis-prompt-tab"]')+').getAttribute("aria-selected")==="true"');
+    await run('('+dialog+').dispatchEvent(new Event("cancel",{cancelable:true}))');await wait('!('+dialog+')');
+    await wait('window.fixture.router.currentRoute.value.query.panel===undefined');
+    assert.equal((await route()).query.keep,'yes');
     await wait(visible('.reference-composer'));
 
     await run('window.fixture.chatInput=('+visible('.reference-composer')+');window.fixture.chatInput.textContent="Right unsent draft";window.fixture.chatInput.dispatchEvent(new Event("input",{bubbles:true}))');
@@ -230,8 +236,6 @@ test('workflow selection syncs to the editable split target, replaces and clears
 
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{panel:"knowledge"}})');
     await wait(editorTab('Knowledge'));await move('Knowledge');await wait(visible('[data-editor-group="right"] .knowledge-document'));
-    await move('Diagnosis');await wait(visible('[data-editor-group="right"] .diagnosis-document'));
-    await wait(visible('[data-editor-group="right"] .session-diagnosis'));
     // The active group's shortcut closes only its selected closable resource.
     await run(editorTab('Knowledge')+'.click()');
     await run('document.querySelector("[data-editor-header-group=right] .editor-tabs").dispatchEvent(new KeyboardEvent("keydown",{key:"w",ctrlKey:true,bubbles:true}))');
@@ -240,7 +244,7 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await run('window.fixture.router.push({name:"project-settings",params:{projectId:"a"}})');
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:chat-ordinary"},query:{panel:"knowledge"}})');
     await wait(editorTab('Knowledge'));
-    const ordinaryTab='[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.id.includes("chat-ordinary")&&!e.textContent.includes("Diagnosis")&&!e.textContent.includes("Knowledge")&&!e.textContent.includes("note.md"))';
+    const ordinaryTab='[...document.querySelectorAll(".editor-tab [role=tab]")].find(e=>e.id.includes("chat-ordinary")&&!e.textContent.includes("Knowledge")&&!e.textContent.includes("note.md"))';
     await run(ordinaryTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');
     await wait('!('+ordinaryTab+')');
     assert.equal(await run('window.fixture.chatState.selectedWorkflowReference'),undefined,'closing the target removes its dynamic context');
@@ -257,7 +261,7 @@ test('workflow selection syncs to the editable split target, replaces and clears
     await wait('!!document.querySelector("[data-editor-group=right] .editor-view[data-editor-id*=child-fixture]")');
     assert.equal(await run('document.querySelectorAll(".editor-view[data-editor-id*=child-fixture] .context-chip").length'),0,'child inspection never receives dynamic context');
     assert.equal(await run('document.querySelectorAll(".child-conversation").length'),0);
-    const childTab='[...document.querySelectorAll("[data-editor-header-group=right] .editor-tab [role=tab]")].find(e=>e.id.includes("child-fixture")&&!e.textContent.includes("Diagnosis"))';
+    const childTab='[...document.querySelectorAll("[data-editor-header-group=right] .editor-tab [role=tab]")].find(e=>e.id.includes("child-fixture"))';
     await wait(childTab);await run(childTab+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelector(".editor-menu button").click()');
     await wait('!!document.querySelector("[data-editor-group=left] .editor-view[data-editor-id*=child-fixture]")');
     await run(childTab.replaceAll('data-editor-header-group=right','data-editor-header-group=left')+'.dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,clientX:500,clientY:100}))');await run('document.querySelectorAll(".editor-menu button")[1].click()');

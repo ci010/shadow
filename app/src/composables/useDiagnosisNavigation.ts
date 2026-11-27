@@ -17,11 +17,12 @@ export function useDiagnosisNavigation(options: {
   const { route, router } = options
   const section = ref<DiagnosisSection>('trace')
   const error = ref('')
-  const panelKey = computed(() => options.embedded() ? 'childPanel' : 'panel')
-  const sectionKey = computed(() => options.embedded() ? 'childDiagnosis' : 'diagnosis')
+  const childAlias = computed(() => options.embedded() && route.params.sessionId !== options.sessionId())
+  const panelKey = computed(() => childAlias.value ? 'childPanel' : 'panel')
+  const sectionKey = computed(() => childAlias.value ? 'childDiagnosis' : 'diagnosis')
   const ownsRoute = computed(() => route.name === 'chat' && route.params.projectId === options.projectId()
-    && !!options.sessionId() && (options.embedded() ? route.query.child : route.params.sessionId) === options.sessionId())
-  const requested = computed(() => ownsRoute.value ? route.query[panelKey.value] === 'diagnosis' : undefined)
+    && !!options.sessionId() && (childAlias.value ? route.query.child : route.params.sessionId) === options.sessionId())
+  const requested = computed(() => ownsRoute.value ? route.query[panelKey.value] === 'diagnosis' && !(childAlias.value && route.query.panel === 'diagnosis') : undefined)
   watch(() => [ownsRoute.value, route.query[panelKey.value], route.query[sectionKey.value]], () => {
     if (requested.value) section.value = diagnosisSection(route.query[sectionKey.value])
   }, { immediate: true, flush: 'sync' })
@@ -35,7 +36,7 @@ export function useDiagnosisNavigation(options: {
     if (active) {
       query[panelKey.value] = 'diagnosis'
       query[sectionKey.value] = section.value
-      if (!options.embedded()) delete query.entry
+      if (!childAlias.value) delete query.entry
     } else {
       if (query[panelKey.value] !== 'diagnosis') return
       delete query[panelKey.value]

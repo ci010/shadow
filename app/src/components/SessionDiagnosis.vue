@@ -210,6 +210,7 @@ const props = defineProps<{
   compactionSummary: string
   idPrefix?: string
 }>()
+const emit = defineEmits<{ 'open-prompt': [] }>()
 const section = defineModel<DiagnosisSection>('section', { default: 'trace' })
 const promptDocuments = inject(PromptDocumentsKey, undefined)
 // Context belongs to the prompt/tools inspector, not conversation history.
@@ -243,6 +244,7 @@ watch([() => props.apiBase, () => props.sessionId, () => props.physicalId, () =>
 onUnmounted(() => promptRequest?.abort())
 function openPrompt() {
   if (!props.projectId) return
+  emit('open-prompt')
   const source = `${props.sessionId} / ${inspectedSource.value || 'unknown provenance'} / system prompt`
   promptDocuments?.open(props.projectId, { key: `session:${props.sessionId}:${inspectedSource.value}`, label: t('System Prompt'), source,
     prompt: inspectedPrompt.value, sections: validatePromptSections(inspectedPrompt.value, inspectedSections.value) })

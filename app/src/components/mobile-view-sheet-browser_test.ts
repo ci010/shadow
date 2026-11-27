@@ -23,10 +23,10 @@ test('open view sheets fill each row and align independent close targets at narr
       optimizeDeps: { noDiscovery: true, include: [] }, configFile: false, root: resolve(root, 'app'), logLevel: 'error',
       plugins: [vue(), UnoCSS({ configFile: resolve(root, 'app', 'unocss.config.ts') }), {
         name: 'view-sheet-fixture',
-        resolveId: id => id === '/view-entry.ts' ? '\0view-entry' : id === '/view-fixture.vue' ? resolve(root, 'app/view-fixture.vue') : undefined,
+        resolveId: id => id === '/view-entry.ts' ? '\0view-entry' : id === '/view-fixture.vue' ? resolve(root, 'app/view-fixture.vue').replaceAll('\\', '/') : undefined,
         async load(id) {
           if (id === '\0view-entry') return `import 'uno.css';import '/src/styles.css';import {createApp} from 'vue';import Fixture from '/view-fixture.vue';createApp(Fixture).mount('#app');`
-          if (id !== resolve(root, 'app/view-fixture.vue')) return
+          if (id !== resolve(root, 'app/view-fixture.vue').replaceAll('\\', '/')) return
           // Render the actual two production sheet templates and their scoped
           // styles, without starting unrelated file/knowledge/network services.
           const components = await Promise.all(['files/FileWorkbench.vue', 'MobileEditorChrome.vue'].map(async path => {
@@ -40,18 +40,20 @@ test('open view sheets fill each row and align independent close targets at narr
             import {reactive,toRefs} from 'vue';
             import MobileSheet from '/src/components/MobileSheet.vue';
             import HoverInfo from '/src/components/HoverInfo.vue';
+            import DiagnosisDialog from '/src/components/DiagnosisDialog.vue';
+            import {ref} from 'vue';
+            const diagnosisOpen = ref(false), diagnosisTrigger = ref();
             const t = value => value;
             const long = 'VeryLongUnbrokenFileName'.repeat(12);
             const entry = {id:'draft',label:'New conversation',closable:true};
             const state = window.fixture = reactive({mode:0, viewsOpen:true, activated:[],closed:[],
               mobileLayout:true,mobileTitleButton:undefined,
-              otherEditors:[entry], entries:[entry,{id:'chat',label:'Current conversation',closable:true},{id:'long',label:long,closable:true},{id:'diagnosis',label:'Diagnosis',closable:false},{id:'knowledge',label:'Knowledge',closable:false}],current:{id:'chat'},
+              otherEditors:[entry], entries:[entry,{id:'chat',label:'Current conversation',closable:true},{id:'long',label:long,closable:true},{id:'knowledge',label:'Knowledge',closable:false}],current:{id:'chat'},
               tabs:{selected:'',knowledge:true,knowledgeEntries:['long-entry'],projectTabs:['settings'],files:[{path:long,entry:{name:long}}]},
-              primaryIcon:'i-lucide-messages-square',primaryLabel:'Current conversation',conversationTitle:'',diagnosisEnabled:true,knowledgeEnabled:true});
+              primaryIcon:'i-lucide-messages-square',primaryLabel:'Current conversation',conversationTitle:'',knowledgeEnabled:true});
             const groups = {activate:id=>state.activated.push(id),close:id=>state.closed.push(id)};
             const chooseMobileView = id => {state.activated.push(id);state.viewsOpen=false};
             const chooseMobileKnowledge = () => chooseMobileView('knowledge');
-            const openDiagnosis = () => chooseMobileView('diagnosis');
             const closeFile = id => state.closed.push(id);
             const knowledgeLabel = () => long;
             const knowledgeEntryTabKey = id => id;
@@ -60,10 +62,13 @@ test('open view sheets fill each row and align independent close targets at narr
             const projectTabIcon = () => 'i-lucide-settings';
             const fileTabKey = file => file.path;
             const fileIcon = () => 'i-lucide-file';
-            const KNOWLEDGE_TAB_KEY='knowledge',DIAGNOSIS_TAB_KEY='diagnosis';
+            const KNOWLEDGE_TAB_KEY='knowledge';
           `
-          return `<script setup>${setup}const {${['mode','viewsOpen','mobileLayout','mobileTitleButton','otherEditors','entries','current','tabs','primaryIcon','primaryLabel','conversationTitle','diagnosisEnabled','knowledgeEnabled'].join(',')}}=toRefs(state);</script>
-            <template><div>${components.map((c,i) => `<template v-if="mode===${i}">${c.template}</template>`).join('')}</div></template>
+          return `<script setup>${setup}const {${['mode','viewsOpen','mobileLayout','mobileTitleButton','otherEditors','entries','current','tabs','primaryIcon','primaryLabel','conversationTitle','knowledgeEnabled'].join(',')}}=toRefs(state);</script>
+            <template><div>${components.map((c,i) => `<template v-if="mode===${i}">${c.template}</template>`).join('')}
+              <button id="diagnosis-trigger" ref="diagnosisTrigger" @click="diagnosisOpen=true">Diagnosis</button>
+              <DiagnosisDialog v-if="diagnosisOpen" :return-focus="diagnosisTrigger" @close="diagnosisOpen=false"><button id="trace-control">Trace</button></DiagnosisDialog>
+            </div></template>
             <style scoped>${components.map(c=>c.style).join('\n')}</style>`
         },
         configureServer(server) {
@@ -119,7 +124,7 @@ test('open view sheets fill each row and align independent close targets at narr
                     nested:!!row.querySelector('button button')};
                 });
               })()\`);
-              assert.equal(geometry.length,mode===0?7:5);
+              assert.equal(geometry.length,mode===0?6:4);
               for(const row of geometry) {
                 assert.ok(Math.abs(row.left-row.expectedLeft)<1,JSON.stringify(row));
                 assert.ok(Math.abs(row.right-row.expectedRight)<1,JSON.stringify(row));
@@ -148,6 +153,21 @@ test('open view sheets fill each row and align independent close targets at narr
               await execute('document.querySelector(".mobile-view-row button").focus();document.querySelector(".mobile-view-row button").click()');
               assert.deepEqual(await execute('Array.from(window.fixture.activated)'),['draft']);
               assert.equal(await execute('window.fixture.viewsOpen'),false);
+            }
+            for (const width of [390, 1200]) {
+              window.setContentSize(width, 720);
+              await wait('matchMedia("(max-width: 700px)").matches==='+String(width<=700));
+              await execute('document.querySelector("#diagnosis-trigger").focus();document.querySelector("#diagnosis-trigger").click()');
+              await wait('document.querySelector(".diagnosis-dialog")?.matches(":modal")');
+              assert.equal(await execute('document.activeElement?.classList.contains("diagnosis-close")'),true);
+              await execute('document.querySelector("#diagnosis-trigger").focus()');
+              assert.equal(await execute('document.activeElement?.classList.contains("diagnosis-close")'),true,'native dialog blocks background focus');
+              await execute('document.querySelector(".diagnosis-dialog .hover-info-anchor").dispatchEvent(new PointerEvent("pointerenter",{pointerType:"mouse"}))');
+              await wait('!!document.querySelector(".diagnosis-dialog .shared-hover-info")');
+              assert.equal(await execute('(()=>{const r=document.querySelector(".diagnosis-dialog").getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight})()'),true);
+              await execute('document.querySelector(".diagnosis-dialog").dispatchEvent(new Event("cancel",{cancelable:true}))');
+              await wait('!document.querySelector(".diagnosis-dialog")');
+              assert.equal(await execute('document.activeElement?.id'), 'diagnosis-trigger');
             }
             console.log('VIEW_SHEET_SMOKE_OK');
           } finally {window.destroy();}

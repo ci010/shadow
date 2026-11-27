@@ -112,7 +112,7 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     await run('window.fixture.router.push({name:"chat",params:{projectId:"a",sessionId:"web:ordinary"}})');
     await sidebar('b');await sidebar('a');await primary();
     await wait('window.fixture.router.currentRoute.value.name==="chat"');assert.equal((await route()).params.sessionId,'web:ordinary');
-    await sidebar('a');await primary();await run('('+visible('.conversation-diagnosis')+').click()');await clickTab('Diagnosis');await wait(visible('.diagnosis-document'));
+    await sidebar('a');await primary();await run('('+visible('.conversation-diagnosis')+').click()');await wait(visible('dialog.diagnosis-dialog[open]'));await wait('window.fixture.router.currentRoute.value.query.panel==="diagnosis"');
     assert.equal((await route()).name,'chat');assert.equal((await route()).query.panel,'diagnosis');
     await sidebar('a');await wait(visible('.graph-group'));
     await run('window.fixture.workflowElement=('+visible('.workflow-manager')+')');
@@ -186,7 +186,9 @@ test('Workflow uses real workbench tabs with drafts, conversation context, proje
     await win.close();console.log('WORKFLOW_WORKBENCH_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs')
   await build({ stdin: { contents: script, resolveDir: directory, sourcefile: 'fixture-run.cjs' }, outfile: entry, bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
-  const child = spawn(desktopRequire('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(desktopRequire('electron') as string, [entry], { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
   child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 80_000)

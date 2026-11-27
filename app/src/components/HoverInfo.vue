@@ -3,7 +3,7 @@
     @focusin="focusIn" @focusout="focusOut" @keydown="anchorKey" @click="anchorClick">
     <slot :trigger-props="triggerProps" :open="show" :close="close" />
   </span>
-  <Teleport v-if="sharedTooltip.host.value === token" to="body">
+  <Teleport v-if="sharedTooltip.host.value === token" :to="sharedTooltip.current.value?.dialog ?? 'body'">
     <OverlayTransition>
       <div v-if="sharedTooltip.visible.value" :id="sharedTooltip.current.value?.id"
         :ref="setSharedPopup" class="hover-info-popup shared-hover-info" :class="{ interactive: sharedTooltip.current.value?.interactive }"
@@ -99,7 +99,9 @@ async function show() {
   dismissCurrent?.()
   dismissCurrent = close
   sharedTooltip.current.value = {
-    token, id, interactive: props.interactive, label: () => props.label || props.text || t('More information'),
+    token, id, interactive: props.interactive,
+    dialog: trigger()?.closest<HTMLDialogElement>('dialog[open]') ?? undefined,
+    label: () => props.label || props.text || t('More information'),
     content: () => slots.content?.({ close }) ?? [h('p', { class: 'hover-info-text' }, props.text)],
     cancelClose, scheduleClose, focusOut, popupKey,
   }

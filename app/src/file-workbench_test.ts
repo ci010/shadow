@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, nextDocumentTab, openFileTab, selectedFileToClose, type DocumentTabKey, type DocumentTabWheel, type FileTabs } from './file-workbench.ts'
-import { documentTabKeys, DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, openKnowledgeTab, openProjectTab, projectTabFromKey, projectTabKey, withDiagnosisTab } from './file-workbench.ts'
+import { documentTabKeys, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, openKnowledgeTab, openProjectTab, projectTabFromKey, projectTabKey } from './file-workbench.ts'
 
 const file = (path: string) => ({ path, entry: { name: path.split('/').at(-1)!, ext: '.md', type: 'file' as const, size: 12, mtime: null } })
 test('archive tabs retain their member identity without colliding with workspace paths or nested containers', () => {
@@ -64,8 +64,8 @@ const available = {
   overlayOpen: false, composing: false,
 }
 test('file writes do not add a permanent document to the conversation workbench', () => {
-  const state = withDiagnosisTab(openFileTab({ files: [], selected: '' }, file('memory.md')), true)
-  assert.deepEqual(documentTabKeys(state), ['', DIAGNOSIS_TAB_KEY, 'memory.md'])
+  const state = openFileTab({ files: [], selected: '' }, file('memory.md'))
+  assert.deepEqual(documentTabKeys(state), ['', 'memory.md'])
   assert.deepEqual(documentTabKeys(closeAllFileTabs(state)), [''])
 })
 test('Alt+Left and Alt+Right use browser history only for unhandled, nonrepeating keys', () => {
@@ -95,28 +95,6 @@ test('explorer shortcut uses active workbench guards without requiring an open f
     { explorerEnabled: false }, { overlayOpen: true }, { composing: true }]) {
     assert.equal(canHandleDocumentShortcut({ ...available, ...patch }), false)
   }
-})
-
-test('optional Diagnosis is a closable peer of Conversation, including keyboard navigation', () => {
-  const state = withDiagnosisTab(openKnowledgeTab(openFileTab({ files: [], selected: '' }, file('notes.md'))), true)
-  assert.deepEqual(documentTabKeys(state), ['', DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, 'notes.md'])
-  assert.equal(cycleDocumentTab({ ...state, selected: '' }, 1, available), DIAGNOSIS_TAB_KEY)
-  assert.equal(cycleDocumentTab({ ...state, selected: DIAGNOSIS_TAB_KEY }, 1, available), KNOWLEDGE_TAB_KEY)
-  const selected = { ...state, selected: DIAGNOSIS_TAB_KEY }
-  assert.equal(selectedFileToClose(selected, available), DIAGNOSIS_TAB_KEY)
-  assert.deepEqual(closeFileTab(selected, DIAGNOSIS_TAB_KEY), withDiagnosisTab(selected, false))
-  assert.deepEqual(closeAllFileTabs(selected), { files: [], selected: '' })
-  assert.equal(closeOtherFileTabs(selected, 'notes.md').diagnosis, undefined)
-  assert.equal(closeOtherFileTabs(selected, KNOWLEDGE_TAB_KEY).diagnosis, undefined)
-  assert.equal(closeAllFileTabs(state).selected, '')
-  const pinned = { files: [], diagnosis: true, selected: DIAGNOSIS_TAB_KEY }
-  assert.equal(canCloseAllDocuments(pinned, available), true)
-  assert.equal(cycleDocumentTab(pinned, 1, available), '')
-  assert.equal(cycleDocumentTab({ ...pinned, selected: '' }, -1, available), DIAGNOSIS_TAB_KEY)
-  const draft = withDiagnosisTab(pinned, false)
-  assert.deepEqual(draft, { files: [], selected: '' })
-  assert.deepEqual(documentTabKeys(draft), [''])
-  assert.equal(withDiagnosisTab({ ...state, selected: 'notes.md' }, false).selected, 'notes.md')
 })
 
 test('Knowledge shares document navigation and closing without impersonating a file or discarding other tabs', () => {
@@ -271,11 +249,11 @@ test('shortcuts ignore inactive, hidden, embedded, overlay and IME contexts and 
 })
 
 test('Workflow is a deduplicated project document with shared navigation and close semantics', () => {
-  const initial = openProjectTab(openKnowledgeTab(withDiagnosisTab({ files: [], selected: '' }, true)), 'settings')
+  const initial = openProjectTab(openKnowledgeTab({ files: [], selected: '' }), 'settings')
   const workflow = openProjectTab(initial, 'workflows')
   const key = projectTabKey('workflows')
   assert.equal(projectTabFromKey(key), 'workflows')
-  assert.deepEqual(documentTabKeys(workflow), ['', DIAGNOSIS_TAB_KEY, KNOWLEDGE_TAB_KEY, projectTabKey('settings'), key])
+  assert.deepEqual(documentTabKeys(workflow), ['', KNOWLEDGE_TAB_KEY, projectTabKey('settings'), key])
   assert.equal(openProjectTab(workflow, 'workflows'), workflow)
   assert.equal(cycleDocumentTab(workflow, 1, available), '')
   assert.equal(selectedFileToClose(workflow, available), key)

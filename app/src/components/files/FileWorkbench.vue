@@ -11,7 +11,6 @@
     <MobileSheet v-if="mobileLayout" :open="viewsOpen" :label="t('Open views')" :return-focus="mobileTitleButton" @update:open="viewsOpen = $event">
       <div v-for="entry in otherEditors" :key="entry.id" class="mobile-view-row"><button @click="groups?.activate(entry.id); viewsOpen = false">{{ entry.label }}</button><HoverInfo v-if="entry.closable" :text="t('Close {value1}', { value1: entry.label })" v-slot="{ triggerProps }"><button class="mobile-view-close" v-bind="triggerProps" :aria-label="t('Close {value1}', { value1: entry.label })" @click="groups?.close(entry.id)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo></div>
       <div class="mobile-view-row"><button :aria-current="tabs.selected === '' ? 'page' : undefined" @click="chooseMobileView('')"><span :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || conversationTitle || t('Conversation') }}</span></button></div>
-      <div v-if="diagnosisEnabled" class="mobile-view-row"><button :aria-current="tabs.selected === DIAGNOSIS_TAB_KEY ? 'page' : undefined" @click="openDiagnosis(); viewsOpen = false"><span class="i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span></button></div>
       <div v-if="knowledgeEnabled" class="mobile-view-row">
         <button :aria-current="tabs.selected === KNOWLEDGE_TAB_KEY ? 'page' : undefined" @click="chooseMobileKnowledge"><span class="i-lucide-book-open" aria-hidden="true" /><span>{{ t('Knowledge') }}</span></button>
         <button v-if="tabs.knowledge" class="mobile-view-close" :aria-label="t('Close Knowledge')" @click="closeFile(KNOWLEDGE_TAB_KEY, false)"><span class="i-lucide-x" aria-hidden="true" /></button>
@@ -34,8 +33,8 @@
         <slot name="actions" />
         <button v-if="explorerAvailable || knowledgeSelected" @click="showMobileFiles"><span class="i-lucide-folder-open" aria-hidden="true" />{{ knowledgeSelected ? t('Knowledge explorer') : t('Browse files') }}</button>
         <button v-if="!isPermanentDocumentTab(tabs.selected)" @click="closeFile(tabs.selected); actionsOpen = false"><span class="i-lucide-x" aria-hidden="true" />{{ t('Close current document') }}</button>
-        <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length || tabs.diagnosis" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">{{ t('Close all documents') }}</button>
-        <slot name="mobile-actions" :close="closeMobileActions" />
+        <button v-if="tabs.files.length > 1 || tabs.knowledge || tabs.projectTabs?.length" @click="tabs = closeAllFileTabs(tabs); actionsOpen = false">{{ t('Close all documents') }}</button>
+        <slot name="mobile-actions" :close="closeMobileActions" :trigger="mobileActionsButton" />
       </div>
     </MobileSheet>
     <div class="workbench-editor">
@@ -50,13 +49,6 @@
             <button :id="tabId('')" role="tab" :aria-selected="tabs.selected === ''" :tabindex="tabs.selected === '' ? 0 : -1" :aria-controls="panelId('')" @click="selectTab('')" @keydown="tabKey($event, '')">
               <SessionActivity v-if="primaryActivity" v-bind="primaryActivity" compact icon-only status-icons /><span v-else class="document-icon" :class="primaryIcon" aria-hidden="true" /><span>{{ primaryLabel || t('Conversation') }}</span>
             </button>
-          </div>
-          <div v-if="tabs.diagnosis" class="document-tab diagnosis-tab fixed-tab" :class="{ selected: tabs.selected === DIAGNOSIS_TAB_KEY }" @mousedown="preventMiddleScroll" @auxclick="middleClickTab($event, DIAGNOSIS_TAB_KEY)">
-            <button :id="tabId(DIAGNOSIS_TAB_KEY)" role="tab" :aria-selected="tabs.selected === DIAGNOSIS_TAB_KEY" :tabindex="tabs.selected === DIAGNOSIS_TAB_KEY ? 0 : -1"
-              :aria-controls="panelId(DIAGNOSIS_TAB_KEY)" @click="selectTab(DIAGNOSIS_TAB_KEY)" @keydown="tabKey($event, DIAGNOSIS_TAB_KEY)">
-              <span class="document-icon i-lucide-activity" aria-hidden="true" /><span>{{ t('Diagnosis') }}</span>
-            </button>
-            <HoverInfo :text="t('Close {value1}', { value1: t('Diagnosis') })" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="document-close" :aria-label="t('Close {value1}', { value1: t('Diagnosis') })" @click="closeFile(DIAGNOSIS_TAB_KEY)"><span class="i-lucide-x" aria-hidden="true" /></button></HoverInfo>
           </div>
           <div ref="documentTabs" class="document-tabs">
           <div v-if="tabs.knowledge" class="document-tab" :class="{ selected: tabs.selected === KNOWLEDGE_TAB_KEY }"
@@ -142,10 +134,6 @@
         </div>
         <slot name="composer" />
         </div></div></EditorViewHost>
-        <EditorViewHost v-if="tabs.diagnosis" :descriptor="descriptor(DIAGNOSIS_TAB_KEY, t('Diagnosis'), 'i-lucide-activity')" :selected="tabs.selected === DIAGNOSIS_TAB_KEY" :active="active">
-        <div :id="panelId(DIAGNOSIS_TAB_KEY)" class="diagnosis-document" role="tabpanel" :aria-labelledby="tabId(DIAGNOSIS_TAB_KEY)">
-          <slot name="diagnosis" />
-        </div></EditorViewHost>
         <EditorViewHost v-for="key in knowledgeKeys" :key="key" :descriptor="descriptor(key, key === KNOWLEDGE_TAB_KEY ? t('Knowledge') : knowledgeLabel(knowledgeEntryId(key)!), 'i-lucide-book-open')" :selected="tabs.selected === key" :active="active">
           <div class="knowledge-document" role="tabpanel" :id="panelId(key)" :aria-labelledby="tabId(key)">
             <AgentsTab v-if="agentDefinitionName(knowledgeEntryId(key) ?? '')" :api-base="apiBase" :agent-name="agentDefinitionName(knowledgeEntryId(key) ?? '')" :active="!!shown(key)" />
@@ -211,17 +199,17 @@ import { useWorkdirGit } from '../../composables/useWorkdirGit.ts'
 import SidebarResizer from '../SidebarResizer.vue'
 import type { ImageContextBusy, ImageContextUpdate } from '../../image-context.ts'
 import { clampSidebarWidth, sidebarWidthBounds } from '../../sidebar-resize.ts'
-import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, KNOWLEDGE_TAB_KEY, DIAGNOSIS_TAB_KEY, withDiagnosisTab, nextDocumentTab, openFileTab, openKnowledgeTab, knowledgeEntryTabKey, knowledgeEntryId, projectTabKey, projectTabFromKey, projectTabLabel, projectTabIcon, openProjectTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile, type ProjectTab } from '../../file-workbench.ts'
+import { canCloseAllDocuments, canHandleDocumentShortcut, closeAllFileTabs, closeOtherFileTabs, closeFileTab, cycleDocumentTab, documentTabDirection, documentTabKeys, documentTabScrollLeft, fileTabKey, isCloseAllDocumentsKey, isCloseDocumentKey, isToggleExplorerKey, knowledgeHistoryDirection, KNOWLEDGE_TAB_KEY, nextDocumentTab, openFileTab, openKnowledgeTab, knowledgeEntryTabKey, knowledgeEntryId, projectTabKey, projectTabFromKey, projectTabLabel, projectTabIcon, openProjectTab, selectedFileToClose, type DocumentTabDirection, type FileTabs, type KnowledgeTabRequest, type OpenFile, type ProjectTab } from '../../file-workbench.ts'
 import { isFileHistory, type KnowledgeEntry } from '../../knowledge.ts'
 import { useInstallationContext } from '../../composables/useInstallationContext.ts'
 
-const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; composerHeight?: number; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; primaryActivity?: import('../../session-activity.ts').ConversationActivity; inspection?: boolean; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; editableConversation?: boolean; diagnosisEnabled?: boolean; diagnosisRequest?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false, diagnosisEnabled: false, diagnosisRequest: undefined })
+const props = withDefaults(defineProps<{ apiBase: string; sessionId: string; composerHeight?: number; conversationTitle?: string; primaryLabel?: string; primaryIcon?: string; primaryActivity?: import('../../session-activity.ts').ConversationActivity; inspection?: boolean; initialExplorerOpen?: boolean; projectNavigationEnabled?: boolean; folderId?: string; contextKey: string; active: boolean; keyboardActive?: boolean; explorerEnabled?: boolean; draft?: boolean; canQuote?: boolean; remote?: boolean; projectId?: string; knowledgeEnabled?: boolean; knowledgeRequest?: KnowledgeTabRequest; editableConversation?: boolean }>(), { primaryIcon: 'i-lucide-messages-square', initialExplorerOpen: undefined, projectNavigationEnabled: true, keyboardActive: true, explorerEnabled: true, draft: false, canQuote: false, remote: false, knowledgeEnabled: false })
 const groups = inject(EditorGroupsKey, undefined)
 const owner = inject(EditorOwnerKey, '')
 const router = useRouter()
 const route = useRoute()
 const installation = useInstallationContext()
-const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'diagnosis-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
+const emit = defineEmits<{ 'conversation-visible': [visible: boolean]; 'knowledge-navigation': [active: boolean, entryId?: string]; 'project-navigation': [tab?: ProjectTab, documentKey?: string]; quote: [text: string]; 'image-context': [update: ImageContextUpdate]; 'image-busy': [update: ImageContextBusy] }>()
 const id = `documents-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
 const root = ref<HTMLElement>()
 const viewRoot = ref<HTMLElement>()
@@ -314,7 +302,7 @@ function updateKnowledgeLabels(entries: KnowledgeEntry[]) {
 const selectedSource = computed(() => tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.source)
 const selectedFilePath = computed(() => tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.path)
 const revealVersion = ref(0)
-const selectedTitle = computed(() => tabs.value.selected === DIAGNOSIS_TAB_KEY ? t('Diagnosis') : tabs.value.selected === KNOWLEDGE_TAB_KEY ? t('Knowledge')
+const selectedTitle = computed(() => tabs.value.selected === KNOWLEDGE_TAB_KEY ? t('Knowledge')
   : projectTabFromKey(tabs.value.selected) ? projectTabLabel(projectTabFromKey(tabs.value.selected)!)
   : knowledgeEntryId(tabs.value.selected) ? knowledgeLabel(knowledgeEntryId(tabs.value.selected)!)
   : tabs.value.files.find(file => fileTabKey(file) === tabs.value.selected)?.entry.name
@@ -352,11 +340,6 @@ let composing = false
 const tabId = (path: string) => `${id}-tab-${encodeURIComponent(path)}`
 const panelId = (path: string) => `${id}-panel-${encodeURIComponent(path)}`
 function reopen(key: string) { void nextTick(() => { const descriptor = groups?.descriptors.get(editorId(key)); if (descriptor) groups?.open(descriptor, descriptor.explorer ? groups.state(descriptor.projectId).active : undefined) }) }
-function openDiagnosis() {
-  if (!props.diagnosisEnabled) return
-  tabs.value = { ...withDiagnosisTab(tabs.value, true), selected: DIAGNOSIS_TAB_KEY }
-  reopen(DIAGNOSIS_TAB_KEY)
-}
 function selectTab(path: string) {
   if (groups?.side(editorId(path))) groups.activate(editorId(path))
   if (tabs.value.selected === path) return
@@ -365,7 +348,6 @@ function selectTab(path: string) {
 defineExpose({
   showConversation: () => selectTab(''),
   openLinkedFile,
-  openDiagnosis,
 })
 function openLinkedFile(file: OpenFile) {
   fileSpace.value = file.source?.sessionWorkspace ? 'session' : props.folderId ? 'project' : 'session'
@@ -487,7 +469,7 @@ function shortcutContext() {
     active: props.active,
     keyboardActive: props.keyboardActive,
     visible: !!root.value?.getClientRects().length,
-    explorerEnabled: props.explorerEnabled || !!tabs.value.knowledge || !!tabs.value.diagnosis,
+    explorerEnabled: props.explorerEnabled || !!tabs.value.knowledge,
     overlayOpen,
     composing,
   }
@@ -574,14 +556,13 @@ function measureWidth() {
   const element = groups ? viewRoot.value : root.value
   if (element?.getClientRects().length) width.value = element.getBoundingClientRect().width
 }
-watch(() => [props.contextKey, props.diagnosisEnabled] as const, ([key, diagnosis], [previous]) => {
+watch(() => props.contextKey, (key, previous) => {
   dismissTabMenu()
   remoteExpanded.value = false
   if (key !== previous) {
     cachedTabs.set(previous, tabs.value)
     tabs.value = { ...(cachedTabs.get(key) ?? { files: [], selected: '' }), projectTabs: tabs.value.projectTabs }
   }
-  if (!diagnosis) tabs.value = withDiagnosisTab(tabs.value, false)
 })
 watch(() => [props.knowledgeRequest, props.contextKey, props.knowledgeEnabled], () => {
   if (!props.knowledgeEnabled) {
@@ -601,13 +582,7 @@ watch(() => [route?.fullPath, props.active] as const, (value, previous) => {
 }, { immediate: true })
 watch(() => [props.apiBase, props.contextKey], () => { knowledgeLabels.value = {} })
 watch(() => props.active && props.keyboardActive, active => { if (!active) dismissTabMenu() })
-watch(() => [props.diagnosisRequest, props.contextKey, props.diagnosisEnabled], () => {
-  if (props.diagnosisRequest && props.diagnosisEnabled) openDiagnosis()
-  else if (props.diagnosisRequest === false && tabs.value.selected === DIAGNOSIS_TAB_KEY) selectTab('')
-}, { immediate: true })
 watch(() => shown(''), value => emit('conversation-visible', value), { immediate: true, flush: 'sync' })
-watch(() => [props.contextKey, shown(DIAGNOSIS_TAB_KEY)] as const,
-  ([, value]) => emit('diagnosis-visible', value), { immediate: true, flush: 'sync' })
 watch(() => [knowledgeSelected.value, knowledgeEntryId(tabs.value.selected)] as const,
   ([active, entryId]) => emit('knowledge-navigation', active, entryId), { immediate: true })
 watch(() => [tabs.value.selected, props.active] as const, ([selected]) => {
@@ -689,7 +664,7 @@ onUnmounted(() => {
 .document-close { margin-right: 4px; }
 button:hover { background: var(--c-bg-muted); color: var(--c-text); }
 button:focus-visible { outline: 2px solid var(--c-blue); outline-offset: -2px; }
-.conversation-document, .diagnosis-document, .file-document, .knowledge-document, .project-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.conversation-document, .file-document, .knowledge-document, .project-document { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .project-document { overflow-y: auto; }
 .workbench-explorer.drawer { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) auto 0 0; width: min(260px, calc(100% - 32px)); z-index: 9; box-shadow: 8px 0 24px var(--c-shadow-soft); }
 .explorer-backdrop { position: absolute; inset: calc(var(--document-toolbar-height, 40px) + 1px + var(--workbench-top-offset, 0px)) 0 0; border: 0; padding: 0; z-index: 8; background: rgb(0 0 0 / 20%); }

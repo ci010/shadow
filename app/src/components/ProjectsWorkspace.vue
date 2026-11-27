@@ -88,7 +88,7 @@
           :session-id="resource.sessionId" :initial-folder="resource.folder" :take-otio-reference="resource.takeOtioReference" :open-remote="resource.openRemote"
           :automation-run="!!automation && selected?.key === resource.key"
           :knowledge-request="resource.knowledgeRequest"
-          @project-navigation="(tab, documentKey) => projectNavigation(resource, tab, documentKey)"
+          @project-navigation="tab => projectNavigation(resource, tab)"
           @navigate="(id, child) => navigate(resource.projectId, id, child)" @prepared="prepared(resource.key, $event)" @deleted="deleted(resource.projectId, $event)" />
       </div>
     </div>
@@ -167,7 +167,7 @@ import ProjectUsage from './ProjectUsage.vue'
 import ProjectSettings from './ProjectSettings.vue'
 import { createProjectDocuments, ProjectDocumentsKey } from '../project-documents.ts'
 import { WorkflowInputReferencesKey } from '../workflow-input-references.ts'
-import { projectTabKey, projectTabLabel, projectTabIcon, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, DIAGNOSIS_TAB_KEY, type ProjectTab } from '../file-workbench.ts'
+import { projectTabKey, projectTabLabel, projectTabIcon, KNOWLEDGE_TAB_KEY, knowledgeEntryTabKey, type ProjectTab } from '../file-workbench.ts'
 
 defineOptions({ name: 'ProjectsWorkspace' })
 const props = withDefaults(defineProps<{ apiBase: string; visible?: boolean; projectsToggleTarget?: HTMLElement }>(), { visible: true })
@@ -527,7 +527,7 @@ function publish(resource: ConversationResource) {
   resources.value = [...registry.resources]
   closeSidebar()
   if (route.name === 'chat') void nextTick(() => {
-    const key = route.query.panel === 'knowledge' ? (typeof route.query.entry === 'string' ? knowledgeEntryTabKey(route.query.entry) : KNOWLEDGE_TAB_KEY) : route.query.panel === 'diagnosis' ? DIAGNOSIS_TAB_KEY : ''
+    const key = route.query.panel === 'knowledge' ? (typeof route.query.entry === 'string' ? knowledgeEntryTabKey(route.query.entry) : KNOWLEDGE_TAB_KEY) : ''
     const id = route.query.panel === 'knowledge' ? JSON.stringify([resource.projectId, 'knowledge', key]) : `${resource.key}:${key}`
     const descriptor = editorGroups.descriptors.get(id)
     if (descriptor) editorGroups.open(descriptor)
@@ -574,7 +574,7 @@ function syncRoute() {
   resource.knowledgeRequest = route.query.panel === 'knowledge'
     ? { entryId: typeof route.query.entry === 'string' ? route.query.entry : undefined } : undefined
   if (route.name === 'chat') {
-    const { panel, entry, ...query } = route.query
+    const { panel, entry, diagnosis, childPanel, childDiagnosis, ...query } = route.query
     conversationQueries.set(resource.key, query)
   }
   const editorId = tab ? projectEditorId(projectId, tab)
@@ -788,7 +788,7 @@ watch(() => editorGroups.active(selectedProjectId.value), descriptor => {
   const resource = resources.value.find(item => item.key === descriptor.owner)
   if (!resource) return
   const entry = descriptor.explorer?.entryId
-  const panel = descriptor.explorer ? 'knowledge' : undefined
+  const panel = descriptor.explorer ? 'knowledge' : route.query.panel === 'diagnosis' && route.params.sessionId === resource.sessionId ? 'diagnosis' : undefined
   if (route.name === 'chat' && route.params.projectId === descriptor.projectId
     && (route.params.sessionId || '') === (resource.sessionId || '')
     && route.query.panel === panel && route.query.entry === entry) return
@@ -820,7 +820,7 @@ watch(() => [route.name, route.params.projectId, route.params.section] as const,
     settingsSections.set(projectId, typeof section === 'string' && section ? section : 'general')
   }
 }, { immediate: true })
-function projectNavigation(resource: ConversationResource, tab?: ProjectTab, documentKey?: string) {
+function projectNavigation(resource: ConversationResource, tab?: ProjectTab) {
   if (!props.visible || selected.value?.key !== resource.key || route.params.projectId !== resource.projectId) return
   if (tab === 'board') {
     if (route.name !== 'project-board') void router.push({ name: 'project-board', params: { projectId: resource.projectId } })
@@ -834,8 +834,6 @@ function projectNavigation(resource: ConversationResource, tab?: ProjectTab, doc
     }
   } else if (route.name === 'project-board' || route.name === 'project-settings' || route.name === 'project-workflows') {
     const query = { ...conversationQueries.get(resource.key) }
-    if (documentKey === DIAGNOSIS_TAB_KEY) query.panel = 'diagnosis'
-    else delete query.diagnosis
     void router.push({ ...projectChatLocation(resource), query })
   }
 }

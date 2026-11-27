@@ -56,6 +56,17 @@ test('child diagnosis selection has separate URL keys and cannot alter the prima
   scope.stop()
 })
 
+test('an inspection opened directly can use the normal diagnosis link', async () => {
+  const { router, state, scope, settle } = await fixture('/projects/a/chat/two?panel=diagnosis&diagnosis=stats', true, 'two')
+  try {
+    assert.equal(state.requested.value, true)
+    assert.equal(state.section.value, 'stats')
+    state.selectPanel(false)
+    await settle()
+    assert.deepEqual(router.currentRoute.value.query, {})
+  } finally { scope.stop() }
+})
+
 test('cached conversations and invalid section values cannot corrupt another route', async () => {
   const { router, state, scope, settle } = await fixture('/projects/a/chat/one?panel=diagnosis&diagnosis=unknown')
   assert.equal(state.section.value, 'trace')

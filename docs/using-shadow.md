@@ -172,13 +172,12 @@ session or stops its tasks; reopen it from the sidebar.
 
 Desktop top navigation groups open conversation, Workflow, and Project settings tabs by the Project that owns them. A small project-name chip marks the start of each group. Switching Projects leaves each open tab in its original group; select a tab in another group to return directly to it. Application Settings is in the separate **Global** group. Open tabs are retained while navigating, not across a page reload.
 
-Conversation (including subagent inspection), Diagnosis, Knowledge, Project settings,
+Conversation (including subagent inspection), Knowledge, Project settings,
 Workflows, and file/diff documents use the same Project-local editor groups.
 Right-click a tab (or press Shift+F10 on it) to **Move to right**, **Move to main area**,
 or **Close**. Moving a tab relocates its existing view; it does not fork a session,
 change ancestry or execution mode, or create another composer. Subagent inspection
-opens on the right by default, using the same group controls. Permanent base tabs
-such as Diagnosis may be moved even when they cannot be closed. Ctrl/Cmd+W and
+opens on the right by default, using the same group controls. Ctrl/Cmd+W and
 Ctrl+Tab operate on the focused group, not every open document. Closing a tab does
 not itself reopen it; explicitly open the resource again from navigation.
 
@@ -186,7 +185,7 @@ Workflow/node selection automatically supplies context to the most recently
 focused, still-open editable ordinary conversation in that Project. The composer
 shows **Current selection**; switching replaces it and clearing removes it without
 changing your draft or manual attachments. Clicking the inspector does not lose
-the target; Settings, Diagnosis, files, children and read-only executions are not
+the target; Settings, files, children and read-only executions are not
 message destinations. No eligible conversation means no injection and no implicit
 conversation creation. Selection persists after sending while the Workflow stays
 selected and visible. Selection and moving tabs never send messages or execute a
@@ -571,7 +570,7 @@ matching message; use segment navigation to return to the current conversation.
 In a split view, the shortcut searches only the active conversation pane.
 The search includes user/assistant message bodies, conversation summaries and
 command output, not reasoning, tool arguments/results, attached file contents,
-other conversations or diagnosis/file tabs. History loading failures are shown
+other conversations or file tabs. History loading failures are shown
 with a retry action rather than presenting partial results as a complete search.
 
 The Files explorer uses the conversation's effective workdir; Project
@@ -770,7 +769,9 @@ Inspect partial effects before issuing a new execution request.
 Unsent image edits and attachment selections are local draft state, not a
 server-side backup.
 
-Use **Diagnosis** for trace, current prompt, and tool details. The prompt shown
+Choose **Diagnosis** in the conversation heading (or in the phone actions menu)
+to open an in-conversation dialog for trace, current prompt, tools, and statistics.
+Close it to return to the same conversation, draft, and reading position. The prompt shown
 there is not a historical snapshot of every model request; for an export or
 development capture, see [session diagnosis](diagnostics.md). Live updates
 follow the [shared live transport](realtime-protocol.md); saved history remains

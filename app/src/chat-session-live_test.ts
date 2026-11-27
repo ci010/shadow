@@ -358,7 +358,7 @@ test('image preview survives message updates but closes when its conversation or
   await Vue.nextTick()
   assert.equal(view.state().imagePreview, undefined)
   view.state().openImagePreview(image)
-  view.state().activePanel = 'diagnosis'
+  view.state().diagnosisOpen = true
   await Vue.nextTick()
   assert.equal(view.state().imagePreview, undefined)
   view.state().openImagePreview(image)

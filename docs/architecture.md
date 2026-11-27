@@ -2919,16 +2919,11 @@ cannot retain header ownership. Desktop Electron chrome and desktop pane layout
 are unchanged. Session details, rename, diagnosis, Knowledge, files and child
 return remain reachable through sheets rather than extra persistent bars.
 
-Existing conversations keep the square-edged **Conversation** tab. **Diagnosis**
-is not registered by default: the conversation heading's Diagnosis action (next
-to Actions) opens and selects the existing session-scoped view on demand. The
-tab is closable and can be reopened; its section selection is retained in the
-conversation's in-memory navigation state. Explicit diagnosis URL deep links
-still open it. Separate conversations and child panes own independent documents;
-hidden conversations do not consume another conversation's request. On phones,
-Diagnosis remains available in Switch view and the conversation actions sheet.
-Blank drafts omit it until a session exists. Opening Diagnosis hides the composer
-without discarding its draft or conversation scroll position.
+The conversation heading's **Diagnosis** action, or the phone conversation actions
+menu, opens a modal dialog over the existing Conversation view. Blank drafts omit
+it until a session exists. It does not register an editor tab or replace the
+composer or history DOM. Its section is retained in the conversation's in-memory
+state. Dismissal restores focus, and hidden conversations stop diagnosis reads.
 
 The centralized Project file explorer uses compact single-line root names with
 workspace icons and a short device source label. Optional public picker
@@ -2945,8 +2940,8 @@ folder root; unbound conversations and project-only tabs do not expose unrelated
 catalog entries. Display metadata is never resolved as a local execution path.
 
 Middle-click closes the targeted closable tab in either editor group without
-selecting it or activating another group. Standalone document tabs (including
-Diagnosis) use the same convention; permanent standalone Conversation remains
+selecting it or activating another group. Standalone document tabs
+use the same convention; permanent standalone Conversation remains
 unclosable. Middle mousedown prevents browser autoscroll, while left-click
 selection and right-click context menus retain their existing behavior.
 
@@ -2959,8 +2954,8 @@ session removes its saved text. Storage failures are visible in the composer.
 This is device-local text persistence, not a server draft or attachment backup:
 selected files, image edits, and file/folder context chips are not persisted.
 
-Diagnosis uses `panel=diagnosis&diagnosis=trace|prompt|tools` in the conversation
-URL. Refresh and URL navigation restore both the document and the selected
+Diagnosis uses `panel=diagnosis&diagnosis=trace|prompt|tools|stats` in the conversation
+URL. Refresh and URL navigation open the dialog at the selected
 Diagnosis section; `prompt` selects System prompt. Child panes independently use
 `childPanel` and `childDiagnosis`, without replacing the primary pane's state.
 Only the conversation owning the current route may update these keys. Existing

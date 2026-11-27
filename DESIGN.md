@@ -320,7 +320,7 @@ Automations use the ordinary conversation workbench, opening the latest run by d
 Workflow is the first-class Project automation concept. The sidebar has one
 icon-bearing Workflows entry, visible even without saved conversation runs. It
 opens or reuses the Project Workflow document tab in the current workbench,
-beside Conversation, Diagnosis, Knowledge and other open documents. Do not replace
+beside Conversation, Knowledge and other open documents. Do not replace
 the workspace with a standalone Workflow view or add a second tab strip. The same
 document shell works before a conversation is created; entering Workflow never
 prepares a session. Project changes retain independent workbench and inspection
@@ -642,6 +642,8 @@ Regular tool calls, task/call Tool details and outgoing-message Tool details use
 Events originating from the displayed session retain their content and metadata but omit self-navigation controls, including the View conversation button on background-task results. Events from other sessions keep their conversation/execution navigation.
 
 Chat trace/disclosure headers and history rows ease hover background and text-color changes over (140ms), in both directions. Reduced-motion preferences disable these hover transitions; focus outlines remain immediate.
+
+Diagnosis opens in a square modal over the owning conversation, not as a workbench tab. The header and section controls stay visible while the selected section scrolls. Phone users enter through conversation actions.
 
 Diagnosis USER, SESSION, ASSISTANT, TOOL, and CONTEXT badges are neutral text labels, not a role-color legend. Routine log trace/debug/info levels remain neutral; warn and error use their corresponding semantic colors. Background-task running indicators are neutral. Bot connectivity uses success green only for connected state and amber for restart-required state; connecting and running remain neutral.
 

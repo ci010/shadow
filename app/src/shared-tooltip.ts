@@ -4,6 +4,7 @@ export interface TooltipOwner {
   token: symbol
   id: string
   interactive: boolean
+  dialog?: HTMLDialogElement
   label: () => string
   content: () => VNode[]
   cancelClose: () => void

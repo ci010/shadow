@@ -19,7 +19,6 @@ export interface FileTabs {
   knowledge?: KnowledgeTabRequest
   knowledgeEntries?: string[]
   projectTabs?: ProjectTab[]
-  diagnosis?: boolean
   /** Empty key identifies the permanent conversation tab. */
   selected: string
 }
@@ -31,7 +30,6 @@ export interface KnowledgeTabRequest {
 export const KNOWLEDGE_TAB_KEY = '\0knowledge'
 export const knowledgeEntryTabKey = (id: string) => `\0knowledge-entry:${id}`
 export const knowledgeEntryId = (key: string) => key.startsWith('\0knowledge-entry:') ? key.slice('\0knowledge-entry:'.length) : undefined
-export const DIAGNOSIS_TAB_KEY = '\0diagnosis'
 export const isPermanentDocumentTab = (key: string) => !key
 export type ProjectTab = 'settings' | 'workflows' | 'board'
 export const projectTabKey = (tab: ProjectTab) => `\0project:${tab}`
@@ -41,15 +39,8 @@ export const projectTabFromKey = (key: string): ProjectTab | undefined =>
 export const projectTabLabel = (tab: ProjectTab) => tab === 'board' ? t('Board') : tab === 'workflows' ? t('Workflows') : t('Project settings')
 export const projectTabIcon = (tab: ProjectTab) => tab === 'board' ? 'i-lucide-columns-3' : tab === 'workflows' ? 'i-lucide-workflow' : 'i-lucide-settings-2'
 
-export function withDiagnosisTab(state: FileTabs, enabled: boolean): FileTabs {
-  if (enabled) return state.diagnosis ? state : { ...state, diagnosis: true }
-  if (!state.diagnosis && state.selected !== DIAGNOSIS_TAB_KEY) return state
-  const { diagnosis, ...rest } = state
-  return { ...rest, selected: state.selected === DIAGNOSIS_TAB_KEY ? '' : state.selected }
-}
-
 export function documentTabKeys(state: FileTabs): string[] {
-  return ['', ...(state.diagnosis ? [DIAGNOSIS_TAB_KEY] : []), ...(state.knowledge ? [KNOWLEDGE_TAB_KEY] : []),
+  return ['', ...(state.knowledge ? [KNOWLEDGE_TAB_KEY] : []),
     ...(state.knowledgeEntries ?? []).map(knowledgeEntryTabKey),
     ...(state.projectTabs ?? []).map(projectTabKey), ...state.files.map(fileTabKey)]
 }
@@ -77,7 +68,6 @@ export function openFileTab(state: FileTabs, file: OpenFile): FileTabs {
 }
 
 export function closeFileTab(state: FileTabs, path: string): FileTabs {
-  if (path === DIAGNOSIS_TAB_KEY) return withDiagnosisTab(state, false)
   const projectTab = projectTabFromKey(path)
   if (projectTab && state.projectTabs?.includes(projectTab)) {
     const projectTabs = state.projectTabs.filter(tab => tab !== projectTab)
@@ -101,15 +91,13 @@ export function closeFileTab(state: FileTabs, path: string): FileTabs {
 }
 
 export function closeAllFileTabs(state: FileTabs): FileTabs {
-  if (!state.files.length && !state.knowledge && !state.knowledgeEntries?.length && !state.projectTabs?.length && !state.diagnosis) return state
-  const { knowledge, knowledgeEntries, projectTabs, diagnosis, ...rest } = state
+  if (!state.files.length && !state.knowledge && !state.knowledgeEntries?.length && !state.projectTabs?.length) return state
+  const { knowledge, knowledgeEntries, projectTabs, ...rest } = state
   return { ...rest, files: [], selected: '' }
 }
 
 export function closeOtherFileTabs(state: FileTabs, keep: string): FileTabs {
-  if (keep === DIAGNOSIS_TAB_KEY && state.diagnosis) return { files: [], diagnosis: true, selected: keep }
   if (!documentTabKeys(state).includes(keep)) return state
-  state = withDiagnosisTab(state, false)
   const projectTab = projectTabFromKey(keep)
   if (projectTab && state.projectTabs?.includes(projectTab)) {
     const { knowledge, knowledgeEntries, ...rest } = state
@@ -204,7 +192,7 @@ export function canHandleDocumentShortcut(context: DocumentShortcutContext): boo
 }
 
 export function canCloseAllDocuments(state: FileTabs, context: DocumentShortcutContext): boolean {
-  return !!(state.files.length || state.knowledge || state.projectTabs?.length || state.diagnosis) && canHandleDocumentShortcut(context)
+  return !!(state.files.length || state.knowledge || state.projectTabs?.length) && canHandleDocumentShortcut(context)
 }
 
 export function selectedFileToClose(state: FileTabs, context: DocumentShortcutContext): string | undefined {

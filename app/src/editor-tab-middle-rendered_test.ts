@@ -32,7 +32,7 @@ test('native middle clicks close only their closable tab across split and standa
         window.openBeta=()=>groups.open({id:'B1',projectId:'q',owner:'q',label:'B1',icon:'',closable:true,select(){},close(){}});
         createApp({setup(){provide(EditorGroupsKey,groups);return()=>h(Host,{projectId:'p',projectName:'Alpha',otherProjectTabs:projectTabs().filter(g=>g.id!=='p'),active:true})}}).mount('#groups');
         createApp({render:()=>h(ProjectTabs,{groups:projectTabs()})}).mount('#dashboard');
-        createApp({setup(){const workbench=ref();return()=>h(Workbench,{ref:el=>{workbench.value=el;window.workbench=el},apiBase:location.origin,sessionId:'',contextKey:'standalone',active:true,explorerEnabled:false,diagnosisEnabled:true},{default:()=>h('p','Conversation body'),diagnosis:()=>h('p','Diagnosis body')})}}).mount('#standalone');`
+        createApp({setup(){const workbench=ref();return()=>h(Workbench,{ref:el=>{workbench.value=el;window.workbench=el},apiBase:location.origin,sessionId:'',contextKey:'standalone',active:true,explorerEnabled:false},{default:()=>h('p','Conversation body')})}}).mount('#standalone');`
     },
     configureServer(server) { server.middlewares.use((req, res, next) => {
       if (req.url === '/') { res.setHeader('Content-Type', 'text/html'); res.end('<html><body style="margin:0"><div id="groups" style="display:flex;height:360px"></div><div id="standalone" style="display:flex;height:360px"></div><div id="dashboard"></div><script type="module" src="/fixture.ts"></script></body></html>'); return }
@@ -76,17 +76,12 @@ test('native middle clicks close only their closable tab across split and standa
     await run('document.querySelector(".editor-menu-backdrop").dispatchEvent(new PointerEvent("pointerdown",{bubbles:true}))');
     // Dispatching a cancelable middle mousedown also verifies autoscroll prevention.
     assert.equal(await run('(()=>{const event=new MouseEvent("mousedown",{button:1,bubbles:true,cancelable:true});('+tab('Pinned')+').dispatchEvent(event);return event.defaultPrevented})()'),true);
-    await run('window.workbench.openDiagnosis()');await wait('document.querySelector(".diagnosis-tab")');
-    const diagnosis='document.querySelector(".diagnosis-tab [role=tab]")';
-    await click(diagnosis,'left');await click(diagnosis,'right');assert.equal(await run('!!'+diagnosis),true,'standalone left/right clicks never close diagnosis');
-    await click(diagnosis,'middle');await wait('!document.querySelector(".diagnosis-tab")');
-    await run('window.workbench.openDiagnosis()');await wait('document.querySelector(".diagnosis-tab [role=tab]")?.getAttribute("aria-selected")==="true"');
     await click('document.querySelector(".conversation-tab [role=tab]")','middle');assert.equal(await run('!!document.querySelector(".conversation-tab")'),true,'standalone Conversation is permanent');
-    await run('document.querySelector(".conversation-tab [role=tab]").click()');await click(diagnosis,'middle');await wait('!document.querySelector(".diagnosis-tab")');
-    assert.equal(await run('document.querySelector(".conversation-tab [role=tab]").getAttribute("aria-selected")'),'true','closing an inactive standalone diagnosis keeps Conversation selected');
     win.close();console.log('MIDDLE_TABS_OK');app.quit();})().catch(error=>{console.error(error);app.exit(1)});`
   const entry = resolve(directory, 'main.cjs'); await writeFile(entry, script)
-  const child = spawn(require('electron') as string, [entry], { cwd: directory, env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'] })
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  const child = spawn(require('electron') as string, [entry], { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''; child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   const timer = setTimeout(() => child.kill(), 75000)
   t.after(() => { clearTimeout(timer); if (child.exitCode === null) child.kill() })

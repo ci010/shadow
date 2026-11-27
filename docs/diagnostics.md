@@ -1,7 +1,8 @@
 # Session diagnosis
 
-The conversation's **Diagnosis** view shows its trace, current system prompt,
-and tools. **Export for agent** downloads a bounded, read-only JSON snapshot
+The conversation's **Diagnosis** action opens a dialog with its trace, current
+system prompt, tools, and statistics. On phones, find it in the conversation
+actions menu; it is not a separate workbench tab. **Export for agent** downloads a bounded, read-only JSON snapshot
 for the selected physical segment. It includes persisted records and available
 execution spans, not a complete reconstruction of every historical model
 request. A partial export is labelled as such; missing tool results in a page

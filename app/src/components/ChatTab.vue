@@ -32,23 +32,22 @@
       :inspection="inspection" :project-navigation-enabled="!embedded" :primary-activity="conversationTabActivity"
       :context-key="fileContextKey" :explorer-enabled="!embedded && (!activeSessionId || !!currentWorkdir || expectedHome)" :remote="remoteConversation"
       :active="visible && (inspection || ['chat', 'project-board', 'project-workflows', 'project-settings', 'agents'].includes(String(route.name)))" :keyboard-active="keyboardActive && conversationFocused" :draft="!activeSessionId"
-      :editable-conversation="!isExecution && (!activeSessionId || isDirectChat) && !viewingPhysicalId" :diagnosis-enabled="!!activeSessionId" :diagnosis-request="diagnosisNavigation.requested.value"
+      :editable-conversation="!isExecution && (!activeSessionId || isDirectChat) && !viewingPhysicalId"
       :composer-height="composerVisible ? dockHeight : 0" :can-quote="canQuoteSelection" :style="{ '--composer-height': `${composerVisible ? dockHeight : 0}px` }"
       @quote="quoteSelection" @conversation-visible="conversationDocumentVisible = $event"
-      @diagnosis-visible="diagnosisVisibilityChanged"
       @knowledge-navigation="knowledgeNavigation"
       @project-navigation="(tab, documentKey) => emit('project-navigation', tab, documentKey)"
       @image-context="handleImageContext" @image-busy="handleImageBusy">
     <template #actions><slot name="pane-actions" /></template>
-    <template #mobile-actions="{ close }">
+    <template #mobile-actions="{ close, trigger }">
       <button data-actions-trigger @click="close(); nextTick(toggleActions)"><span class="i-lucide-terminal w-4 h-4" aria-hidden="true" />{{ t('Actions') }}</button>
       <template v-if="activeSessionId">
-        <button v-if="conversationDocumentVisible && activePanel === 'conversation'" @click="close(); nextTick(() => conversationSearch?.show())">{{ t('Search conversation') }}</button>
-        <button @click="close(); workbench?.openDiagnosis()"><span class="i-lucide-activity w-4 h-4" aria-hidden="true" />{{ t('Diagnosis') }}</button>
+        <button v-if="conversationDocumentVisible" @click="close(); nextTick(() => conversationSearch?.show())">{{ t('Search conversation') }}</button>
+        <button v-if="sessionReadable" aria-haspopup="dialog" @click="close(); nextTick(() => openDiagnosis(trigger))"><span class="i-lucide-activity w-4 h-4" aria-hidden="true" />{{ t('Diagnosis') }}</button>
         <button @click="close(); showMobileSessionDetails()">{{ t('Session details') }}</button>
         <button @click="close(); renameMobileSession()">{{ t('Rename session') }}</button>
         <button v-if="embedded && executionParent" @click="close(); inspectExecution(executionParent.sessionId)">{{ t('Back to owning execution') }}</button>
-        <details v-if="historyMarkers.length && conversationDocumentVisible && activePanel === 'conversation'" class="mobile-history">
+        <details v-if="historyMarkers.length && conversationDocumentVisible" class="mobile-history">
           <summary>{{ t('Message history') }}</summary>
           <MessageHistoryRail list :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && chatRouteActive" @navigate="browseHistory(); close()" />
         </details>
@@ -81,23 +80,31 @@
             @next="viewNextSegment" @current="goBackToCurrentSegment">
             <ConversationHistoryMenu :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId" :automation="automationConversation" @select="selectHistorySegment" />
           </SegmentNavigation>
-          <button class="conversation-actions conversation-diagnosis" type="button" @click="workbench?.openDiagnosis()"><span class="i-lucide-activity w-4 h-4" aria-hidden="true" />{{ t('Diagnosis') }}</button>
+          <button v-if="sessionReadable" class="conversation-actions conversation-diagnosis" type="button" aria-haspopup="dialog" @click="openDiagnosis($event.currentTarget as HTMLElement)"><span class="i-lucide-activity w-4 h-4" aria-hidden="true" />{{ t('Diagnosis') }}</button>
           <button ref="actionsTrigger" data-actions-trigger class="conversation-actions" type="button" :aria-expanded="actionsOpen" @click="toggleActions"><span class="i-lucide-terminal w-4 h-4" aria-hidden="true" />{{ t('Actions') }}</button>
           <button class="conversation-find" type="button" :aria-label="t('Search conversation')" aria-keyshortcuts="Control+F Meta+F"
             :title="t('Search conversation (Ctrl+F / Cmd+F)')" @click="conversationSearch?.show()">
             <span class="i-lucide-search w-4 h-4" aria-hidden="true" />
           </button>
         </div>
+        <DiagnosisDialog v-if="diagnosisOpen && diagnosisAvailable" :return-focus="diagnosisTrigger" @close="closeDiagnosis">
+          <p v-if="diagnosisNavigation.error.value" class="composer-error" role="alert">{{ diagnosisNavigation.error.value }}</p>
+          <SessionDiagnosis :id-prefix="embedded || managed ? paneId : undefined"
+            :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection" @open-prompt="closeDiagnosis"
+            :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
+            :active="sessionReadable" :can-read-trace="true"
+            :working="sessionWorking" :project-id="projectId" :compaction-summary="compactionSummary" />
+        </DiagnosisDialog>
         <AutomationConversationInfo v-if="automationConversation" :conversation="automationConversation" />
         <QuickActionsOverlay v-if="actionsOpen" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :active="paneActive" :can-write="true" @close="closeActions(true)" />
         <ConversationSearch ref="conversationSearch" :container="messagesContainer"
-          :active="paneActive && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive"
+          :active="paneActive && conversationDocumentVisible && chatRouteActive && !diagnosisOpen"
           :keyboard-active="keyboardActive && conversationFocused" :context-key="fileContextKey" :live-entries="liveSearchEntries"
           :load-entries="loadSearchEntries" :reveal-match="revealSearchMatch"
           @update:open="searchVisibilityChanged" @query-change="clearSearchHighlights" />
 
         <!-- Messages -->
-        <div v-show="editorGroups || activePanel === 'conversation'" :id="domId('conversation-panel')" class="chat-history" :class="{ 'has-history-rail': !mobileLayout }" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
+        <div :id="domId('conversation-panel')" class="chat-history" :class="{ 'has-history-rail': !mobileLayout }" role="region" :aria-label="t('Conversation history')" :aria-busy="loadingHistory">
         <div ref="messagesContainer" class="chat-messages" tabindex="-1" @click="openConversationLink" @keydown="previewImageKeydown" @scroll="trackHistoryScroll">
           <ChannelGroupContext v-if="/^(qq:|feishu:|bot:)/.test(activeSessionId) && !viewingPhysicalId" :key="activeSessionId" :api-base="apiBase" :project-id="projectId || liveProjectId(apiBase)" :group-key="activeSession?.channelAddress ? serviceGroupKey(activeSession.channelAddress) : undefined" :session-id="activeSessionId" :active="visible && chatRouteActive" />
           <ChannelInboxNotice v-if="activeSession?.channelSource" :source="activeSession.channelSource" />
@@ -108,7 +115,7 @@
             <span v-if="loadingHistory" class="sr-only" role="status">{{ t('Loading older messages…') }}</span>
           </div>
           <ConversationSkeleton v-if="loadingHistory && messages.length === 0"
-            :active="visible && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive" />
+            :active="visible && conversationDocumentVisible && chatRouteActive" />
           <div v-else-if="!loadingHistory && messages.length === 0 && !runResult && !composerError" class="conversation-empty">{{ isExecution ? t('No execution trace yet.') : channelConversation ? t('Messages from this channel will appear here.') : t('No messages yet. Send one below.') }}</div>
           <p v-if="embedded && sessionsError" class="composer-error" role="alert">{{ sessionsError }}</p>
           <p v-if="composerError && (viewingPhysicalId || !isDirectChat)" class="composer-error" role="alert">{{ composerError }}</p>
@@ -254,18 +261,10 @@
         <div v-if="historyBrowsing && !viewingPhysicalId" class="timeline-latest-anchor"><HoverInfo :text="t('Return to latest')" v-slot="{ triggerProps }">
           <button v-bind="triggerProps" type="button" class="timeline-latest" :aria-label="t('Return to latest')" @click="returnToLatest"><span class="i-lucide-arrow-down" aria-hidden="true" /></button>
         </HoverInfo></div>
-        <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive" @navigate="browseHistory" />
+        <MessageHistoryRail v-if="!mobileLayout" :entries="historyMarkers" :container="messagesContainer" :reveal="revealHistoryIndex" :active="visible && conversationDocumentVisible && chatRouteActive" @navigate="browseHistory" />
         </div>
       </template>
     </div>
-    <template #diagnosis>
-      <p v-if="diagnosisNavigation.error.value" class="composer-error" role="alert">{{ diagnosisNavigation.error.value }}</p>
-      <SessionDiagnosis v-if="diagnosisOpened" :id="domId('diagnosis-panel')" role="region" :aria-label="t('Session diagnosis')" :id-prefix="embedded || managed ? paneId : undefined"
-        :section="diagnosisNavigation.section.value" @update:section="diagnosisNavigation.selectSection"
-        :api-base="apiBase" :session-id="activeSessionId" :physical-id="viewingPhysicalId"
-        :active="sessionReadable && visible && (editorGroups ? diagnosisDocumentVisible : activePanel === 'diagnosis') && chatRouteActive" :can-read-trace="true"
-        :working="sessionWorking" :project-id="projectId" :compaction-summary="compactionSummary" />
-    </template>
     <template #composer>
       <div ref="composerDock" v-show="composerVisible" class="conversation-dock" :class="{ 'in-flow': !activeSessionId && conversationDocumentVisible, 'mobile-chat': mobileLayout }">
         <div class="session-status-row">
@@ -505,7 +504,7 @@
             >
               <span class="i-lucide-square w-3.5 h-3.5" aria-hidden="true" />
             </button>
-            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && activePanel === 'conversation' && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote" />
+            <AudioSetupButton :session-id="activeSessionId || undefined" :visible="visible && composerVisible && chatRouteActive" :keyboard-active="keyboardActive && paneActive && !viewingPhysicalId" :api-base="apiBase" :draft-key="composerKey" @transcript="inputText = [inputText, $event].filter(Boolean).join('\n')" :disabled="answeringQuestion || !!remoteConversation || !!draftRemote" />
             <button
               v-if="showComposerSend"
               class="composer-send"
@@ -532,7 +531,7 @@
     </template>
     </FileWorkbench>
     <SelectionMenu ref="selectionMenu" :container="messagesContainer"
-      :active="visible && keyboardActive && conversationDocumentVisible && activePanel === 'conversation' && chatRouteActive"
+      :active="visible && keyboardActive && conversationDocumentVisible && chatRouteActive"
       :can-quote="canQuoteSelection" @quote="quoteSelection" />
     <SessionDeleteDialog v-if="deletion" :target="deletion" @close="deletion = undefined" @deleted="sessionsDeleted" />
     <ImageViewer v-if="imagePreview" :image="imagePreview" :context-key="fileContextKey"
@@ -582,6 +581,7 @@ import { composerDraftKey, useComposerDraft } from '../composables/useComposerDr
 import { useInputReferenceDraft } from '../composables/useInputReferenceDraft.ts'
 import { WorkflowInputReferencesKey, captureInputReferences, inputReferenceKey, type LabeledInputReference, type AttachReferenceResult } from '../workflow-input-references.ts'
 import { useDiagnosisNavigation } from '../composables/useDiagnosisNavigation.ts'
+import DiagnosisDialog from './DiagnosisDialog.vue'
 import SessionDiagnosis from './SessionDiagnosis.vue'
 import SessionDeleteDialog from './SessionDeleteDialog.vue'
 import type { SessionDeletionTarget } from '../session-deletion.ts'
@@ -1168,7 +1168,7 @@ function applySessionActivity(
     if (error) restored.state.error = error
     requestControls.set(activeSessionId.value, restored)
   }
-  if (conversationDocumentVisible.value && activeSessionId.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && activePanel.value === 'conversation' && !historyRequest
+  if (conversationDocumentVisible.value && activeSessionId.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && !historyRequest
     && shouldRefreshReadonlyHistory(stages[activeSessionId.value], previous, Date.now() - lastReadonlyRefresh)) {
     void loadReadonlySession(true)
   }
@@ -1460,36 +1460,42 @@ const compactionSummary = computed(() => {
   return ''
 })
 
-type ConversationPanel = 'conversation' | 'diagnosis'
 const diagnosisNavigation = useDiagnosisNavigation({
   route, router, projectId: () => props.projectId || liveProjectId(props.apiBase),
   sessionId: () => activeSessionId.value, embedded: () => !!props.embedded,
 })
-const activePanel = ref<ConversationPanel>('conversation')
-const diagnosisOpened = ref(false)
+const diagnosisOpen = ref(false)
+const diagnosisTrigger = shallowRef<HTMLElement>()
 const conversationDocumentVisible = ref(true)
-const diagnosisDocumentVisible = ref(false)
 const knowledgeDocumentVisible = ref(false)
-const composerVisible = computed(() => editorGroups ? conversationDocumentVisible.value : (props.inspection || (route.name !== 'project-board' && route.name !== 'project-settings' && route.name !== 'project-workflows')) && !knowledgeDocumentVisible.value && activePanel.value !== 'diagnosis')
+const composerVisible = computed(() => editorGroups ? conversationDocumentVisible.value : (props.inspection || (route.name !== 'project-board' && route.name !== 'project-settings' && route.name !== 'project-workflows')) && !knowledgeDocumentVisible.value)
 function knowledgeNavigation(active: boolean, entryId?: string) {
   knowledgeDocumentVisible.value = active
   emit('knowledge-navigation', active, entryId)
 }
 const canQuoteSelection = computed(() => (!activeSessionId.value || isDirectChat.value) && !viewingPhysicalId.value && !submissionBusy.value)
-function switchPanel(panel: ConversationPanel): void {
-  activePanel.value = panel
-  if (panel === 'diagnosis') diagnosisOpened.value = true
-  else if (conversationDocumentVisible.value && activeSession.value && !isDirectChat.value && !viewingPhysicalId.value && !historyRequest) void loadReadonlySession(true)
+const diagnosisAvailable = computed(() => sessionReadable.value && paneActive.value && conversationDocumentVisible.value && chatRouteActive.value)
+function openDiagnosis(trigger?: HTMLElement) {
+  if (!conversationDocumentVisible.value) workbench.value?.showConversation()
+  diagnosisTrigger.value = trigger
+  diagnosisOpen.value = true
+  diagnosisNavigation.selectPanel(true)
 }
-function diagnosisVisibilityChanged(visible: boolean) {
-  diagnosisDocumentVisible.value = visible
-  if (editorGroups) { if (visible) diagnosisOpened.value = true; return }
-  const panel = visible ? 'diagnosis' : 'conversation'
-  if (panel !== activePanel.value) switchPanel(panel)
-  void nextTick(() => {
-    if (activePanel.value === panel && !knowledgeDocumentVisible.value) diagnosisNavigation.selectPanel(visible, conversationDocumentVisible.value)
-  })
+function closeDiagnosis() {
+  diagnosisOpen.value = false
+  diagnosisNavigation.selectPanel(false)
 }
+watch(diagnosisAvailable, available => {
+  if (!available) diagnosisOpen.value = false
+  else if (diagnosisNavigation.requested.value) diagnosisOpen.value = true
+})
+watch(diagnosisNavigation.requested, requested => {
+  if (requested === false || requested === undefined) diagnosisOpen.value = false
+  else if (diagnosisAvailable.value) {
+    if (!diagnosisOpen.value) diagnosisTrigger.value = undefined
+    diagnosisOpen.value = true
+  }
+}, { immediate: true })
 type BubbleDelivery = ChatInputDelivery['status'] | 'unconfirmed'
 
 function deliveryLabel(status: BubbleDelivery): string {
@@ -1751,7 +1757,7 @@ function previewImageKeydown(event: KeyboardEvent) {
   event.stopPropagation()
   openImagePreview(image)
 }
-watch([() => props.apiBase, () => props.projectId, () => props.sessionId, activeSessionId, viewingPhysicalId, paneActive, conversationDocumentVisible, activePanel, () => route.fullPath],
+watch([() => props.apiBase, () => props.projectId, () => props.sessionId, activeSessionId, viewingPhysicalId, paneActive, conversationDocumentVisible, diagnosisOpen, () => route.fullPath],
   () => { imagePreview.value = undefined })
 watch(() => [...pendingAttachments.value.map(item => item.previewUrl), ...otioReferences.value.map(item => item.attachment?.previewUrl)], (urls, previous) => {
   const image = imagePreview.value
@@ -1761,7 +1767,7 @@ watch(() => [...pendingAttachments.value.map(item => item.previewUrl), ...otioRe
 })
 const physicalIdStack = ref<string[]>([])
 const { after: ioAfter, earlier: ioEarlier, error: ioError } = useIoConversation(
-  () => paneActive.value && conversationDocumentVisible.value && activePanel.value === 'conversation' &&
+  () => paneActive.value && conversationDocumentVisible.value &&
     chatRouteActive.value && activeSessionId.value && !viewingPhysicalId.value
     ? { apiBase: props.apiBase, sessionId: activeSessionId.value, projectId: props.projectId, remote: remoteConversation.value }
     : undefined,
@@ -1786,7 +1792,7 @@ let scrollCommit = 0
 onUpdated(() => { scrollCommit++ })
 const followCommittedBottom = createCommitBottomScroll()
 const progressiveActive = () => paneActive.value && conversationDocumentVisible.value
-  && activePanel.value === 'conversation' && chatRouteActive.value
+  && chatRouteActive.value
 const { mountedRows: mountedHistoryRows, reveal: revealHistoryRow } = useProgressiveHistory({
   rows: historyRows,
   key: historyRowKey,
@@ -2394,8 +2400,7 @@ function resetConversation(): void {
   settingsError.value = ''
   settingsOverride.value = undefined
   pendingDraftSettings.value = undefined
-  activePanel.value = !editorGroups && diagnosisNavigation.requested.value ? 'diagnosis' : 'conversation'
-  diagnosisOpened.value = activePanel.value === 'diagnosis'
+  diagnosisOpen.value = diagnosisNavigation.requested.value === true
   if (!(currentRequest.value?.state.phase === 'submitting' && currentRequest.value.state.stopping)) sendRequest?.abort()
   sendRequest = undefined
   draftRequest.value = undefined
@@ -2774,7 +2779,7 @@ function toggleActions() {
   actionsReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
   conversationSearch.value?.close(); actionsOpen.value = true
 }
-watch(() => [fileContextKey.value, paneActive.value, conversationDocumentVisible.value, activePanel.value], () => closeActions())
+watch(() => [fileContextKey.value, paneActive.value, conversationDocumentVisible.value, diagnosisOpen.value], () => closeActions())
 interface SearchSegment {
   id: string | null
   previousId: string | null
@@ -3267,7 +3272,7 @@ async function sendMessage(overrideContent?: string, opts?: {
     else if (!props.embedded) void router.replace({ name: 'chat', params: { projectId: props.projectId, sessionId }, query: startingDraft || opts?.parentSessionId ? {} : route.query })
     preparingSend.value = false
     workbench.value?.showConversation()
-    activePanel.value = 'conversation'
+    diagnosisOpen.value = false
     clearSelection()
     if (!followUp && !isCommand) {
       streaming.value = true
@@ -3592,7 +3597,7 @@ watch(() => !activeSessionId.value && paneActive.value && (props.keyboardActive 
   input.focus({ preventScroll: true })
 }, { immediate: true, flush: 'post' })
 function handleTypingFocus(e: KeyboardEvent): void {
-  if (!props.visible || !conversationDocumentVisible.value || !(props.keyboardActive && conversationFocused.value) || !(editorGroups ? chatInput.value?.getClientRects().length : paneRoot.value?.getClientRects().length) || activePanel.value !== 'conversation' || !isComposerFocusKey(e)) return
+  if (!props.visible || !conversationDocumentVisible.value || !(props.keyboardActive && conversationFocused.value) || !(editorGroups ? chatInput.value?.getClientRects().length : paneRoot.value?.getClientRects().length) || diagnosisOpen.value || !isComposerFocusKey(e)) return
   const input = chatInput.value
   if (!input) return
   const editable = 'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"], [role="slider"], [role="listbox"], .workbench-explorer'
