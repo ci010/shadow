@@ -1,3 +1,4 @@
+import { CopyJobLifetime, isCopyJob } from '../execution/copy-job-lifetime.ts'
 import { assertExecutionSupported, assertExecutionProtocol, EXECUTION_PROTOCOL_FEATURE } from '../execution/workdir-contracts.ts'
 import type { JobEventV1, JobRequestV2 } from '../execution/contracts.ts'
 import {
@@ -84,6 +85,10 @@ export class NodeConnectionSession {
   readonly #localHello: VersionHelloV1
   readonly #options: NodeConnectionSessionOptions
   readonly #jobs = new Map<string, TrackedJob>()
+  readonly #copyJobs = new CopyJobLifetime()
+  get copyJobRetention() {
+    return { ...this.#copyJobs.counts, payloadJobs: [...this.#jobs.values()].filter(job => isCopyJob(job.request.operation)).length }
+  }
   #advertisedNodeSupport = false
   readonly #advertisedWorkdirs = new Set<string>()
   readonly #outbound: NodeSessionOutboundFrameV1[] = []
@@ -242,7 +247,9 @@ export class NodeConnectionSession {
         'jobId is already tracked by this connection',
       )
     }
-    this.#enqueue({ type: 'job-request', request: structuredClone(request) })
+    if (isCopyJob(request.operation)) this.#copyJobs.admit(request.jobId, request.args)
+    try { this.#enqueue({ type: 'job-request', request: structuredClone(request) }) }
+    catch (error) { if (isCopyJob(request.operation)) this.#copyJobs.finish(request.jobId); throw error }
     this.#jobs.set(request.jobId, {
       request: structuredClone(request),
       lastSequence: -1,
@@ -326,6 +333,10 @@ export class NodeConnectionSession {
     if (wasAuthenticated) this.#notifyConnectionChange()
     this.#closeInfo = structuredClone(info)
     this.#outbound.splice(0)
+    for (const [id, job] of this.#jobs) if (isCopyJob(job.request.operation)) {
+      this.#jobs.delete(id)
+      this.#copyJobs.finish(id)
+    }
     this.#writerWake?.()
     this.#closedResolver.resolve(structuredClone(info))
     await this.#transport.close(info)
@@ -443,10 +454,17 @@ export class NodeConnectionSession {
     }
     tracked.lastSequence = event.sequence
     tracked.terminal = TERMINAL_EVENTS.has(event.type)
-    await this.#options.onJobEvent?.(
-      structuredClone(event),
-      structuredClone(tracked.request),
-    )
+    try {
+      await this.#options.onJobEvent?.(
+        structuredClone(event),
+        structuredClone(tracked.request),
+      )
+    } finally {
+      if (tracked.terminal && isCopyJob(tracked.request.operation)) {
+        this.#jobs.delete(event.jobId)
+        this.#copyJobs.finish(event.jobId)
+      }
+    }
   }
 
   #enqueue(

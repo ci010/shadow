@@ -100,10 +100,11 @@ export function createNodeWebSocketApi(
           expectedAuthentication: authentication,
           onJobEvent: async (event, request) => {
             const job = jobs.get(event.jobId)
-            if (job?.session === session) job.onEvent(event)
-            await configuredOnJobEvent?.(event, request)
-            if ('receipt' in event && job?.session === session) {
-              jobs.delete(event.jobId)
+            try {
+              if (job?.session === session) job.onEvent(event)
+              await configuredOnJobEvent?.(event, request)
+            } finally {
+              if ('receipt' in event && job?.session === session) jobs.delete(event.jobId)
             }
           },
         },

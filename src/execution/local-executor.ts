@@ -1,3 +1,4 @@
+import { CopyJobLifetime, isCopyJob } from './copy-job-lifetime.ts'
 import type {
   ManagedProcess,
   ManagedProcessStatus,
@@ -129,6 +130,11 @@ function parseProcessArgs(value: unknown): ProcessExecuteArgsV1 | null {
 
 export class LocalExecutor implements Executor, LocalProcessExecutor {
   private jobs = new Map<string, JobRecord>()
+  readonly #copyJobs = new CopyJobLifetime()
+  /** Payload-free diagnostics; completed copy RPCs have no retained request/events. */
+  get copyJobRetention() {
+    return { ...this.#copyJobs.counts, payloadJobs: [...this.jobs.values()].filter(job => isCopyJob(job.request.operation)).length }
+  }
 
   constructor(
     private processManager: ProcessSpawner,
@@ -173,6 +179,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       )
     }
 
+    if (isCopyJob(request.operation)) {
+      if (this.jobs.has(request.jobId)) throw new TypeError('Copy RPC jobId is already active or bound')
+      this.#copyJobs.admit(request.jobId, request.args)
+    }
     let record = this.jobs.get(request.jobId)
     if (record && JSON.stringify(record.request) !== JSON.stringify(request)) throw new TypeError('jobId is already bound to a different request')
     if (!record) {
@@ -233,6 +243,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
       }
     } finally {
       signal.removeEventListener('abort', abort)
+      if (isCopyJob(record.request.operation) && TERMINAL_STATES.has(record.status.state)) {
+        record.events.length = 0
+        record.request.args = undefined
+      }
     }
   }
 
@@ -605,6 +619,10 @@ export class LocalExecutor implements Executor, LocalProcessExecutor {
     }
     this.setState(record, state, receipt)
     this.push(record, { type: eventType, receipt } as JobEventPayload)
+    if (isCopyJob(record.request.operation)) {
+      this.jobs.delete(record.request.jobId)
+      this.#copyJobs.finish(record.request.jobId)
+    }
   }
 
   private push(

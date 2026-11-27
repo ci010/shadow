@@ -43,9 +43,24 @@ V1 bounds each manifest to 2,048 entries, 512 KiB JSON and 1 GiB total file byte
 Chunks carry at most 64 KiB binary (base64 on the wire). Main relays one chunk
 at a time, verifies SHA-256 against the source manifest, and returns only a
 summary to the model. The destination independently verifies staged sizes/hashes
-before publication. Executor event/history retention is not a streaming archive
-or zero-retention guarantee. Per destination process, at most 64 stages and
-1 GiB declared staged file bytes are admitted.
+before publication. Per destination process, at most 64 stages and 1 GiB declared
+staged file bytes are admitted.
+
+Copy RPCs have a separate **ephemeral, single-consumer** executor lifetime. Main's
+RemoteExecutor, the Main protocol dispatcher and Child's LocalExecutor evict
+terminal copy-job requests/events rather than accumulating the transferred bytes
+as replay history. Completed consumers also clear their chunk buffers. Each
+holder permits at most 64 active copy RPCs and keeps only the last 128 job IDs as
+payload-free replay guards. Request envelopes are limited to 1 MiB; Main bounds
+each active copy-job event stream to 1 MiB/256 events and requests cancellation
+on overflow. Regular non-copy executor history/reconciliation is unchanged.
+
+A terminal copy RPC is not available from executor status/history after eviction;
+a missing status is **not** evidence of success or rollback. The tool relies on
+the live terminal receipt and staged integrity verification. Recent duplicate job
+IDs are refused; the bounded guards are not durable idempotency or a resume API.
+After disconnect, failure/unknown reporting and staging cleanup rules below still
+apply. Transport queues hold only bounded in-flight frames, not a transfer archive.
 
 ## Publication, cancellation and recovery
 
@@ -66,7 +81,10 @@ Stage handles are in-memory: after process restart orphan `.shadow-copy-*`
 directories require inspection/manual cleanup; there is no resume, durable
 transfer journal or automatic model-call replay. Source files are never deleted.
 See `src/tools/copy_test.ts` for two independent Child executors and Main/Child
-permutation coverage; fixture tests are not a claim of live fleet rollout.
+permutation coverage. `src/cluster/copy-retention_test.ts` additionally runs eight
+multi-chunk copies through two real Main/Child protocol-session pairs and
+Remote/Project/LocalExecutors, checking bounded retained state after each copy.
+These fixture tests are not a claim of live fleet rollout.
 
 Implementation: `src/tools/copy.ts`, `src/execution/filesystem-copy.ts`,
 `src/execution/capability-filesystem.ts`, `src/execution/managed-child-workdirs.ts`.

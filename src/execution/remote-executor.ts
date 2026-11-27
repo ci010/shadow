@@ -1,3 +1,4 @@
+import { CopyJobLifetime, isCopyJob } from './copy-job-lifetime.ts'
 import type {
   CancelReceiptV1,
   ExecutionReceiptV1,
@@ -25,6 +26,7 @@ interface RemoteJobRecord {
   readonly request: ExecutionRequestV2
   readonly events: JobEventV1[]
   status: JobStatusV1
+  copyEventBytes?: number
   changed: Promise<void>
   notify: () => void
 }
@@ -39,6 +41,11 @@ const TERMINAL_STATES = new Set<JobStateV1>([
 
 export class RemoteExecutor implements Executor {
   readonly #jobs = new Map<string, RemoteJobRecord>()
+  readonly #copyJobs = new CopyJobLifetime()
+  /** Payload-free diagnostics; completed copy RPCs have no retained request/events. */
+  get copyJobRetention() {
+    return { ...this.#copyJobs.counts, payloadJobs: [...this.#jobs.values()].filter(job => isCopyJob(job.request.operation)).length }
+  }
 
   constructor(readonly dispatcher: RemoteNodeJobDispatcher) {}
 
@@ -51,6 +58,10 @@ export class RemoteExecutor implements Executor {
       throw new TypeError(
         `Invalid ExecutionRequestV2: ${validation.errors.join('; ')}`,
       )
+    }
+    if (isCopyJob(request.operation)) {
+      if (this.#jobs.has(request.jobId)) throw new TypeError('Copy RPC jobId is already active or bound')
+      this.#copyJobs.admit(request.jobId, request.args)
     }
     let record = this.#jobs.get(request.jobId)
     if (!record) {
@@ -147,6 +158,10 @@ export class RemoteExecutor implements Executor {
       }
     } finally {
       signal.removeEventListener('abort', abort)
+      if (isCopyJob(record.request.operation) && TERMINAL_STATES.has(record.status.state)) {
+        record.events.length = 0
+        record.request.args = undefined
+      }
     }
   }
 
@@ -161,6 +176,14 @@ export class RemoteExecutor implements Executor {
       this.#disconnect(record, 'Remote node returned an out-of-order job event')
       return
     }
+    if (isCopyJob(record.request.operation)) {
+      record.copyEventBytes = (record.copyEventBytes ?? 0) + Buffer.byteLength(JSON.stringify(event))
+      if (record.events.length >= 256 || record.copyEventBytes > 1024 * 1024) {
+        try { this.dispatcher.dispatchCancellation(record.request.nodeId, record.request.jobId) } catch { /* disconnect below preserves uncertainty */ }
+        this.#disconnect(record, 'Copy RPC exceeded its bounded event buffer; inspect the transfer outcome')
+        return
+      }
+    }
     record.events.push(structuredClone(event))
     const state = eventState(event)
     record.status = {
@@ -174,6 +197,10 @@ export class RemoteExecutor implements Executor {
         : {}),
     }
     wake(record)
+    if (TERMINAL_STATES.has(record.status.state) && isCopyJob(record.request.operation)) {
+      this.#jobs.delete(record.request.jobId)
+      this.#copyJobs.finish(record.request.jobId)
+    }
   }
 
   #reject(record: RemoteJobRecord, error: unknown): void {
@@ -221,6 +248,10 @@ export class RemoteExecutor implements Executor {
       receipt,
     }
     wake(record)
+    if (TERMINAL_STATES.has(record.status.state) && isCopyJob(record.request.operation)) {
+      this.#jobs.delete(record.request.jobId)
+      this.#copyJobs.finish(record.request.jobId)
+    }
   }
 }
 
