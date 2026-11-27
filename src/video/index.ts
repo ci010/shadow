@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFile, stat, lstat, mkdtemp, rm, link } from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { localMediaPath, assertLocalPath, streamDuration, alphaDecoder, type MediaStream } from './media-profile.ts'
 import { otioPictureSpans, type OtioNode, MAX_OTIO_BYTES } from '../shared/otio-model.ts'
 import { run } from './process.ts'
 import { prepareOtioProfile } from '../shared/otio-effects.ts'
@@ -10,13 +10,7 @@ export interface Options { ffmpeg?: string; ffprobe?: string; signal?: AbortSign
 export interface RenderOptions extends Options { revision: string; start?: number; end?: number; width?: number; height?: number }
 const formats: Record<string, string> = { '.mp4': 'mov', '.mov': 'mov', '.m4a': 'mov', '.mkv': 'matroska', '.webm': 'matroska', '.wav': 'wav', '.mp3': 'mp3', '.flac': 'flac', '.ogg': 'ogg', '.png': 'png_pipe', '.jpg': 'jpeg_pipe', '.jpeg': 'jpeg_pipe', '.webp': 'webp_pipe' }
 const images = new Set(['png_pipe', 'jpeg_pipe', 'webp_pipe'])
-function mediaPath(url: string, directory: string) {
-  if (/^file:/i.test(url)) return fileURLToPath(url)
-  if (/^[a-z][a-z\d+.-]*:/i.test(url) && !/^[a-z]:[\\/]/i.test(url)) throw new Error(`Only local media is supported: ${url}`)
-  if (!url || url.includes('\0')) throw new Error('Invalid local media path')
-  return path.resolve(directory, url)
-}
-function inputArgs(file: string, format: string): string[] { return ['-protocol_whitelist', 'file,pipe', '-f', format, '-i', file] }
+function inputArgs(file: string, format: string, decoder?: string): string[] { return ['-protocol_whitelist', 'file,pipe', ...(decoder ? ['-c:v', decoder] : []), '-f', format, '-i', file] }
 function sourceOffset(n: OtioNode) { return n.sourceStart!.value / n.sourceStart!.rate - (n.mediaStart ? n.mediaStart.value / n.mediaStart.rate : 0) }
 export function initialTimeline(duration = 5, rate = 24) {
   if (!Number.isFinite(duration) || duration <= 0 || duration > 86400 || !Number.isFinite(rate) || rate < 1 || rate > 120 || !Number.isSafeInteger(duration * rate)) throw new Error('init duration must be positive whole frames <= 24h, rate 1..120')
@@ -24,6 +18,7 @@ export function initialTimeline(duration = 5, rate = 24) {
   return { OTIO_SCHEMA: 'Timeline.1', name: 'Agent video', global_start_time: time(0), tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [{ OTIO_SCHEMA: 'Gap.1', source_range: { OTIO_SCHEMA: 'TimeRange.1', start_time: time(0), duration: time(duration * rate) } }] }] } }
 }
 export async function plan(file: string, options: Options = {}) {
+  assertLocalPath(file)
   options.signal?.throwIfAborted()
   if ((await stat(file)).size > MAX_OTIO_BYTES) throw new Error('OTIO file exceeds size limit')
   const text = await readFile(file, 'utf8'), profile = prepareOtioProfile(text), { model } = profile
@@ -33,27 +28,35 @@ export async function plan(file: string, options: Options = {}) {
     placements.get(t.from)!.end += t.outOffset
     placements.get(t.to)!.start -= t.inOffset
   }
-  const assets: Record<string, { file: string; format: string; image: boolean; video: boolean; audio: boolean; duration: number | null; aspect: number; alpha: boolean }> = {}
+  const assets: Record<string, { file: string; format: string; image: boolean; video: boolean; audio: boolean; duration: number | null; audioDuration: number | null; decoder?: string; aspect: number; alpha: boolean }> = {}
+  let decoders: string | undefined
   const clips = model.nodes.filter(n => n.kind === 'Clip' && n.enabled && n.end > n.start)
   if (clips.length > 256) throw new Error('At most 256 active clips supported')
   for (const n of clips) {
     if (!n.targetUrl || !n.sourceStart || !['Video', 'Audio'].includes(n.trackKind ?? '')) throw new Error(`Unsupported media/placement at ${n.id}; use ExternalReference on Video/Audio tracks. Three shots must be pre-rendered to a local MP4/image.`)
-    const local = mediaPath(n.targetUrl, path.dirname(path.resolve(file)))
+    const local = localMediaPath(n.targetUrl, path.dirname(path.resolve(file)))
     const format = formats[path.extname(local).toLowerCase()]
     if (!format) throw new Error(`Unsupported media extension: ${local}`)
     if (!(await stat(local)).isFile()) throw new Error(`Not a regular media file: ${local}`)
     const image = images.has(format)
     const probe = JSON.parse(await run(options.ffprobe ?? 'ffprobe', ['-v', 'error', ...inputArgs(local, format), ...(image ? ['-count_frames'] : []), '-show_streams', '-show_format', '-of', 'json'], options.signal, 60000))
-    const streams = probe.streams as { codec_type: string; nb_read_frames?: string; width?: number; height?: number; pix_fmt?: string; sample_aspect_ratio?: string; tags?: Record<string, string>; side_data_list?: { rotation?: number }[] }[]
+    const streams = probe.streams as MediaStream[]
     if (image && (streams.length !== 1 || Number(streams[0]?.nb_read_frames) !== 1)) throw new Error(`Only single-frame images are supported: ${local}`)
-    const duration = Number(probe.format?.duration)
     const visual = streams.find(s => s.codec_type === 'video')
+    const sound = streams.find(s => s.codec_type === 'audio')
+    const selected = n.trackKind === 'Video' ? visual : sound
+    if (!selected || (n.trackKind === 'Audio' && image)) throw new Error(`Missing ${n.trackKind} stream: ${n.id}`)
+    const decoder = alphaDecoder(visual)
+    if (decoder) {
+      decoders ??= await run(options.ffmpeg ?? 'ffmpeg', ['-hide_banner', '-decoders'], options.signal, 60000)
+      if (!decoders.split('\n').some(line => line.trim().split(/\s+/)[1] === decoder)) throw new Error(`Alpha-preserving decoder ${decoder} is required; refusing potentially opaque VP8/VP9 decode`)
+    }
     const square = !visual?.sample_aspect_ratio || ['1:1', 'N/A', '0:1'].includes(visual.sample_aspect_ratio)
-    const alpha = !/^(?:yuv(?:j)?(?:420|422|444|440|411|410)p(?:\d+(?:le|be))?|rgb24|bgr24|gray(?:\d+(?:le|be))?|gbrp(?:\d+(?:le|be))?|nv12|nv21)$/.test(visual?.pix_fmt ?? '') || visual?.tags?.alpha_mode === '1' || !square || !!visual?.side_data_list?.some(s => s.rotation)
-    const asset = { aspect: (visual?.width ?? 0)/(visual?.height ?? 1), alpha, file: local, format, image, video: streams.some(s => s.codec_type === 'video'), audio: streams.some(s => s.codec_type === 'audio'), duration: Number.isFinite(duration) ? duration : null }
+    const alpha = !!decoder || !/^(?:yuv(?:j)?(?:420|422|444|440|411|410)p(?:\d+(?:le|be))?|rgb24|bgr24|gray(?:\d+(?:le|be))?|gbrp(?:\d+(?:le|be))?|nv12|nv21)$/.test(visual?.pix_fmt ?? '') || visual?.tags?.alpha_mode === '1' || !square || !!visual?.side_data_list?.some(s => s.rotation)
+    const asset = { aspect: (visual?.width ?? 0)/(visual?.height ?? 1), alpha, file: local, format, image, video: streams.some(s => s.codec_type === 'video'), audio: streams.some(s => s.codec_type === 'audio'), duration: streamDuration(selected), audioDuration: sound ? streamDuration(sound) : null, decoder }
     const placement = placements.get(n.id)!
     const source = sourceOffset(n) + placement.start - n.start
-    if (source < -1e-8 || (!image && (asset.duration === null || source + placement.end - placement.start > asset.duration + 0.001))) throw new Error(`Source range outside media duration: ${n.id}`)
+    if (source < -1e-8 || (!image && (asset.duration === null || source + placement.end - placement.start > asset.duration + 0.001))) throw new Error(`Source range outside media duration (selected stream unknown or too short): ${n.id}`)
     if (n.trackKind === 'Video' ? !asset.video : !asset.audio || image) throw new Error(`Missing ${n.trackKind} stream: ${n.id}`)
     assets[n.id] = asset
   }
@@ -68,9 +71,14 @@ export async function plan(file: string, options: Options = {}) {
   if (pictures.some(s => [s.start, s.end].some(t => Math.abs(t * model.rate - Math.round(t * model.rate)) >= 1e-6))) throw new Error('Video cuts must align to timeline frames; no implicit retiming')
   const explicitAudio = model.nodes.some(n => n.kind === 'Track' && n.trackKind === 'Audio' && n.enabled)
   const audio = explicitAudio ? clips.filter(n => n.trackKind === 'Audio').map(node => ({ node, start: node.start, end: node.end })) : pictures.filter(s => s.node && assets[s.node.id]?.audio).map(s => ({ ...s, node: s.node! }))
+  for (const span of audio) {
+    const a = assets[span.node.id]!, source = sourceOffset(span.node) + span.start - span.node.start
+    if (a.audioDuration === null || source + span.end - span.start > a.audioDuration + 0.001) throw new Error(`Source range outside media duration (selected audio stream unknown or too short): ${span.node.id}`)
+  }
   return { profile, placements, revision: revisionOf(text), duration: model.duration, rate: model.rate, model, assets, pictures, audio, audioPolicy: explicitAudio ? 'explicit-audio-tracks' : 'visible-video-embedded' }
 }
 export async function render(file: string, output: string, options: RenderOptions) {
+  assertLocalPath(output)
   try { await lstat(output); throw new Error(`EEXIST: output already exists: ${output}`) }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
   const p = await plan(file, options)
@@ -91,7 +99,7 @@ export async function render(file: string, output: string, options: RenderOption
       const a = p.assets[n.id]!, i = index++
       if (a.image) args.push('-loop', '1', '-framerate', String(p.rate))
       if (!a.image) args.push('-ss', String(Math.max(0, sourceOffset(n) + at - n.start)))
-      args.push('-t', String(duration), ...inputArgs(a.file, a.format))
+      args.push('-t', String(duration), ...inputArgs(a.file, a.format, a.decoder))
       return i
     }
     // Compile from timeline zero, then trim the finished composition. This keeps

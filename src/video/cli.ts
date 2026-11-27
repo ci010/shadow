@@ -1,13 +1,14 @@
 import { writeFile, open, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { assertLocalPath } from './media-profile.ts'
 import type { OtioPreviewManifest } from '../shared/otio-effects.ts'
 import { initialTimeline, plan, render, revisionOf } from './index.ts'
 export async function runVideoCli(args: string[], options: { signal?: AbortSignal } = {}) {
   const [command, file, ...rest] = args
-  if (!command || command === '--help') return { usage: 'project-video init FILE [--duration 5 --rate 24] | validate/plan FILE | preview/export FILE --output FILE.mp4 --revision SHA256 [--start SECONDS --end SECONDS --width N --height N --ffmpeg PATH --ffprobe PATH] [preview only: --manifest NEW.json]', security: 'Runs on this execution device with caller filesystem authority; local files only. No remote-to-Main mapping, no downloads or installs.', limitations: 'Video tracks alpha composite bottom to top. Strict shadow effects and SMPTE_Dissolve/Custom wiperight only. Audio tracks mix additively; absent Audio tracks use visible video embedded audio. Video cuts must be frame-aligned. Three shots must be pre-rendered to media.' }
+  if (!command || command === '--help') return { usage: 'project-video init FILE [--duration 5 --rate 24] | validate/plan FILE [--ffmpeg PATH --ffprobe PATH] | preview/export FILE --output FILE.mp4 --revision SHA256 [--start SECONDS --end SECONDS --width N --height N --ffmpeg PATH --ffprobe PATH] [preview only: --manifest NEW.json]', security: 'Runs on this execution device with caller filesystem authority; local files only. No remote-to-Main mapping, no downloads or installs.', limitations: 'Video tracks alpha composite bottom to top. Strict shadow effects and SMPTE_Dissolve/Custom wiperight only. Audio tracks mix additively; absent Audio tracks use visible video embedded audio. Video cuts must be frame-aligned. Three shots must be pre-rendered to media.' }
   if (!file || file.startsWith('--')) throw new Error('Missing OTIO filename; use --help')
   const flags = new Map<string, string>()
-  const allowed: Record<string, string[]> = { init: ['duration', 'rate'], plan: ['ffprobe'], validate: ['ffprobe'], preview: ['manifest', 'output', 'revision', 'start', 'end', 'width', 'height', 'ffmpeg', 'ffprobe'], export: ['output', 'revision', 'start', 'end', 'width', 'height', 'ffmpeg', 'ffprobe'] }
+  const allowed: Record<string, string[]> = { init: ['duration', 'rate'], plan: ['ffmpeg', 'ffprobe'], validate: ['ffmpeg', 'ffprobe'], preview: ['manifest', 'output', 'revision', 'start', 'end', 'width', 'height', 'ffmpeg', 'ffprobe'], export: ['output', 'revision', 'start', 'end', 'width', 'height', 'ffmpeg', 'ffprobe'] }
   if (!allowed[command]) throw new Error(`Unknown command: ${command}`)
   for (let i = 0; i < rest.length; i += 2) {
     const key = rest[i]!.replace(/^--/, ''), value = rest[i+1]
@@ -18,6 +19,10 @@ export async function runVideoCli(args: string[], options: { signal?: AbortSigna
     if (!flags.has(key)) return fallback
     const n = Number(flags.get(key)); if (!Number.isFinite(n)) throw new Error(`Invalid --${key}`); return n
   }
+  assertLocalPath(file)
+  const manifest = flags.get('manifest')
+  if (manifest) assertLocalPath(manifest)
+  if (flags.has('output')) assertLocalPath(flags.get('output')!)
   if (command === 'init') {
     const text = JSON.stringify(initialTimeline(number('duration', 5), number('rate', 24)), null, 2) + '\n'
     options.signal?.throwIfAborted()
@@ -31,7 +36,6 @@ export async function runVideoCli(args: string[], options: { signal?: AbortSigna
   }
   if (!flags.has('output') || !flags.has('revision')) throw new Error('--output and --revision are required; run plan first')
   if (command === 'preview' && (!flags.has('start') || !flags.has('end'))) throw new Error('preview requires explicit --start and --end interval')
-  const manifest = flags.get('manifest')
   if (manifest && path.extname(manifest).toLowerCase() !== '.json') throw new Error('--manifest must use .json')
   const result = await render(file, flags.get('output')!, { ...common, revision: flags.get('revision')!, start: number('start'), end: number('end'), width: number('width', command === 'preview' ? 640 : 1280), height: number('height', command === 'preview' ? 360 : 720) })
   if (!manifest) return result
