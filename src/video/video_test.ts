@@ -18,12 +18,13 @@ async function fixture(fn: (dir: string) => Promise<void>) {
 }
 test('CLI init is no-clobber; revision, validation and strict options', () => fixture(async dir => {
   const file = path.join(dir, 'edit.otio')
-  const init = await runVideoCli(['init', file, '--duration', '1']) as { revision: string }
+  const init = await runVideoCli(['init', file, '--duration', '1', '--rate', '30']) as { revision: string }
   assert.equal((await plan(file)).revision, init.revision)
+  assert.equal((await plan(file)).rate, 30, 'gap-only initialization must preserve the requested display rate')
   await assert.rejects(runVideoCli(['init', file]), /EEXIST/)
   await assert.rejects(runVideoCli(['export', file, '--bad', '1']), /Invalid/)
   await assert.rejects(render(file, path.join(dir, 'x.mp4'), { revision: 'stale' }), /Revision mismatch/)
-  await assert.rejects(render(file, path.join(dir, 'x.mp4'), { revision: init.revision, end: 0.1 }), /align/)
+  await assert.rejects(render(file, path.join(dir, 'x.mp4'), { revision: init.revision, end: 0.11 }), /align/)
   const raw = initialTimeline(1) as any
   raw.tracks.children[0].children[0].effects = [{ OTIO_SCHEMA: 'LinearTimeWarp.1' }]
   await writeFile(file, JSON.stringify(raw))
@@ -57,6 +58,12 @@ test('real ffmpeg: image + gap + multitrack video, audio mix, interval, no-clobb
     const result = await render(file, output, { ...opts, revision: p.revision, width: 64, height: 64, start: 0.5, end: 1.5 })
     assert.equal(result.frames, 24)
     assert.equal(result.audioPolicy, 'explicit-audio-tracks')
+    const streams = JSON.parse(await run(ffprobe, ['-v', 'error', '-show_streams', '-of', 'json', output])).streams
+    const sound = streams.find((s: { codec_type: string }) => s.codec_type === 'audio')
+    assert.equal(sound.codec_name, 'aac')
+    assert.equal(Number(sound.sample_rate), 48000)
+    const levels = await run(ffmpeg, ['-v', 'error', '-i', output, '-map', '0:a:0', '-af', 'astats=metadata=1:reset=0,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-', '-f', 'null', '-'])
+    assert.ok([...levels.matchAll(/lavfi\.astats\.Overall\.RMS_level=(-?[\d.]+)/g)].some(m => Number(m[1]) > -60), 'mixed audio must contain the source tone, not only generated silence')
     const before = await readFile(output)
     await assert.rejects(render(file, output, { ...opts, revision: p.revision, width: 64, height: 64 }), /EEXIST/)
     assert.deepEqual(await readFile(output), before)

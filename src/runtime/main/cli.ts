@@ -40,8 +40,22 @@ export async function runBackendCli(
 
 export async function runRootProcessEntry(
   hooks: BackendProcessHooks = nodeProcessHooks,
-): Promise<ProcessEntryResult | { readonly route: 'child-pair' | 'project-audio' }> {
-  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'project-audio' ? 1 : 2)
+): Promise<ProcessEntryResult | { readonly route: 'child-pair' | 'project-audio' | 'project-video' }> {
+  const runtimeArgs = hooks.argv.slice(hooks.argv[1] === 'server' || hooks.argv[1] === 'child' || hooks.argv[1] === 'project-audio' || hooks.argv[1] === 'project-video' ? 1 : 2)
+  if (runtimeArgs[0] === 'project-video') {
+    const { runVideoCli } = await import('../../video/cli.ts')
+    const controller = new AbortController()
+    const abort = () => controller.abort(new Error('Video command interrupted'))
+    hooks.on('SIGINT', abort)
+    hooks.on('SIGTERM', abort)
+    try {
+      process.stdout.write(JSON.stringify(await runVideoCli(runtimeArgs.slice(1), { signal: controller.signal }), null, 2) + '\n')
+    } finally {
+      hooks.off('SIGINT', abort)
+      hooks.off('SIGTERM', abort)
+    }
+    return { route: 'project-video' }
+  }
   if (runtimeArgs[0] === 'project-audio') {
     const { runProjectAudioCli } = await import('../../audio-cpp/host-cli.ts')
     process.stdout.write(JSON.stringify(await runProjectAudioCli(runtimeArgs.slice(1)), null, 2) + '\n')

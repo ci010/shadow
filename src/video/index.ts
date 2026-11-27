@@ -20,7 +20,7 @@ function sourceOffset(n: OtioNode) { return n.sourceStart!.value / n.sourceStart
 export function initialTimeline(duration = 5, rate = 24) {
   if (!Number.isFinite(duration) || duration <= 0 || duration > 86400 || !Number.isFinite(rate) || rate < 1 || rate > 120 || !Number.isSafeInteger(duration * rate)) throw new Error('init duration must be positive whole frames <= 24h, rate 1..120')
   const time = (value: number) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate })
-  return { OTIO_SCHEMA: 'Timeline.1', name: 'Agent video', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [{ OTIO_SCHEMA: 'Gap.1', source_range: { OTIO_SCHEMA: 'TimeRange.1', start_time: time(0), duration: time(duration * rate) } }] }] } }
+  return { OTIO_SCHEMA: 'Timeline.1', name: 'Agent video', global_start_time: time(0), tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [{ OTIO_SCHEMA: 'Gap.1', source_range: { OTIO_SCHEMA: 'TimeRange.1', start_time: time(0), duration: time(duration * rate) } }] }] } }
 }
 export async function plan(file: string, options: Options = {}) {
   options.signal?.throwIfAborted()
