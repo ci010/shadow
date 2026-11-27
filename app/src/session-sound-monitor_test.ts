@@ -50,6 +50,7 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
   const stages: Record<string, string> = { a: 'idle', b: 'idle' }
   const questionIds: Record<string, string> = { a: 'a1', b: 'b1' }
   let botStage = 'idle'
+  let subStage = 'idle'
   let parent = false
   let invalid = false
   let liveReady = true
@@ -62,10 +63,11 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
     const id = path.split('/')[2]!
     if (path.endsWith('/summary')) return Response.json({ sessions: [
       { sessionId: 'web:root', mode: 'session', name: 'Review release' },
+      { sessionId: 'sub:session', mode: 'session', parentSessionId: 'web:root', name: 'Delegated work' },
       { sessionId: 'sub:task', mode: 'task', parentSessionId: 'web:root', name: 'Internal check' },
       ...botIds.filter(sessionId => id === 'a' || !sessionId.startsWith('bot:')).map(sessionId => ({ sessionId, mode: 'session' })),
     ], nodes: [] })
-    if (path.endsWith('/stages')) return Response.json(invalid ? { activity: { 'web:root': { stage: 123 } } } : { activity: { 'web:root': { stage: stages[id] }, ...Object.fromEntries(botIds.map(id => [id, { stage: botStage }])) } })
+    if (path.endsWith('/stages')) return Response.json(invalid ? { activity: { 'web:root': { stage: 123 } } } : { activity: { 'web:root': { stage: stages[id] }, 'sub:session': { stage: subStage }, ...Object.fromEntries(botIds.map(id => [id, { stage: botStage }])) } })
     if (path.endsWith('/ask')) { assert.ok(path.includes('/web%3Aroot/'), 'Bot questions must not be fetched'); return Response.json({ request: {
       id: questionIds[id], sessionId: 'web:root', question: 'Continue?', options: ['Yes', 'No'], defaultOption: 'No',
       recipient: { kind: parent ? 'parent' : 'user', sessionId: parent ? 'web:owner' : 'web:root' },
@@ -162,6 +164,20 @@ test('app monitor isolates Projects, confirms human yield recipients, ignores re
     payload: { event: 'invalidate', sessionId: 'web:root' } })
   await settle()
   assert.equal(completions.length, 2, 'Child executions and non-success invalidations never notify completion')
+  subStage = 'llm'
+  await update('a', 'idle')
+  subStage = 'idle'
+  await update('a', 'idle')
+  assert.equal(emitted.at(-1), 'subagent', 'Delegated sessions use a distinct completion cue')
+  subStage = 'llm'
+  await update('a', 'llm')
+  subStage = 'idle'
+  await update('a', 'idle')
+  assert.equal(emitted.at(-1), 'idle', 'Root completion takes priority over simultaneous delegated completion')
+  observers.get('a')!.event({ type: 'event', cursor: 'epoch:5', topic: { kind: 'sessions', projectId: 'a' },
+    payload: { event: 'invalidate', sessionId: 'sub:session', completedTurnId: 'delegated-turn' } })
+  await settle()
+  assert.equal(emitted.at(-1), 'subagent', 'Fast delegated completions also use the distinct cue')
   stop()
   assert.equal(observers.size, 0)
 })

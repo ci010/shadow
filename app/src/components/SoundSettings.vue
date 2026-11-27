@@ -42,7 +42,7 @@ const sounds = useNotificationSounds()
 const browserNotifications = useBrowserTaskNotifications()
 const volumeId = `sound-volume-${useId()}`
 const preferences = computed(() => sounds?.preferences.value ?? { enabled: false, yield: false, idle: false, volume: 0 })
-const events: { kind: NotificationSound; label: string; description: string }[] = [
+const events: { kind: Exclude<NotificationSound, 'subagent'>; label: string; description: string }[] = [
   { kind: 'yield', get label() { return t('Needs your answer') }, get description() { return t('A conversation asks you a question.') } },
   { kind: 'idle', get label() { return t('Session idle') }, get description() { return t('A working conversation returns to idle.') } },
 ]

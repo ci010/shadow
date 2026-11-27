@@ -1,7 +1,9 @@
 import { t } from './i18n.ts'
 import { computed, inject, readonly, ref, type InjectionKey } from 'vue'
 
-export type NotificationSound = 'yield' | 'idle'
+export type NotificationSound = 'yield' | 'idle' | 'subagent'
+const preferenceKey = (kind: NotificationSound): 'yield' | 'idle' => kind === 'subagent' ? 'idle' : kind
+const priority = { subagent: 0, idle: 1, yield: 2 }
 export interface SoundPreferences { enabled: boolean; yield: boolean; idle: boolean; volume: number }
 export const SOUND_PREFERENCES_KEY = 'shadow:notification-sounds:v1'
 const defaults: SoundPreferences = { enabled: true, yield: true, idle: true, volume: 0.35 }
@@ -91,13 +93,14 @@ export function createNotificationSounds(options: {
     if (disposed || !context || context.state !== 'running' || !preferences.value.enabled || preferences.value.volume === 0) return
     try {
       const start = context.currentTime + 0.01
-      const tones = kind === 'yield' ? [659.25, 880] : [659.25, 523.25]
+      // A short, lower single note distinguishes delegated work from a session's two-note completion.
+      const tones = kind === 'subagent' ? [392] : kind === 'yield' ? [659.25, 880] : [659.25, 523.25]
       for (const [index, frequency] of tones.entries()) {
         const oscillator = context.createOscillator()
         const gain = context.createGain()
         const voice = { oscillator, gain }
         const time = start + index * 0.16
-        oscillator.type = 'sine'
+        oscillator.type = kind === 'subagent' ? 'triangle' : 'sine'
         oscillator.frequency.setValueAtTime(frequency, time)
         gain.gain.setValueAtTime(0, time)
         gain.gain.linearRampToValueAtTime(preferences.value.volume * 0.12, time + 0.012)
@@ -117,17 +120,17 @@ export function createNotificationSounds(options: {
     }
   }
   function notify(kind: NotificationSound) {
-    if (disposed || !ready.value || !preferences.value.enabled || !preferences.value[kind]
+    if (disposed || !ready.value || !preferences.value.enabled || !preferences.value[preferenceKey(kind)]
       || preferences.value.volume === 0) return
     const cooldown = 1500 - (now() - lastPlayed)
-    if (kind === 'idle' && cooldown > 0) return
-    if (!pending || kind === 'yield') pending = kind
+    if (kind !== 'yield' && cooldown > 0) return
+    if (!pending || priority[kind] > priority[pending]) pending = kind
     if (timer !== undefined) return
     timer = setTimeout(() => {
       const kind = pending
       timer = undefined
       pending = undefined
-      if (kind && preferences.value[kind]) play(kind)
+      if (kind && preferences.value[preferenceKey(kind)]) play(kind)
     }, Math.max(120, cooldown))
   }
   async function preview(kind: NotificationSound) {

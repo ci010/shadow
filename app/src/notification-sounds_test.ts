@@ -46,3 +46,28 @@ test('events do not create audio or accumulate a backlog before browser interact
   assert.equal(sounds.error.value, '')
   sounds.dispose()
 })
+
+
+test('delegated completion is a lower single triangle note, unlike the root completion pair', async () => {
+  const tones: { type: string; frequency: number }[] = []
+  const audio = {
+    state: 'running', currentTime: 0, destination: {}, close: async () => {},
+    createOscillator() {
+      const tone = { type: '', frequency: 0 }
+      tones.push(tone)
+      return {
+        set type(value: string) { tone.type = value },
+        frequency: { setValueAtTime(value: number) { tone.frequency = value } },
+        connect() {}, disconnect() {}, start() {}, stop() {},
+      }
+    },
+    createGain: () => ({ gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }),
+  } as unknown as AudioContext
+  const sounds = createNotificationSounds({ storage: { getItem: () => null, setItem() {} }, audio: () => audio })
+  await sounds.preview('idle')
+  assert.deepEqual(tones, [{ type: 'sine', frequency: 659.25 }, { type: 'sine', frequency: 523.25 }])
+  tones.length = 0
+  await sounds.preview('subagent')
+  assert.deepEqual(tones, [{ type: 'triangle', frequency: 392 }])
+  sounds.dispose()
+})

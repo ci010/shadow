@@ -3199,7 +3199,11 @@ chat panes or Electron business logic. After a user gesture unlocks Web Audio,
 the monitor observes the shared project catalog and session snapshots across
 Projects, including when another application page is open. It does not maintain
 its own graph/stages/catalog polling or duplicate the panes' snapshot reads.
-Observed work-to-idle transitions play a short descending cue; user-addressed yield
+Observed work-to-idle transitions play a short descending two-note cue for root
+sessions and a lower single triangle-wave note for persistent subagent sessions
+(with a parent session). Both completion cues follow the existing idle sound
+preference; simultaneous root completion takes priority over subagent completion.
+User-addressed yield
 requests play an ascending cue, deduplicated by question ID. Temporary tasks/calls,
 waiting-for-call transitions, initial snapshots and reconnect baselines do not
 produce question alerts. Cancelling an unanswered yield does not play an idle cue.

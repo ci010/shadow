@@ -104,12 +104,14 @@ export function startSessionSoundMonitor(options: {
         }
         if (options.live.isLive && !options.live.isLive()) { tracker.reset(); finished.clear() }
         const changes = tracker.observe(snapshot)
-        let idle = changes.idle.length > 0
+        const completionSound = (sessionId: string): NotificationSound =>
+          snapshot.sessions.find(session => session.sessionId === sessionId)?.parentSessionId ? 'subagent' : 'idle'
+        const idleSounds = changes.idle.map(completionSound)
         for (const [sessionId, turnId] of finished) {
           const session = snapshot.sessions.find(session => session.sessionId === sessionId)
           if (session && isNotificationSession(session) && snapshot.stages[sessionId] === 'idle') {
             if (tracker.completion(sessionId, turnId) && !changes.baseline) {
-              idle = true
+              idleSounds.push(completionSound(sessionId))
               options.completed?.({
                 projectId, projectName: catalog.state.value?.find(project => project.id === projectId)?.name || projectId,
                 sessionId, name: session.label, turnId,
@@ -127,7 +129,7 @@ export function startSessionSoundMonitor(options: {
           if (question?.recipient.kind === 'user' && tracker.question(sessionId, question.id, changes.baseline)) needsAnswer = true
         }
         if (needsAnswer) options.notify('yield')
-        else if (idle) options.notify('idle')
+        else if (idleSounds.length) options.notify(idleSounds.includes('idle') ? 'idle' : 'subagent')
         report(`project:${projectId}`, '')
       } catch (cause) {
         if (!signal.aborted && ownGeneration === generation) {
