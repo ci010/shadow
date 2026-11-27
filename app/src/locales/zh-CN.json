@@ -3988,7 +3988,7 @@
   "Some projects could not be loaded ({count}). Totals include only available usage.": "有 {count} 个项目未能加载。总计仅包含可用的用量。",
   "Select a project to browse its daily history.": "选择一个项目以浏览其每日历史。",
   "No project usage available.": "没有可用的项目用量。",
-  "Usage": "用量",
+  "Usage": "统计数据",
   "All time": "累计",
   "Past 7 days": "过去 7 天",
   "This month": "本月",

@@ -11,16 +11,19 @@ export type AppRouteName =
 export interface NavigationItem {
   name: AppRouteName
   label: string
+  icon: string
 }
 
 const NAVIGATION_POLICY: readonly NavigationItem[] = [
   {
     name: 'chat',
+    icon: 'i-lucide-messages-square',
     get label() { return t('Chat') },
   },
-  { name: 'usage', get label() { return t('Usage') } },
+  { name: 'usage', icon: 'i-lucide-chart-no-axes-column', get label() { return t('Usage') } },
   {
     name: 'settings',
+    icon: 'i-lucide-settings',
     get label() { return t('Settings') },
   },
 ]
@@ -30,5 +33,5 @@ const NAVIGATION_POLICY: readonly NavigationItem[] = [
 export function navigationFor(
   _context: { readonly mode: InstallationMode },
 ): NavigationItem[] {
-  return NAVIGATION_POLICY.map(({ name, label }) => ({ name, label }))
+  return NAVIGATION_POLICY.map(({ name, label, icon }) => ({ name, label, icon }))
 }

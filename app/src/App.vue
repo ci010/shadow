@@ -7,7 +7,7 @@
           @wheel="!mobile.enabled.value && scrollEditorTabs($event, $event.currentTarget as HTMLElement)" :aria-label="t('Main navigation')">
           <router-link v-for="item in navigationItems" :key="item.name" :to="navigationLocation(item.name)" custom v-slot="{ navigate }">
             <button type="button" class="tab" :class="{ active: navigationPage === item.name }"
-              :aria-current="navigationPage === item.name ? 'page' : undefined" @click="navigate">{{ item.label }}</button>
+              :aria-current="navigationPage === item.name ? 'page' : undefined" @click="navigate"><span :class="item.icon" class="tab-icon" aria-hidden="true" /><span>{{ item.label }}</span></button>
           </router-link>
           <span v-if="!mobile.enabled.value" ref="projectsToggleTarget" class="projects-toggle-target" />
         </nav>
@@ -278,6 +278,9 @@ onUnmounted(() => {
 }
 
 .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
   border: none;
   background: transparent;
@@ -292,6 +295,8 @@ onUnmounted(() => {
   border-bottom: 2px solid transparent;
   transition: color 0.15s ease, border-color 0.15s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
+
+.tab-icon { width: 14px; height: 14px; flex: none; }
 
 .tab:hover {
   color: var(--c-text-secondary);

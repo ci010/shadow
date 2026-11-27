@@ -44,3 +44,13 @@ test('app content follows navigation without a persistent runtime status row', a
   assert.match(app, /<main class="app-main">/)
     assert.match(app, /@manage-node="router.push\(\{ name: 'settings', params: \{ section: 'nodes' \} \}\)"/)
 })
+test('main navigation exposes an icon for each labeled button', async () => {
+  const items = navigationFor(createLocalMainAdminContext('http://localhost'))
+  assertEquals(items.map(({ icon }) => icon), [
+    'i-lucide-messages-square', 'i-lucide-chart-no-axes-column', 'i-lucide-settings',
+  ])
+  const app = await readFile(new URL('./App.vue', import.meta.url), 'utf8')
+  assert.match(app, /:class="item.icon" class="tab-icon" aria-hidden="true"/)
+  const zh = JSON.parse(await readFile(new URL('./locales/zh-CN.json', import.meta.url), 'utf8'))
+  assertEquals(zh.Usage, '统计数据')
+})
