@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { projectStoragePath } from '../utils/data-paths.ts'
+import { projectDataPaths } from '../utils/data-paths.ts'
+import { removeSessionOutput, sessionOutputDirectory } from '../utils/output-spill.ts'
 import { test, type TestContext } from 'node:test'
 import { Bus } from '../bus/bus.ts'
 import { EventService } from '../events/service.ts'
@@ -320,6 +321,7 @@ test('a failed stop remains retryable and does not release active-work accountin
 async function outputFixture(t: TestContext) {
   const root = await mkdtemp(resolve('.background-output-test-'))
   const home = join(root, 'project-home')
+  await mkdir(home)
   const scope = createProjectScope(crypto.randomUUID())
   const bus = new Bus()
   const deliveries: SessionMessageInput[] = []
@@ -342,14 +344,14 @@ async function outputFixture(t: TestContext) {
   return { home, tasks, deliveries, displays }
 }
 
-test('oversized callbacks save exact success/error and prefix in their owning Project, with bounded metadata', async t => {
+test('oversized callbacks save exact success/error and prefix in the recipient session, with bounded metadata', async t => {
   const fixtures = await Promise.all([outputFixture(t), outputFixture(t)])
   for (const [index, f] of fixtures.entries()) {
     const failed = index === 1
     const prefix = failed ? 'Failure continuation' : 'Long continuation\n'.repeat(900)
     const result = '  \n' + 'large output 界\n'.repeat(220_000) + '\n  END  \n'
     const task = f.tasks.createDeferredTask({
-      kind: 'process', title: 'Long title'.repeat(2000), sessionId: 'qq:target',
+      kind: 'process', title: 'Long title'.repeat(2000), sessionId: 'qq:origin',
       callback: { sessionId: 'qq:target', contentPrefix: prefix },
     })
     if (failed) task.fail(new Error(result))
@@ -361,16 +363,17 @@ test('oversized callbacks save exact success/error and prefix in their owning Pr
     assert(input.content.startsWith(prefix.slice(0, 12_000)))
     assert(JSON.stringify(input.source.attributes).length < 600)
     assert.equal(String(input.source.attributes?.status).startsWith(failed ? 'failed: ' : 'completed'), true)
-    const path = /Full output saved to: (\.tmp\/[^\n]+)/.exec(input.content)?.[1]
-    assert(path)
-    const stored = await readFile(projectStoragePath(f.home, path), 'utf8')
+    const filename = /Full output saved to: v:output\/([^\n]+)/.exec(input.content)?.[1]
+    assert(filename)
+    const stored = await readFile(join(sessionOutputDirectory(f.home, 'qq:target'), filename), 'utf8')
     assert.equal(stored, `${prefix}\n\n${result}`)
     assert.match(input.content, /flag="c", offset=1/)
     assert.doesNotMatch(input.content, /offset=12000/)
     assert((await f.tasks.getTaskOutput(task.taskId)).endsWith(result))
-    assert.equal((await readdir(projectStoragePath(f.home, '.tmp'))).length, 1)
+    assert.equal((await readdir(sessionOutputDirectory(f.home, 'qq:target'))).length, 1)
+    await assert.rejects(readdir(sessionOutputDirectory(f.home, 'qq:origin')), { code: 'ENOENT' })
     assert(f.displays.every(display => display.content.length < 500))
-    await assert.rejects(readFile(projectStoragePath(fixtures[1 - index].home, path)))
+    await assert.rejects(readFile(join(sessionOutputDirectory(fixtures[1 - index].home, 'qq:target'), filename)))
   }
 })
 
@@ -386,14 +389,14 @@ test('small callback semantics and exact threshold remain unchanged without a sp
     }).complete(result)
     await t.waitFor(() => assert.equal(f.deliveries.at(-1)?.content, expected))
   }
-  await assert.rejects(readdir(projectStoragePath(f.home, '.tmp')))
+  await assert.rejects(readdir(sessionOutputDirectory(f.home, 'web:target')))
 })
 
 test('spill failure publishes only a bounded explicit unsaved notice and preserves full error in memory', async t => {
   const f = await outputFixture(t)
   await mkdir(f.home, { recursive: true })
   // A file where the directory belongs deterministically exercises persistence failure.
-  await writeFile(projectStoragePath(f.home, '.tmp'), 'blocked')
+  await writeFile(projectDataPaths(f.home).workdirs, 'blocked')
   const error = 'ENOSPC output\n'.repeat(250_000)
   const task = f.tasks.createDeferredTask({ kind: 'process', title: 'Failed spill',
     callback: { sessionId: 'qq:target' },
@@ -419,7 +422,24 @@ test('shutdown drains an accepted oversized callback including persistence and e
   await f.tasks.stop()
   assert.equal(f.tasks.hasRunningTasks, false)
   assert.equal(f.deliveries.length, 1)
-  const files = await readdir(projectStoragePath(f.home, '.tmp'))
+  const files = await readdir(sessionOutputDirectory(f.home, 'web:target'))
   assert.equal(files.length, 1)
-  assert.equal(await readFile(join(projectStoragePath(f.home, '.tmp'), files[0]), 'utf8'), 'continue\n\n' + 'z'.repeat(100_000))
+  assert.equal(await readFile(join(sessionOutputDirectory(f.home, 'web:target'), files[0]), 'utf8'), 'continue\n\n' + 'z'.repeat(100_000))
+})
+
+test('session deletion drains in-flight spills and late completions cannot recreate them', async t => {
+  const f = await outputFixture(t)
+  const sessionId = 'web:target'
+  const callback = { sessionId }
+  const late = f.tasks.createDeferredTask({ kind: 'process', title: 'Late', sessionId, callback })
+  f.tasks.createDeferredTask({ kind: 'process', title: 'In flight', callback }).complete('x'.repeat(13_000))
+  await f.tasks.detachSessionOutput(sessionId)
+  await removeSessionOutput(f.home, sessionId)
+  assert.match(f.tasks.setContinuation(late.taskId, 'do not recreate'), /no longer has a callback session/)
+  const result = 'y'.repeat(13_000)
+  late.complete(result)
+  await f.tasks.stop()
+  await assert.rejects(readdir(sessionOutputDirectory(f.home, sessionId)), { code: 'ENOENT' })
+  assert.equal(f.deliveries.length, 0)
+  assert((await f.tasks.awaitTask(late.taskId)).endsWith(result))
 })

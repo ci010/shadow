@@ -234,7 +234,7 @@ export class ReadTool implements Tool<ToolResult> {
       flag: {
         type: 'string',
         description:
-          'n = line numbers, r = raw URL text, l = list mode (paginate by items). Combine: "nl". c = character paging for generated Project Home output spills only; use alone.',
+          'n = line numbers, r = raw URL text, l = list mode (paginate by items). Combine: "nl". c = character paging for generated session output references (v:output/) or legacy .tmp/ spills; use alone.',
       },
     },
     required: ['path'],
@@ -246,18 +246,17 @@ export class ReadTool implements Tool<ToolResult> {
     args: Record<string, unknown>,
     context: ExecutionContext,
   ): Promise<ToolResult> {
-    // A spill is an explicitly named Project resource, not a path on the selected
-    // Child/LayerFS workspace. Never try the local filesystem for a target path.
+    // Spills are host-owned session data, not paths on the selected workdir.
     if (args.flag === 'c') {
       if (args.workspace !== undefined || args.folder !== undefined || args.encoding !== undefined || context.javascriptInvocation) {
-        throw new Error('Output spill reads use Project Home; workspace, encoding and JavaScript bridge calls are not supported.')
+        throw new Error('Output spill reads use host storage; workspace, encoding and JavaScript bridge calls are not supported.')
       }
       for (const key of ['offset', 'limit']) {
         if (args[key] !== undefined && (!Number.isSafeInteger(args[key]) || Number(args[key]) < 1)) {
           throw new TypeError(`${key} must be a positive safe integer.`)
         }
       }
-      return readOutputSpill(this.workspace, String(args.path), Number(args.offset ?? 1), Number(args.limit ?? OUTPUT_PREVIEW_CHARS), context.signal)
+      return readOutputSpill(this.workspace, context.sessionId, String(args.path), Number(args.offset ?? 1), Number(args.limit ?? OUTPUT_PREVIEW_CHARS), context.signal)
     }
     context = await executionTargetContext(args, context, 'filesystem.read')
     const raw = String(args.path)

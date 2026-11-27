@@ -1634,12 +1634,19 @@ logged rather than treated as authorization failures.
 
 Ordinary tool results (including Child `exec`) and background completion text
 share a 12,000-character preview budget. Oversized results keep their captured
-text in a Project Home `.tmp/` file. The result includes a preview and a `read`
-reference with `flag: "c"` for character paging, including single-line output.
-This explicit artifact read works from local, Child, and LayerFS sessions; it
-does not resolve a path on the selected execution device. The saved text is what
-Shadow captured, not output already discarded by an execution-side limit. A
-spill failure still produces a bounded preview and an explicit unsaved notice.
+text under the logical session's data folder (`.tool-output/`). The result includes
+a preview and a `v:output/…` reference: use `read` with `flag: "c"` for character
+paging, including single-line output. The reference is scoped to the current
+logical session, not the current physical segment or selected workspace; it
+works from local, Child, and LayerFS sessions without accessing the selected
+execution device. It is not automatically readable from a fork or another
+session. Background callbacks store the output in the receiving session.
+Spills survive sleep, restart, context reset, and archival, and are removed
+when the owning session is explicitly deleted. Existing generated `.tmp/`
+references still read from Project Home as long as their legacy files exist.
+The saved text is what Shadow captured, not output already discarded by an
+execution-side limit. A spill failure still produces a bounded preview and an
+explicit unsaved notice.
 
 Before inference, the session applies the same file-backed preview to tool text
 above a 64,000-character ceiling, including old history and results that keep

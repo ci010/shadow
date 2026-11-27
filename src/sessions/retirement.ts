@@ -9,6 +9,7 @@ import type { SessionManager } from './session-manager.ts'
 import type { SessionState } from './session-store.ts'
 import { RETIREMENT_INACTIVITY_DAYS, retirementProposalSchema } from './retirement-contract.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
+import { SESSION_OUTPUT_DIR } from '../utils/output-spill.ts'
 
 export function inside(root: string, path: string): boolean {
   const part = relative(resolve(root), resolve(path))
@@ -47,6 +48,8 @@ export async function inspectDrafts(root: string): Promise<DraftFile[]> {
     for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
       const path = join(directory, entry.name)
       await plainPath(path)
+      // Captured output is retained with archived history, not a draft deliverable.
+      if (directory === root && entry.name === SESSION_OUTPUT_DIR && entry.isDirectory()) continue
       if (entry.isDirectory()) await visit(path)
       else {
         if (!entry.isFile()) throw new Error('Non-regular draft is protected')

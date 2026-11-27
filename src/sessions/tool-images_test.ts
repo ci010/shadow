@@ -38,7 +38,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         const result = input.find(message => message.role === 'tool' && message.tool_call_id === 'legacy')
         assert(result && typeof result.content === 'string')
         assert(result.content.length < 12_500)
-        assert.match(result.content, /Full output saved to: \.tmp\/tool-result-exec-/)
+        assert.match(result.content, /Full output saved to: v:output\/tool-result-exec-/)
         assert(!result.content.includes('output tail'))
         return { content: 'Finished', toolCalls: [] }
       } }

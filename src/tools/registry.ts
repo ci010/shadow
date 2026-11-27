@@ -180,7 +180,7 @@ export class Tools {
           )
         ))
       ) {
-        text = await this.truncateAndSave(name, text)
+        text = await this.truncateAndSave(context.sessionId, name, text)
       }
       const isError = typeof result !== 'string' && result.isError
       return images.length || (context.javascriptInvocation && isError)
@@ -202,7 +202,7 @@ export class Tools {
       s?.setStatus({ code: 2, message: msg })
       const text = `Error executing ${name}: ${msg}`
       return !context.javascriptInvocation && text.length > this.truncationThreshold
-        ? this.truncateAndSave(name, text) : text
+        ? this.truncateAndSave(context.sessionId, name, text) : text
     }
   }
 
@@ -251,10 +251,11 @@ export class Tools {
    * with a pointer telling the AI to `read` for the rest.
    */
   private async truncateAndSave(
+    sessionId: string,
     toolName: string,
     result: string,
   ): Promise<string> {
-    return spillOutputPreview(this.workspace, `tool-result-${toolName}`, result, this.truncationThreshold)
+    return spillOutputPreview(this.workspace, sessionId, `tool-result-${toolName}`, result, this.truncationThreshold)
   }
 
   /** Return OpenAI function-calling compatible definitions. */

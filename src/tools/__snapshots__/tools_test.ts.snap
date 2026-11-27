@@ -39,7 +39,7 @@ exports[`tools — base tool definitions as sent to the LLM API are pinned 1`] =
           },
           "flag": {
             "type": "string",
-            "description": "n = line numbers, r = raw URL text, l = list mode (paginate by items). Combine: \\"nl\\"."
+            "description": "n = line numbers, r = raw URL text, l = list mode (paginate by items). Combine: \\"nl\\". c = character paging for generated session output references (v:output/) or legacy .tmp/ spills; use alone."
           }
         },
         "required": [

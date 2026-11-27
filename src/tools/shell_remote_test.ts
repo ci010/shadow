@@ -13,7 +13,8 @@ import { executeRemoteShell } from '../execution/remote-shell-client.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { ReadTool } from './read.ts'
 import { readFile } from 'node:fs/promises'
-import { projectStoragePath } from '../utils/data-paths.ts'
+import { sessionOutputDirectory } from '../utils/output-spill.ts'
+import { join } from 'node:path'
 
 function fixture(nodeOnly = false) {
   const requests: ExecutionRequestV2[] = []
@@ -178,14 +179,16 @@ test('remote exec spills exact large output; the same session can read it withou
   const preview = requireToolText(await tools.execute('exec', { script: 'produce output' }, ctx))
   assert(preview.length < 12_500)
   assert.match(preview, /\[truncated: 7002 chars remaining\]/)
-  const path = /Full output saved to: (\.tmp\/[^\n]+)/.exec(preview)?.[1]
-  assert(path)
-  assert.equal(await readFile(projectStoragePath(home, path), 'utf8'), output)
+  const filename = /Full output saved to: v:output\/([^\n]+)/.exec(preview)?.[1]
+  assert(filename)
+  const path = `v:output/${filename}`
+  assert.equal(await readFile(join(sessionOutputDirectory(home, ctx.sessionId), filename), 'utf8'), output)
   const page = requireToolText(await tools.execute('read', { path, flag: 'c' }, ctx))
   assert.match(page, /offset=12000 to continue/)
   assert.equal(page.slice(0, 11_999), output.slice(0, 11_999))
   assert.equal(await tools.execute('read', { path, flag: 'c', offset: 12_000 }, ctx), output.slice(11_999))
   assert.match(requireToolText(await tools.execute('read', { path: '.tmp/not-an-output.txt', flag: 'c' }, ctx)), /only for generated tool-output/)
+  assert.match(requireToolText(await tools.execute('read', { path, flag: 'c' }, { ...ctx, sessionId: 'web:other' })), /^Error executing read:/)
   assert.equal(requests.length, 1)
 }))
 

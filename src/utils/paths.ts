@@ -5,7 +5,7 @@ import { resolveLegacyProjectPath } from '../storage/legacy-paths.ts'
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 
 /**
- * Remove stale tool-result temp files older than `maxAgeMs` from `<Project Home>/tmp/`.
+ * Remove stale legacy tool-result temp files older than `maxAgeMs` from `<Project Home>/tmp/`.
  */
 export async function cleanupTempFiles(
   workspace: string,

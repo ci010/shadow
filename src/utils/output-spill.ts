@@ -1,22 +1,56 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { lstat, mkdir, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { projectStoragePath } from './data-paths.ts'
+import { projectDataPaths, projectStoragePath } from './data-paths.ts'
+import { sessionWorkspacePath } from './paths.ts'
 import { OUTPUT_PREVIEW_CHARS, outputPreview, safePrefix } from './output-preview.ts'
 
-export const OUTPUT_SPILL_PATH = /^\.tmp\/(?:tool-result|background-task)-[\w-]+-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.txt$/
+export const SESSION_OUTPUT_DIR = '.tool-output'
+const spillReference = /^(v:output|\.tmp)\/((?:tool-result|background-task)-[\w-]+-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.txt)$/
+
+/** Workdirs can be shared or have colliding legacy safe IDs; spills never share ownership. */
+export function sessionOutputDirectory(home: string, sessionId: string): string {
+  return join(sessionWorkspacePath(home, sessionId), SESSION_OUTPUT_DIR, createHash('sha256').update(sessionId).digest('hex'))
+}
+
+async function checkDirectory(path: string, create: boolean): Promise<void> {
+  if (create) {
+    try { await mkdir(path, { mode: 0o700 }) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+  }
+  if (!(await lstat(path)).isDirectory()) throw new Error('Output spill storage must be a regular directory, not a link.')
+}
+
+async function resolveOutputDirectory(home: string, sessionId: string, create: boolean): Promise<string> {
+  const workdirs = projectDataPaths(home).workdirs
+  const sessionDir = sessionWorkspacePath(home, sessionId)
+  const directory = sessionOutputDirectory(home, sessionId)
+  // Check before descending: a session's managed workdir can be edited by tools.
+  for (const component of [workdirs, sessionDir, join(sessionDir, SESSION_OUTPUT_DIR), directory]) {
+    await checkDirectory(component, create)
+  }
+  return directory
+}
+
+export async function removeSessionOutput(home: string, sessionId: string): Promise<void> {
+  try { await rm(await resolveOutputDirectory(home, sessionId, false), { recursive: true, force: true }) }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+}
 
 export async function spillOutputPreview(
-  workspace: string | undefined, label: string, text: string,
+  home: string | undefined, sessionId: string, label: string, text: string,
   limit = OUTPUT_PREVIEW_CHARS,
-  onError: (error: unknown) => string = () => 'Full output was NOT saved: Project scratch storage is unavailable.',
+  onError: (error: unknown) => string = () => 'Full output was NOT saved: session output storage is unavailable.',
 ): Promise<string> {
   if (text.length <= limit) return text
   const preview = outputPreview(text, limit)
   try {
-    if (!workspace) throw new Error('Project Home is unavailable')
-    const path = await saveOutputSpill(workspace, label, text)
+    if (!home || !sessionId) throw new Error('Session output storage is unavailable')
+    const directory = await resolveOutputDirectory(home, sessionId, true)
+    const filename = `${label.replace(/[^\w-]/g, '_').slice(0, 80)}-${randomUUID()}.txt`
+    await writeFile(join(directory, filename), text, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    const path = `v:output/${filename}`
     return preview + `Full output saved to: ${path}\n` +
       `Use read with path=${JSON.stringify(path)}, flag="c", offset=1 to page through the captured output.`
   } catch (error) {
@@ -24,19 +58,13 @@ export async function spillOutputPreview(
   }
 }
 
-/** Store the exact captured output, not the model preview, in its owning Project. */
-async function saveOutputSpill(workspace: string, label: string, text: string): Promise<string> {
-  const directory = projectStoragePath(workspace, '.tmp')
-  const filename = `${label.replace(/[^\w-]/g, '_').slice(0, 80)}-${randomUUID()}.txt`
-  await mkdir(directory, { recursive: true })
-  await writeFile(join(directory, filename), text, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
-  return `.tmp/${filename}`
-}
-
 /** Read a bounded UTF-8 spill page, even if the output is a single huge line. */
-export async function readOutputSpill(workspace: string, path: string, offset: number, limit: number, signal: AbortSignal): Promise<string> {
-  if (!OUTPUT_SPILL_PATH.test(path)) throw new Error('Flag c is only for generated tool-output files in Project Home .tmp/.')
-  const file = projectStoragePath(workspace, path)
+export async function readOutputSpill(home: string, sessionId: string, path: string, offset: number, limit: number, signal: AbortSignal): Promise<string> {
+  const match = spillReference.exec(path)
+  if (!match) throw new Error('Flag c is only for generated tool-output references (v:output/ or legacy .tmp/).')
+  const file = match[1] === 'v:output'
+    ? join(await resolveOutputDirectory(home, sessionId, false), match[2]!)
+    : projectStoragePath(home, path)
   if (!(await lstat(file)).isFile()) throw new Error('The output spill must be a regular file.')
   const size = Math.min(OUTPUT_PREVIEW_CHARS, limit)
   let skip = offset - 1

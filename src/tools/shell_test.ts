@@ -29,6 +29,8 @@ import { defaultManagedShell } from '../execution/processes/shells.ts'
 import { resolveAgentPath } from '../utils/paths.ts'
 import { CommandHandlerManager, type CommandContext } from './shell-commands/command-handler.ts'
 import { ExecTool } from './shell.ts'
+import { ReadTool } from './read.ts'
+import { sessionOutputDirectory } from '../utils/output-spill.ts'
 import { resolveSessionLocations } from '../sessions/locality.ts'
 import { localExecSafegitEnv } from '../execution/git/safegit.ts'
 import { localExecSafegitAliasEnv } from '../execution/git/safegit-alias.ts'
@@ -728,4 +730,26 @@ test('OS shell, unlike JavaScript, use current logical session data despite inhe
     scope.close()
     await rm(workspace, { recursive: true, force: true })
   }
+})
+
+test('oversized local exec output belongs to the logical session, not inherited cwd', async () => {
+  const tool = new ExecTool(sandbox, 120_000, new CommandHandlerManager(), new RealProcessManager(),
+    defaultManagedShell(), new RecordingBackgroundTasks() as unknown as BackgroundTaskManager)
+  const base = new Tools(sandbox)
+  base.register(new ReadTool(sandbox))
+  const owner = 'web:root'
+  const inherited = resolveSessionLocations(sandbox, { sessionId: owner }).sessionDataDir
+  await mkdir(inherited, { recursive: true })
+  const ctx = { ...callContext(sandbox, tool, undefined, base), sessionId: 'virtual:leaf', workspaceRoot: owner, cwd: inherited }
+  const shell = process.platform === 'win32' ? 'cmd' : 'sh'
+  const preview = requireToolText(await ctx.tools.execute('exec', {
+    shell, script: 'node -e "process.stdout.write(\'x\'.repeat(13000) + \'END\')"',
+  }, ctx))
+  const filename = /Full output saved to: v:output\/([^\n]+)/.exec(preview)?.[1]
+  assert(filename, preview.slice(-500))
+  assert.equal(await readFile(join(sessionOutputDirectory(sandbox, ctx.sessionId), filename), 'utf8'), 'x'.repeat(13_000) + 'END')
+  assert.equal(existsSync(sessionOutputDirectory(sandbox, owner)), false)
+  assert.equal(await ctx.tools.execute('read', { path: `v:output/${filename}`, flag: 'c', offset: 13_001 }, {
+    ...ctx, physicalSessionId: 'another-segment',
+  }), 'END')
 })

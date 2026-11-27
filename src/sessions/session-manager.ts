@@ -36,6 +36,7 @@ import type { AgentTypesManager } from '../agent/types/manager.ts'
 import { isRetiredBuiltinGeneral, type AgentTypeDefinition } from '../agent/types/types.ts'
 import type { ConversationPolicies } from '../bots/conversation-policy.ts'
 import type { BackgroundTaskManager } from '../agent/background-task.ts'
+import { removeSessionOutput } from '../utils/output-spill.ts'
 import type {
   ContextBuilder,
   SessionPromptContext,
@@ -3126,6 +3127,9 @@ ${JSON.stringify(request)}`,
     }
 
     delete this.sessions[sessionId]
+    await this.deps.backgroundTasks.detachSessionOutput(sessionId)
+
+    await removeSessionOutput(this.deps.workspace, sessionId)
 
     // Truncated legacy addresses cannot prove exclusive ownership, even after the last owner is removed.
     const retainedHistory = hasTruncatedLegacyHistory(state) || Object.values(this.sessionStates).some(other =>

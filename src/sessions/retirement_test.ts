@@ -11,6 +11,7 @@ import { EventService } from '../events/service.ts'
 import { Tools } from '../tools/registry.ts'
 import { withTempWorkspace } from '../testing/workspace.ts'
 import { sessionWorkspacePath } from '../utils/paths.ts'
+import { readOutputSpill, spillOutputPreview } from '../utils/output-spill.ts'
 import type { LLMProvider } from '../providers/provider.ts'
 import { HandoffManager } from './handoff/manager.ts'
 import { SessionManager } from './session-manager.ts'
@@ -169,6 +170,9 @@ test('draft inventory rejects traversal and linked paths; safe copies are verifi
     await mkdir(destination)
     await mkdir(root, { recursive: true })
     await writeFile(join(root, 'result.txt'), 'valuable output')
+    const capture = await spillOutputPreview(workspace, id, 'tool-result-exec', 'x'.repeat(90_000))
+    const spillPath = /Full output saved to: (v:output\/[^\n]+)/.exec(capture)?.[1]
+    assert(spillPath)
     const output = join(destination, 'result.txt')
     const f = await fixture(workspace, new JsonlSessionStore(join(workspace, 'sessions')), async () => ({
       ...completed, files: [{ source: 'result.txt', destination: output }],
@@ -188,6 +192,8 @@ test('draft inventory rejects traversal and linked paths; safe copies are verifi
       assert.equal(await readFile(output, 'utf8'), 'valuable output')
       assert.ok((await f.sessions.readSessionState(id))?.retirement)
       assert.equal(await readFile(join(root, 'result.txt'), 'utf8'), 'valuable output')
+      assert.equal(await readOutputSpill(workspace, id, spillPath, 1, 3, new AbortController().signal),
+        'xxx\n\n[more output: use flag="c" and offset=4 to continue]')
       try {
         await symlink(destination, join(root, 'linked'), 'junction')
         await assert.rejects(inspectDrafts(root), /Linked/)

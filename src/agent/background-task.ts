@@ -56,6 +56,7 @@ interface BackgroundTaskRecord extends BackgroundTaskSummary {
   result?: string
   origin?: InputOrigin
   callback?: BackgroundTaskCallback
+  outputDetached?: boolean
   /** Returns live output for a running task (e.g. partial stdout, session history). */
   observe?: () => Promise<string> | string
   /** Deferred tasks must confirm cleanup here; promise tasks also await their execution. */
@@ -77,7 +78,7 @@ export class BackgroundTaskManager {
   private tasks = new Map<string, BackgroundTaskRecord>()
   private subscriptionId: string
   private stopped = false
-  private callbacks = new Set<Promise<void>>()
+  private callbacks = new Map<Promise<void>, string>()
 
   constructor(
     private bus: Bus,
@@ -113,9 +114,22 @@ export class BackgroundTaskManager {
       if (task.onCancel) return this.requestCancellation(task, 'shutdown')
       this.failTask(task.id, 'Project runtime stopped', true)
     }))
-    await Promise.allSettled(this.callbacks)
+    await Promise.allSettled(this.callbacks.keys())
     const errors = results.filter(result => result.status === 'rejected').map(result => result.reason)
     if (errors.length) throw new AggregateError(errors, 'Background task shutdown failed')
+  }
+
+  /** Prevent pre-deletion tasks from recreating the recipient's output directory. */
+  async detachSessionOutput(sessionId: string): Promise<void> {
+    const runningTools: Promise<unknown>[] = []
+    for (const task of this.tasks.values()) {
+      if (task.callback?.sessionId === sessionId) task.callback = undefined
+      if (task.sessionId !== sessionId) continue
+      task.outputDetached = true
+      if (task.kind === 'tool' && active(task) && task.onCancel) runningTools.push(this.requestCancellation(task))
+    }
+    await Promise.all(runningTools)
+    await Promise.allSettled([...this.callbacks].filter(([, recipient]) => recipient === sessionId).map(([pending]) => pending))
   }
 
   private runOwned<T>(callback: () => T): T {
@@ -357,6 +371,7 @@ export class BackgroundTaskManager {
       return `Continuation not changed: ${backgroundExecutionId(taskId)} is already ${task.status}. No completion event was replayed. Read v:bg/${backgroundExecutionId(taskId)} for its result.`
     }
     if (!task.callback) {
+      if (task.outputDetached) return `Error: task ${taskId} no longer has a callback session`
       if (!task.sessionId) return `Error: task ${taskId} has no callback session`
       task.callback = { sessionId: task.sessionId }
     }
@@ -442,12 +457,13 @@ export class BackgroundTaskManager {
   }
 
   private notifyCallback(task: BackgroundTaskRecord): void {
-    if (this.stopped) return
-    const pending = this.runOwned(() => this.publishCallback(task)).catch((error) => {
+    const callback = task.callback
+    if (this.stopped || !callback) return
+    const pending = this.runOwned(() => this.publishCallback(task, callback)).catch((error) => {
       task.callbackError = errMsg(error)
-      console.error(`[background-task] Callback delivery failed (${task.id}, ${task.callback?.sessionId}):`, error)
+      console.error(`[background-task] Callback delivery failed (${task.id}, ${callback.sessionId}):`, error)
     })
-    this.callbacks.add(pending)
+    this.callbacks.set(pending, callback.sessionId)
     void pending.then(() => this.callbacks.delete(pending))
   }
 
@@ -457,37 +473,36 @@ export class BackgroundTaskManager {
     })
   }
 
-  private async publishCallback(task: BackgroundTaskRecord): Promise<void> {
-    if (!task.callback) return
-
+  private async publishCallback(task: BackgroundTaskRecord, callback: BackgroundTaskCallback): Promise<void> {
     const statusLine = task.status === 'completed'
       ? 'completed'
       : `failed: ${callbackSummary(task.error ?? 'unknown error')}`
     const detail = task.status === 'completed'
       ? task.result?.trim() || '(no result)'
       : task.error ?? 'unknown error'
-    const prefix = task.callback.contentPrefix?.trim()
+    const prefix = callback.contentPrefix?.trim()
     let content = prefix ? `${prefix}\n\n${detail}` : detail
     // Keep the exact result/error (including whitespace) in the spill file.
     // The prefix shares the preview budget; it cannot bypass the event limit.
     const rawDetail = task.status === 'completed' ? task.result ?? '' : task.error ?? 'unknown error'
-    const rawContent = task.callback.contentPrefix
-      ? `${task.callback.contentPrefix}\n\n${rawDetail}` : rawDetail
+    const rawContent = callback.contentPrefix
+      ? `${callback.contentPrefix}\n\n${rawDetail}` : rawDetail
     if (rawContent.length > OUTPUT_PREVIEW_CHARS) {
-      content = await spillOutputPreview(this.workspace, `background-task-${task.id}`, rawContent, OUTPUT_PREVIEW_CHARS,
+      content = await spillOutputPreview(this.workspace, callback.sessionId, `background-task-${task.id}`, rawContent, OUTPUT_PREVIEW_CHARS,
         error => `Full output was NOT saved: ${callbackSummary(errMsg(error))}.\n` +
           `The full result/error remains available in memory at v:bg/${backgroundExecutionId(task.id)} while this runtime is alive.`)
     }
 
-    const eventType = task.callback.eventType ?? 'background-task-complete'
+    if (task.callback !== callback) return
+    const eventType = callback.eventType ?? 'background-task-complete'
 
     await this.events.emit({
       type: eventType,
       source: 'background-task',
       content,
-      targetSessionId: task.callback.sessionId,
-      senderName: task.callback.senderName ?? 'Background Task',
-      isGroup: task.callback.isGroup,
+      targetSessionId: callback.sessionId,
+      senderName: callback.senderName ?? 'Background Task',
+      isGroup: callback.isGroup,
       origin: task.origin,
       meta: {
         'task-id': task.id,
@@ -497,9 +512,9 @@ export class BackgroundTaskManager {
       },
     })
     task.callbackError = undefined
-    if (this.stopped) return
+    if (this.stopped || task.callback !== callback) return
 
-    const reply = task.callback.replyTo ?? sessionReplyAddress(task.callback.sessionId)
+    const reply = callback.replyTo ?? sessionReplyAddress(callback.sessionId)
     // Web renders the persisted session event (also delivered live as session_message).
     // A response here would create a second, transient assistant message that
     // disappears on history refresh and can leave the UI in streaming state.

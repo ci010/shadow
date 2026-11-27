@@ -1,7 +1,8 @@
 import { projectStoragePath } from '../utils/data-paths.ts'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readOutputSpill, spillOutputPreview } from '../utils/output-spill.ts'
 import { join } from 'node:path'
 import { setImmediate } from 'node:timers/promises'
 import { Bus } from '../bus/bus.ts'
@@ -112,6 +113,11 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           })
           await f.send(id, 'OLD_CONVERSATION')
           const original = structuredClone(f.sessions.getSessionState(id)!)
+          const captured = 'x'.repeat(13_000)
+          const preview = await spillOutputPreview(workspace, id, 'tool-result-exec', captured)
+          const spillPath = /Full output saved to: (v:output\/[^\n]+)/.exec(preview)?.[1]
+          assert(spillPath)
+          const readCapture = () => readOutputSpill(workspace, id, spillPath, 12001, 1000, new AbortController().signal)
           const oldLog = await Array.fromAsync(store.readSessionLog(physicalSessionId(original)))
           const oldActive = f.sessions.getActiveSession(id)
           const memoryFile = join(workspace, 'memory', 'sessions', `${id.replace(':', '_')}.md`)
@@ -129,6 +135,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.deepEqual(state.workdir, original.workdir)
           assert.equal(state.agentType, role)
           assert.equal(state.segmentIndex, 1)
+          assert.equal(await readCapture(), captured.slice(12_000))
           assert.equal(state.lastKnownTokens, 0)
           assert(state.contextResetAt)
           assert.deepEqual(await Array.fromAsync(store.readSessionLog(physicalSessionId(original))), oldLog)
@@ -155,6 +162,10 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
           assert.doesNotMatch(JSON.stringify(f.calls), /OLD_/)
           assert.match(JSON.stringify(f.calls), /NEW_CONVERSATION/)
           assert.match(JSON.stringify(await f.sessions.getHistory(id, { physicalId: physicalSessionId(original) })), /OLD_CONVERSATION/)
+          assert.equal(await readCapture(), captured.slice(12_000))
+          assert.deepEqual(await f.sessions.deleteSession(id), [id])
+          await assert.rejects(readCapture(), { code: 'ENOENT' })
+          assert.equal(await readFile(memoryFile, 'utf8'), 'OLD_HANDOFF_SUMMARY')
         } finally { await f.close(); store.close?.() }
       })
     })
