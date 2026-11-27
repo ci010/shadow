@@ -13,7 +13,7 @@ import type { SessionPromptContext, SystemPromptProvider } from './builder.ts'
 export function memoryProvider(
   memory: MemoryStore,
   initiativeOf: (sessionId: string) => string | undefined,
-  recall?: (entry: string) => void,
+  recall?: (entry: string, context: SessionPromptContext) => void,
 ): SystemPromptProvider {
   return {
     name: 'memory',
@@ -38,7 +38,7 @@ export function memoryProvider(
         reference('Previously touched files', workingSet),
       ].filter(Boolean)
       if (!sections.length) return null
-      for (const entry of recalledLogs) recall?.(entry)
+      for (const entry of recalledLogs) recall?.(entry, ctx)
       if ((ctx.promptVersion ?? resolvePrompt(ctx.agent).version) === 'v2' && (ctx.mode ?? ctx.agent.defaultMode) === 'session') {
         return [
           '# Historical reference',

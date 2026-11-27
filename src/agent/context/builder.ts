@@ -35,6 +35,8 @@ export interface SessionPromptContext {
   senderId?: string
   senderName?: string
   inputSource?: SessionInput['source']['kind']
+  /** Host-admitted session-message sender, for recall provenance (not authority). */
+  recallInputSessionId?: string
   isGroup?: boolean
   admin?: boolean
   defaultExecShell?: ExecShell

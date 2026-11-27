@@ -94,10 +94,17 @@ or tool output, and the measured interval can include stream finalization.
 
 ## Recall
 
-`v:skills/.stats` retains successful initial body-read totals. The previous
-`state/skill-recall.sqlite` is read-only as a legacy baseline during migration;
-old counts have no historical day attribution. New recalls are indexed in
-`stats.sqlite`. **Skill & Memory reads** appears beside Tool usage (below it on narrow panels).
+`v:skills/.stats` and the usage panel count successful initial body reads only
+from regular conversation turns. Host-admitted turn source and structured session
+ancestry exclude event turns, learning, automation and their descendants (including
+Automatic Work). Session-message sender ancestry is checked too. Missing provenance
+is unknown, never guessed from agent names or session addresses.
+
+The previous `state/skill-recall.sqlite` is read-only during migration. Old
+aggregates and unversioned journal events remain in the legacy tables; they are
+not relabeled as regular-conversation reads. Corrected counts start with version-2
+events and use separate `skill_recall_v2` / `memory_recall_v2` projections in
+`stats.sqlite`. No percentage or recall-rate denominator is inferred. **Skill & Memory reads** appears beside Tool usage (below it on narrow panels).
 The Main owner, approved Child workspace UI, and mobile clients can read the
 same Main Project usage and recall statistics when authorized for Project usage. Recall returns at most 100 Skill entries or Memory
 entry/source pairs per Project. It is cumulative since tracking began, independent
@@ -109,13 +116,17 @@ page distinguishes unavailable read statistics from available statistics with no
 administrator view of the top 100
 entry/source pairs. The active source counts successful initial Wiki body reads
 under `v:memory`; listing, searches and continuation pages are excluded. The
-automatic source counts log briefings selected into historical prompt context,
+automatic source is listed separately from active recall and counts log briefings selected into historical prompt context,
 not diagnostic previews, lookup indexes or working-set filenames. Neither means the model used the
 material, and prompt composition does not prove a request was submitted.
 
 To rebuild, stop the Project before moving aside its `stats.sqlite` (including
 SQLite sidecars if present). Retain session logs/archives, the old Skill
 baseline, and `state/recall-source.jsonl`, the append-only source for new recall
-metadata. Restart and let coverage complete. Recall stores entry identifiers,
-dates and sources only; it does not copy body text or search terms. No recall
+metadata (including version and origin classification). Restart and let coverage complete.
+Replay preserves this classification without consulting mutable current sessions;
+legacy events rebuild only the legacy projection. Existing legacy-only database
+counts without journal events cannot be recreated, so retain the moved database
+as well if those historical counts are needed. Recall stores entry identifiers,
+dates, sources and origin classifications only; it does not copy body text or search terms. No recall
 history predating the available sources can be reconstructed.

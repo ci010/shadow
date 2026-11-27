@@ -140,7 +140,10 @@ test('memory-link diagnostics still run for successful virtual writes', async t 
 test('active recall observes successful initial Wiki reads, not continuation pages or discovery', async t => {
   const { home, tool, context } = await fixture(t)
   const calls: string[] = []
-  const handler = createMemoryHandler(home, 'a', entry => calls.push(entry))
+  const handler = createMemoryHandler(home, 'a', (entry, admitted) => {
+    assert.equal(admitted, context)
+    calls.push(entry)
+  })
   await tool.execute({ path: 'v:memory/topics/fixture.md', content: '# Fixture\nPrivate body' }, context)
   await handler.read('topics/missing.md', context)
   await handler.list(context, { content: true })

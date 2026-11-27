@@ -4,8 +4,10 @@ import { createInterface } from 'node:readline'
 import type { DatabaseSync } from 'node:sqlite'
 import { setImmediate } from 'node:timers/promises'
 
+import type { RecallOrigin } from './recall-origin.ts'
+
 type Kind = 'skill' | 'active' | 'automatic'
-interface Event { id: string; day: string; entry: string; source: Kind }
+interface Event { id: string; day: string; entry: string; source: Kind; version?: 2; origin?: RecallOrigin }
 
 /** A metadata-only rebuild source. The UI and virtual mounts never read it. */
 export class RecallIndex {
@@ -14,10 +16,13 @@ export class RecallIndex {
       CREATE TABLE IF NOT EXISTS memory_recall (day TEXT NOT NULL, entry TEXT NOT NULL, source TEXT NOT NULL,
         reads INTEGER NOT NULL, PRIMARY KEY(day,entry,source));
       CREATE TABLE IF NOT EXISTS recall_event (id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS skill_recall_v2 (skill_path TEXT PRIMARY KEY, reads INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS memory_recall_v2 (day TEXT NOT NULL, entry TEXT NOT NULL, source TEXT NOT NULL,
+        reads INTEGER NOT NULL, PRIMARY KEY(day,entry,source));
       CREATE TABLE IF NOT EXISTS recall_cursor (id INTEGER PRIMARY KEY CHECK(id=1), offset INTEGER NOT NULL);`)
   }
-  record(entry: string, source: Kind) {
-    const event: Event = { id: randomUUID(), entry, source, day: new Date().toISOString().slice(0, 10) }
+  record(entry: string, source: Kind, origin: RecallOrigin = 'unknown') {
+    const event: Event = { id: randomUUID(), entry, source, version: 2, origin, day: new Date().toISOString().slice(0, 10) }
     // Leading separator isolates an interrupted previous append; no prompt or arguments enter this file.
     if (this.journal) appendFileSync(this.journal, `\n${JSON.stringify(event)}\n`, { mode: 0o600 })
     this.apply(event)
@@ -26,9 +31,12 @@ export class RecallIndex {
     this.db.exec('BEGIN IMMEDIATE')
     try {
       if (this.db.prepare('INSERT OR IGNORE INTO recall_event VALUES (?)').run(event.id).changes) {
-        if (event.source === 'skill') this.db.prepare(`INSERT INTO skill_recall VALUES (?,1)
+        const suffix = event.version === 2 && event.origin === 'conversation' ? '_v2' : ''
+        // Legacy/unknown records remain available in the original tables, never in the corrected projection.
+        if (event.version === 2 && event.origin === 'excluded') { this.db.exec('COMMIT'); return }
+        if (event.source === 'skill') this.db.prepare(`INSERT INTO skill_recall${suffix} VALUES (?,1)
           ON CONFLICT(skill_path) DO UPDATE SET reads=reads+1`).run(event.entry)
-        else this.db.prepare(`INSERT INTO memory_recall VALUES (?,?,?,1)
+        else this.db.prepare(`INSERT INTO memory_recall${suffix} VALUES (?,?,?,1)
           ON CONFLICT(day,entry,source) DO UPDATE SET reads=reads+1`).run(event.day, event.entry, event.source)
       }
       this.db.exec('COMMIT')
@@ -60,7 +68,7 @@ export class RecallIndex {
   }
   usageSummary(complete: boolean) {
     return {
-      skills: this.db.prepare('SELECT skill_path AS entry, reads FROM skill_recall ORDER BY reads DESC, entry LIMIT 100').all()
+      skills: this.db.prepare('SELECT skill_path AS entry, reads FROM skill_recall_v2 ORDER BY reads DESC, entry LIMIT 100').all()
         .map(row => ({ entry: String(row.entry), reads: Number(row.reads) })),
       memory: this.memorySummary().flatMap(row => row.source === 'active' || row.source === 'automatic'
         ? [{ entry: String(row.entry), source: row.source as 'active' | 'automatic', reads: Number(row.reads) }] : []),
@@ -68,7 +76,7 @@ export class RecallIndex {
     }
   }
   memorySummary() {
-    return this.db.prepare(`SELECT entry,source,sum(reads) AS reads FROM memory_recall GROUP BY entry,source
+    return this.db.prepare(`SELECT entry,source,sum(reads) AS reads FROM memory_recall_v2 GROUP BY entry,source
       ORDER BY reads DESC,entry,source LIMIT 100`).all()
   }
 }

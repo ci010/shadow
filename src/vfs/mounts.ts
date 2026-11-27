@@ -305,7 +305,7 @@ export function createSkillsHandler(
     }
     const record = (path: string) => {
       if (!recall || (options?.offset ?? 1) > 1) return
-      try { recall.record(path) } catch (error) {
+      try { recall.record(path, context) } catch (error) {
         console.warn('[skills] Failed to record Skill recall', error)
       }
     }
@@ -464,7 +464,7 @@ async function walkResourceFiles(root: string, signal: AbortSignal, rel = ''): P
  *
  * Wiki writes share the filesystem writer; source records and internal state stay read-only here.
  */
-export function createMemoryHandler(workspace: string, projectId?: string, recall?: (entry: string) => void): {
+export function createMemoryHandler(workspace: string, projectId?: string, recall?: (entry: string, context: ExecutionContext) => void): {
   read: VirtualFsHandler
   list: VirtualFsListHandler
   write: VirtualFsWriteHandler
@@ -502,7 +502,7 @@ export function createMemoryHandler(workspace: string, projectId?: string, recal
     }
     if (info.nlink !== 1) throw new Error('Memory paths must be unlinked regular files')
     const body = await readFile(target, { encoding: 'utf8', signal: context.signal })
-    if (body.trim() && (options?.offset ?? 1) <= 1 && /\.md$/i.test(subpath) && !/^(?:sessions|events)\//i.test(subpath)) recall?.(subpath)
+    if (body.trim() && (options?.offset ?? 1) <= 1 && /\.md$/i.test(subpath) && !/^(?:sessions|events)\//i.test(subpath)) recall?.(subpath, context)
     return body
   }
 

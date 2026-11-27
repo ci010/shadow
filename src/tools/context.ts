@@ -19,6 +19,8 @@ export interface ExecutionContext extends MessageContext {
   /** Host-only semantic capability, shared with this turn's inference budget. */
   infer?: import('../script-runtime/infer.ts').NodeInference
   inputSource?: 'user' | 'session' | 'event'
+  /** Host-admitted session-message sender, for recall provenance (not authority). */
+  recallInputSessionId?: string
   /** Only a newly admitted, authenticated owner's direct message; never reconstructed on Retry/Continue. */
   workUserInput?: string
   /** Runtime-captured before inference, never supplied in model tool arguments. */

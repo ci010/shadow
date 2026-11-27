@@ -172,7 +172,7 @@
   "All-time trends show only the latest {days} UTC dates.": "All-time trends show only the latest {days} UTC dates.",
   "Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.": "Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.",
   "All dated records through each snapshot, independent of the selected usage period. Percentiles use observed samples within each project.": "All dated records through each snapshot, independent of the selected usage period. Percentiles use observed samples within each project.",
-  "Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.": "Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.",
+  "Regular-conversation active reads only; learning and automation are excluded. Automatic log injection is listed separately. Legacy/unknown-origin counts are retained but excluded. Up to 100 entries per project; the selected usage period does not apply.": "Regular-conversation active reads only; learning and automation are excluded. Automatic log injection is listed separately. Legacy/unknown-origin counts are retained but excluded. Up to 100 entries per project; the selected usage period does not apply.",
   "Reads": "Reads",
   "Recorded models in the selected summary period.": "Recorded models in the selected summary period.",
   "{count} calls without a recorded model are excluded.": "{count} calls without a recorded model are excluded.",

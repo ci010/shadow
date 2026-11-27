@@ -1,3 +1,4 @@
+import { recallOrigin } from '../../sessions/recall-origin.ts'
 import { sessionActivitySnapshot } from '../../sessions/activity-snapshot.ts'
 import type { ProjectionReader } from '../../realtime/projections.ts'
 import { readConversationSnapshot } from '../../sessions/conversation-snapshot.ts'
@@ -1281,7 +1282,7 @@ export async function createProjectRuntime(
   context.register(memoryProvider(
     memory,
     (sid) => sessions.getSessionState(sid)?.initiativeId ?? undefined,
-    entry => stats.recallMemory(entry, 'automatic'),
+    (entry, ctx) => stats.recallMemory(entry, 'automatic', recallOrigin(ctx.sessionId, ctx.inputSource, id => sessions.getSessionState(id), ctx.recallInputSessionId)),
   ))
 
   const mcpManager = new McpManager(
@@ -1397,7 +1398,9 @@ export async function createProjectRuntime(
     projectId: project.id, store: new SkillEditStore(workspace, skills), skills, canEdit: id => canAuthor(id),
   })
   const skillRecall = new SkillRecallStore(projectStoragePath(workspace, 'state', 'stats.sqlite'), projectStoragePath(workspace, 'state', 'skill-recall.sqlite'),
-    path => stats.recall.record(path, 'skill'))
+    (path, ctx) => stats.recall.record(path, 'skill', ctx ? recallOrigin(ctx.sessionId, ctx.inputSource, id => sessions.getSessionState(id), ctx.recallInputSessionId) : 'unknown'),
+    () => ['Regular-conversation active Skill body reads (excludes learning, automation and legacy/unknown origin):',
+      ...stats.recall.usageSummary(stats.complete).skills.map(row => `${row.reads}\t${JSON.stringify(row.entry)}`)].join('\n'))
   cleanup.push(() => skillRecall.close())
   const skillsVfs = createSkillsHandler(skills, (skill, context) => importTool.registerSkillTools(skill, context), ctx => {
     const state = sessions.getSessionState(ctx.sessionId)
@@ -1426,7 +1429,7 @@ export async function createProjectRuntime(
     context => topics.assertActor(context.projectId, context.sessionId))
   vfs.mount('v:knowledge', 'read-only knowledge/log navigation; read v:knowledge/overview', knowledgeVfs.read, knowledgeVfs.list)
 
-  const memoryVfs = createMemoryHandler(workspace, project.id, entry => stats.recallMemory(entry, 'active'))
+  const memoryVfs = createMemoryHandler(workspace, project.id, (entry, ctx) => stats.recallMemory(entry, 'active', recallOrigin(ctx.sessionId, ctx.inputSource, id => sessions.getSessionState(id), ctx.recallInputSessionId)))
   vfs.mount(
     'v:memory',
     'read Project memory; write wiki Markdown files (session records, logs and internal state are read-only here)',

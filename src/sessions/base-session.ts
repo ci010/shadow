@@ -1097,6 +1097,7 @@ export abstract class BaseSession {
         channelAddress: msg.channelAddress,
         ...attributes,
         inputSource: input.source.kind,
+        recallInputSessionId: input.source.kind === 'session' ? input.source.sessionId : undefined,
         ...(input.kind === 'message' && input.source.kind === 'user' && msg.admin === true && !isGroup
           ? { workUserInput: input.content } : {}),
         cwd,

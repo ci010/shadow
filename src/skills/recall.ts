@@ -1,3 +1,4 @@
+import type { ExecutionContext } from '../tools/context.ts'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -6,7 +7,8 @@ import { DatabaseSync } from 'node:sqlite'
 export class SkillRecallStore {
   private readonly db: DatabaseSync
 
-  constructor(path: string, legacyPath?: string, private readonly indexedRecord?: (path: string) => void) {
+  constructor(path: string, legacyPath?: string, private readonly indexedRecord?: (path: string, context?: ExecutionContext) => void,
+    private readonly indexedRender?: () => string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.db = new DatabaseSync(path)
     try {
@@ -37,15 +39,16 @@ export class SkillRecallStore {
     }
   }
 
-  record(path: string): void {
-    if (this.indexedRecord) return this.indexedRecord(path)
+  record(path: string, context?: ExecutionContext): void {
+    if (this.indexedRecord) return this.indexedRecord(path, context)
     this.db.prepare(`INSERT INTO skill_recall VALUES (?, 1)
       ON CONFLICT(skill_path) DO UPDATE SET reads = reads + 1`).run(path)
   }
 
   render(): string {
+    if (this.indexedRender) return this.indexedRender()
     const rows = this.db.prepare('SELECT skill_path, reads FROM skill_recall ORDER BY reads DESC, skill_path').all()
-    return ['Successful Skill body reads (since tracking began; excludes continuation pages):',
+    return ['Legacy/unclassified Skill body reads (not regular-conversation recall totals):',
       ...rows.map(row => `${row.reads}\t${JSON.stringify(row.skill_path)}`),
       ...(rows.length ? [] : ['No Skill body reads recorded.']),
     ].join('\n')

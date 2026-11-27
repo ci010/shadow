@@ -172,7 +172,7 @@
   "All-time trends show only the latest {days} UTC dates.": "全部时间的趋势仅展示最近 {days} 个 UTC 日期。",
   "Daily trends are unavailable because the project snapshots span different UTC dates. Refresh to align them.": "项目快照跨越不同的 UTC 日期，暂无法绘制统一的每日趋势。请刷新以对齐日期。",
   "All dated records through each snapshot, independent of the selected usage period. Percentiles use observed samples within each project.": "统计截至各快照的所有有日期记录，不受所选用量时段限制。分位数仅使用各项目内的观测样本。",
-  "Cumulative recorded reads, up to 100 entries per project. Legacy Skill counts have no dates. The selected usage period does not apply.": "自记录开始累计，每个项目最多显示 100 个条目。旧版 Skill 计数没有日期；所选用量时段不适用。",
+  "Regular-conversation active reads only; learning and automation are excluded. Automatic log injection is listed separately. Legacy/unknown-origin counts are retained but excluded. Up to 100 entries per project; the selected usage period does not apply.": "仅统计常规对话中的主动读取，排除学习与自动化。日志自动注入单独列出。旧数据及来源不明的计数保留但不计入。每个项目最多显示 100 项，不受所选用量时间范围影响。",
   "Reads": "读取次数",
   "Recorded models in the selected summary period.": "按所选概览时段统计已记录的模型。",
   "{count} calls without a recorded model are excluded.": "另有 {count} 次调用因未记录模型而未计入。",

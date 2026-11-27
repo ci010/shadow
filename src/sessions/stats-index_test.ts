@@ -149,12 +149,12 @@ test('legacy Skill Recall baseline only migrates once', async () => {
 test('metadata-only recall survives cursor replay and reconstruction, with source distinctions', async () => {
   await withTempWorkspace(async root => {
     const original = new StatsIndex(join(root, 'original.sqlite'))
-    original.recall.record('topics/entry.md', 'active')
-    original.recall.record('topics/entry.md', 'automatic')
-    original.recall.record('test-skill', 'skill')
+    original.recall.record('topics/entry.md', 'active', 'conversation')
+    original.recall.record('topics/entry.md', 'automatic', 'conversation')
+    original.recall.record('test-skill', 'skill', 'conversation')
     await original.recall.replay(() => false)
     await original.recall.replay(() => false)
-    assert.equal(original.db.prepare('SELECT sum(reads) AS n FROM memory_recall').get()?.n, 2)
+    assert.equal(original.db.prepare('SELECT sum(reads) AS n FROM memory_recall_v2').get()?.n, 2)
     await original.close()
     const rebuilt = new StatsIndex(join(root, 'rebuilt.sqlite'))
     try {
@@ -164,7 +164,7 @@ test('metadata-only recall survives cursor replay and reconstruction, with sourc
       ])
       assert.deepEqual(rebuilt.recall.usageSummary(false), { coverage: 'partial', skills: [{ entry: 'test-skill', reads: 1 }],
         memory: [{ entry: 'topics/entry.md', source: 'active', reads: 1 }, { entry: 'topics/entry.md', source: 'automatic', reads: 1 }] })
-      assert.equal(rebuilt.db.prepare('SELECT reads FROM skill_recall WHERE skill_path=?').get('test-skill')?.reads, 1)
+      assert.equal(rebuilt.db.prepare('SELECT reads FROM skill_recall_v2 WHERE skill_path=?').get('test-skill')?.reads, 1)
     } finally { await rebuilt.close() }
   })
 })

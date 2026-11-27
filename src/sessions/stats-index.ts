@@ -114,10 +114,10 @@ export class StatsIndex {
       this.db.exec('COMMIT')
     } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
-  recallMemory(entry: string, source: 'active' | 'automatic') {
+  recallMemory(entry: string, source: 'active' | 'automatic', origin: import('./recall-origin.ts').RecallOrigin = 'unknown') {
     if (this.closed) return
     try {
-      this.recall.record(entry, source)
+      this.recall.record(entry, source, origin)
     } catch (error) { console.error('[stats] Memory recall indexing failed', error) }
   }
   private bind(physical: string, session: string) {

@@ -2139,7 +2139,9 @@ continues to expose the complete permitted catalog.
 
 Separately, `read({ path: "v:skills/.stats" })` exposes Project-local Skill
 recall totals to administrators. The counter persists across restarts and counts
-successful direct reads of Skill bodies, including selected-folder Skills (keyed
+successful direct reads of Skill bodies in regular conversation turns, excluding
+learning, automation ancestry and unknown provenance. Old unclassified counts
+are retained separately, not added to these totals. This includes selected-folder Skills (keyed
 by folder ID and name). Repeat reads count; continuation pages, listing, search,
 bundled resources, raw editing reads, saves and failed reads do not. Totals start
 when tracking is enabled; no historical reads are backfilled.
