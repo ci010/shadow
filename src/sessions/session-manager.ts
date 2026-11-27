@@ -2793,9 +2793,16 @@ ${JSON.stringify(request)}`,
       if (changes.followUp && changes.completed === undefined && state.completed) {
         throw new Error('Reopen the session with completed: false before scheduling follow-up')
       }
-      if (changes.completed === true || changes.followUp === null) {
+      const wake = state.sessionFollowUp
+      const active = this.sessions[sessionId]
+      // A claimed wake is already disarmed. Keep its receipt until turn settlement
+      // so clearing the plan before an ask doesn't orphan a same-turn replacement.
+      const claimedByActiveTurn = wake?.dueAt === 0 && active instanceof Session && wake.inputId === active.activeRequestId
+      if (changes.completed === true) {
+        changes.followUp = undefined
         changes.sessionFollowUp = undefined
-        if (changes.completed === true) changes.followUp = undefined
+      } else if (changes.followUp === null && !claimedByActiveTurn) {
+        changes.sessionFollowUp = undefined
       }
       if ('completed' in patch) changes.completedAt = patch.completed ? new Date().toISOString() : undefined
       const currentTopic = sessionTopic(state)

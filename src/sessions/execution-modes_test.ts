@@ -2463,6 +2463,53 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       } finally { await f.sessions.stop(); await store.close?.() }
     })
   })
+
+  test(`${Store.name}: an active follow-up can clear its plan, ask, and schedule a replacement after the answer`, async () => {
+    await withTempWorkspace(async workspace => {
+      const store = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const f = fixture(workspace, store, { projectId: 'follow-up-fixture' })
+      registerFollowUpWriter(workspace, f)
+      const previous = { inputId: 'original-wake', phase: 'follow_up' as const, wakes: 2, startedAt: Date.now() - 100, dueAt: Date.now() - 1 }
+      const replacement = { next: 'Run the selected product regression', after: 5 }
+      try {
+        await store.saveState('web:root', { sessionId: 'web:root', segmentIndex: 0, mode: 'session', projectId: 'follow-up-fixture',
+          followUp: { next: 'Check the old diagnostic route', after: 5 }, sessionFollowUp: previous })
+        await f.sessions.start()
+        f.sessions.startSessionFollowUps()
+        const original = await f.next('web:root')
+        assert.match(JSON.stringify(original.messages.at(-1)), /Scheduled Session follow-up.*Check the old diagnostic route/s)
+        original.resolve(writeSelf({ followUp: null }))
+        const question = await f.next('web:root')
+        assert.equal((await store.getState('web:root'))!.followUp, null)
+        question.resolve(invoke('ask', { kind: 'decision', question: 'Which route should we use?',
+          options: ['Product regression', 'Diagnostic lane'], default_option: 'Product regression' }))
+        await waitFor(() => !!f.sessions.yields.get('web:root'))
+        assert.equal(f.sessions.sessionFollowUpView('web:root'), null)
+        await f.sessions.yields.answerUser('web:root', f.sessions.yields.get('web:root')!.id, 'Product regression')
+        ;(await f.next('web:root')).resolve(writeSelf({ followUp: replacement }))
+        const finish = await f.next('web:root')
+        assert.deepEqual((await store.getState('web:root'))!.followUp, replacement)
+        assert.equal(f.sessions.sessionFollowUpView('web:root')?.nextRun, null, 'schedule only when the current turn finishes')
+        finish.resolve(done('Product regression arranged'))
+        await waitFor(() => f.facts.length === 1)
+        const scheduled = (await store.getState('web:root'))!.sessionFollowUp
+        assert.ok(scheduled?.dueAt, 'the replacement must be scheduled')
+        assert.notEqual(scheduled.inputId, previous.inputId)
+        assert.equal(scheduled.wakes, previous.wakes + 1)
+        assert.equal(scheduled.startedAt, previous.startedAt)
+        const wake = await f.next('web:root', 8500)
+        assert.match(JSON.stringify(wake.messages.at(-1)), /Scheduled Session follow-up.*Run the selected product regression/s)
+        wake.resolve(writeSelf({ completed: true }))
+        ;(await f.next('web:root')).resolve(done('Regression finished'))
+        await waitFor(() => f.facts.length === 2)
+        assert.deepEqual(f.facts.map(fact => [fact.inputId, followUpPhase(fact.source), fact.status]), [
+          [previous.inputId, 'follow_up', 'completed'], [scheduled.inputId, 'follow_up', 'completed'],
+        ])
+        assert.equal((await store.getState('web:root'))!.sessionFollowUp, undefined)
+      } finally { await f.sessions.stop(); await store.close?.() }
+    })
+  })
 }
 
 test('self-check exhausts invalid finals without recursively waking or marking responsibility complete', async () => {
