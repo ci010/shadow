@@ -175,6 +175,8 @@ export const AgentSchema = z.object({
   temperature: z.number().default(0.7),
   maxToolIterations: z.number().default(20),
   autoHandoff: z.boolean().default(true),
+  /** Generate the handoff from the active session context when possible. */
+  compactV2: z.boolean().default(true),
   handoffMinThreshold: z.number().min(0.5).max(0.95).default(0.75),
   handoffMaxThreshold: z.number().min(0.5).max(0.95).default(0.95),
   /** Session storage backend: 'jsonl' (default, file-based) or 'sqlite'. */

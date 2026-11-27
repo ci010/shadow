@@ -61,6 +61,10 @@ export class AppProviderConfigStore extends ConfigStore {
     return super.update(raw => ({ ...raw, builtinPromptVersion: version }), signal)
   }
 
+  updateCompactV2(enabled: boolean, signal?: AbortSignal): Promise<Config> {
+    return super.update(raw => ({ ...raw, agent: { ...(record(raw.agent) ? raw.agent : {}), compactV2: enabled } }), signal)
+  }
+
   async modelDefaults() {
     const raw = await this.read()
     return modelDefaultsState(record(raw.agent) ? raw.agent : {}, ConfigSchema.parse(raw).agent)
@@ -124,7 +128,8 @@ export class ProjectConfigStore extends ConfigStore {
     const localAgent: Raw = { ...config.agent }
     for (const key of MODEL_DEFAULT_FIELDS) delete localAgent[key]
     const agent = ConfigSchema.shape.agent.parse({
-      ...localAgent, ...modelFields(shared.agent), ...modelFields(ownedAgent), workspace: this.scope.home,
+      ...localAgent, ...modelFields(shared.agent), ...modelFields(ownedAgent),
+      compactV2: shared.agent.compactV2, workspace: this.scope.home,
     })
     const tools = ConfigSchema.shape.tools.parse({
       ...withoutWebSearchConfig(config.tools), ...sharedWebSearchConfig(shared.tools),
@@ -227,6 +232,10 @@ export class ProjectConfigStore extends ConfigStore {
       }
       if (record(owned.agent) && record(previous.agent)) {
         const agent = { ...owned.agent }
+        if ('compactV2' in agent && agent.compactV2 !== previous.agent.compactV2) {
+          throw new TypeError('Shared Compact v2 setting must be changed through App settings')
+        }
+        delete agent.compactV2
         for (const key of MODEL_DEFAULT_FIELDS) {
           if (!(key in this.#ownedAgent) && isDeepStrictEqual(agent[key], previous.agent[key])) delete agent[key]
         }

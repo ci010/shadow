@@ -28,6 +28,7 @@ import {
   type ChatMessage,
   type ContentPart,
   type LLMProvider,
+  type LLMProviderOptions,
   type LLMResponseUsage,
   type ToolCall,
   isContextSizeError,
@@ -109,6 +110,25 @@ export abstract class BaseSession {
     this.toolOutput = new ToolOutputProjection(workspace)
   }
 
+  protected async projectModelHistory(
+    signal: AbortSignal,
+    legacyQQ: boolean,
+    transientResults?: ReadonlyMap<string, ContentPart[]>,
+    source: readonly ChatMessage[] = this.messages,
+    sessionId = this.id,
+  ): Promise<ChatMessage[]> {
+    const projected: ChatMessage[] = []
+    // Limit spill I/O to one result at a time when resuming older history.
+    for (const message of source) {
+      if (message.role !== 'tool') { projected.push(message); continue }
+      signal.throwIfAborted()
+      const transient = message.tool_call_id ? transientResults?.get(message.tool_call_id) : undefined
+      projected.push(transient ? await this.toolOutput.project({ ...message, content: transient }, sessionId, true)
+        : await this.toolOutput.project(message, sessionId))
+    }
+    return modelMessages(projected, legacyQQ)
+  }
+
   protected get usageDestination(): { sessionId: string; physicalId: string } {
     return { sessionId: this.id, physicalId: this.physicalSessionId }
   }
@@ -173,7 +193,10 @@ export abstract class BaseSession {
   protected beforeWorkNotificationPersisted(_input: SessionMessageInput): Promise<SessionMessageInput | undefined> | undefined { return undefined }
 
   protected onUserMessageWrite(_message: ChatMessage, _saved: boolean): void {}
-  protected onInferenceDispatched(_messages: readonly ChatMessage[]): void {}
+  protected onInferenceDispatched(
+    _messages: ChatMessage[], _tools: ToolDefinition[], _options: Omit<LLMProviderOptions, 'signal'>,
+    _history: readonly ChatMessage[], _legacyQQ: boolean,
+  ): void {}
 
   private readonly staleFollowUpNotices = new WeakMap<SessionMessageInput, SessionMessageInput>()
   private readonly inputPrefixes = new WeakMap<ChatMessage, ChatMessage>()
@@ -487,16 +510,9 @@ export abstract class BaseSession {
         offeredToolNames: toolDefs.map(def => def.function.name) }
       const boundedSystemTask = this.isBoundedSystemTask(executionContext.channel)
       await this.recordContextEvent('work', boundedSystemTask ? '' : workGuard?.prompt(this.id, executionContext) ?? '')
-      const projected: ChatMessage[] = []
-      // Limit spill I/O to one result at a time when resuming older history.
-      for (const message of this.messages) {
-        if (message.role !== 'tool') { projected.push(message); continue }
-        signal.throwIfAborted()
-        const transient = message.tool_call_id ? transientResults.get(message.tool_call_id) : undefined
-        projected.push(transient ? await this.toolOutput.project({ ...message, content: transient }, true)
-          : await this.toolOutput.project(message))
-      }
-      const inferenceMessages = modelMessages(projected, executionContext.channel === 'qq')
+      const inferenceHistory = this.messages.slice()
+      const legacyQQ = executionContext.channel === 'qq'
+      const inferenceMessages = await this.projectModelHistory(signal, legacyQQ, transientResults, inferenceHistory, executionContext.sessionId)
       transientResults.clear()
       await this.tools.boundary?.beforeInference(signal)
       if (this.tools.boundary) await this.store.saveState(this.id, this.state)
@@ -541,17 +557,11 @@ export abstract class BaseSession {
             this.tools.assertSnapshot?.()
             signal.throwIfAborted()
             if (i === 0) kickoff?.beforeInference()
-            const request = this.provider.chat(inferenceMessages, toolDefs, {
-              model,
-              maxTokens,
-              temperature,
-              signal,
-              thinking,
-              reasoningEffort,
-            })
+            const options = { model, maxTokens, temperature, thinking, reasoningEffort }
+            const request = this.provider.chat(inferenceMessages, toolDefs, { ...options, signal })
             // Main handed this exact context to the provider adapter. This is
             // dispatch, not acceptance by the upstream service.
-            this.onInferenceDispatched(inferenceMessages)
+            this.onInferenceDispatched(inferenceMessages, toolDefs, options, inferenceHistory, legacyQQ)
             return request
           }).catch(error => {
             this.providerFailure = providerFailureKind(error)

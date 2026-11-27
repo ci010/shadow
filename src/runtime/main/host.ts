@@ -26,6 +26,7 @@ import { createProjectScope } from '../../projects/scope.ts'
 import { ProjectCatalog } from '../../projects/catalog.ts'
 import { AppProviderConfigStore, ProjectConfigStore } from '../../projects/config-store.ts'
 import { appAgentVersionDefaultsPlugin } from '../../config/agent-version-routes.ts'
+import { appCompactionPlugin } from '../../config/compaction-routes.ts'
 import { appModelDefaultsPlugin } from '../../config/model-routes.ts'
 import { appWebSearchPlugin } from '../../config/web-search-routes.ts'
 import { projectPaths, projectBasePath } from '../../projects/contracts.ts'
@@ -203,8 +204,11 @@ export async function startProjectHost(
     onChanged: async changed => {
       const { builtinPromptVersion: nextVersion, ...nextRest } = changed
       const { builtinPromptVersion: previousVersion, ...previousRest } = activeConfig
-      if (nextVersion !== previousVersion && isDeepStrictEqual(nextRest, previousRest)) {
-        // Project defaults read this shared snapshot on new execution. No provider or MCP reload is needed.
+      const { compactV2: nextCompactV2, ...nextAgent } = nextRest.agent
+      const { compactV2: previousCompactV2, ...previousAgent } = previousRest.agent
+      if ((nextVersion !== previousVersion || nextCompactV2 !== previousCompactV2) &&
+        isDeepStrictEqual({ ...nextRest, agent: nextAgent }, { ...previousRest, agent: previousAgent })) {
+        // Prompt and compaction policies read this shared snapshot when used. Neither needs a provider or MCP reload.
         activeConfig = changed
         return
       }
@@ -304,7 +308,7 @@ export async function startProjectHost(
     if (c.req.header('Origin')) return c.json({ error: 'browser_access_not_allowed' }, 403)
     await next()
   })
-  registerGatewayRoutes(app, [mobileAccess.plugin(), ...mainCluster.plugins, directUi.plugin(), network.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appAgentVersionDefaultsPlugin(sharedConfigStore, () => activeConfig), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
+  registerGatewayRoutes(app, [mobileAccess.plugin(), ...mainCluster.plugins, directUi.plugin(), network.plugin(), localControl.plugin(), providerSetup.plugin(), appModelDefaultsPlugin(sharedConfigStore), appAgentVersionDefaultsPlugin(sharedConfigStore, () => activeConfig), appCompactionPlugin(sharedConfigStore, () => activeConfig), appWebSearchPlugin(sharedConfigStore, () => activeConfig), appProxyPlugin(sharedConfigStore, () => activeConfig), providerPlugin(() => provider, () => providerSetup.status())], {
     launchCredential, requireCredential: true, clientAddresses,
     delegatedViewer: { authorize: directUi.authorize, ownerSignal: directUi.ownerSignal,
       hasCredential: request => directUi!.hasCredential(request), allowsCrossOrigin: directDeviceUiPath, allowsCaptureBinding: directDeviceCapturePath },

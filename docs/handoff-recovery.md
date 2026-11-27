@@ -11,9 +11,11 @@ If the reduced request is rejected again, the turn fails through the existing
 session recovery lifecycle rather than repeatedly creating new segments.
 This does not switch provider API protocols.
 
-Handoff synthesis already uses bounded text excerpts, not image data. If its
-own model request is rejected for size, it uses the bounded local objective and
-recent-transcript fallback and persists it through the ordinary handoff path.
+After a known size rejection Shadow goes directly to legacy handoff synthesis,
+even when Compact v2 is on. The legacy path uses bounded text excerpts, not
+image data. If its own model request is rejected for size, it uses the bounded
+local objective and recent-transcript fallback and persists it through the
+ordinary handoff path.
 Authentication, network and cancellation failures are not converted into a
 successful fallback.
 

@@ -1258,14 +1258,45 @@ listed as ordinary conversations.
 ### Compaction is continuity, not full memory reconstruction
 
 `HandoffManager` checks configured context thresholds (default 0.95 in-loop and
-0.75 during sleep). It runs a bounded, specialized handoff session to synthesize
-the objective/summary/recent context, with a fallback when synthesis fails.
-The next physical segment starts with that continuation as a user-role message
-and a rebuilt system prompt. The continuation is persisted in the segment's
+0.75 during sleep). Compact v2 is on by default and changes synthesis, not the
+thresholds or trigger points. It appends an internal `session.compact` event to
+the active segment's model context and runs a bounded maintenance loop. The
+model can read already-authorized evidence, including its own available history
+segments, and read or replace the private `v:handoff/draft.md` Markdown draft.
+No other write target is available. `invoke_tool({name:"handoff_submit", args:{}})`
+validates the draft (`Summary`, `Current Objective`, optional `Recent Transcript`)
+before the host can commit it. Compact reuses the most recent dispatched model
+prefix (including transient results), tool definitions and request settings for
+the same live segment, appending only new history and maintenance messages. A
+cold activation uses its normal context and tools but has no in-memory prior
+request to reuse. The host enforces the maintenance allowlist independently of
+the unchanged top-level tool schema, including on the final request. If the
+normal tool list lacks `read`, `write`, or `invoke_tool`, or the old history
+prefix is no longer valid, compact uses the legacy path instead. The draft and
+maintenance tool pairs never enter conversation history; the old segment only
+keeps an audit event and request usage. If context
+size prevents synthesis, or the maintenance loop finishes without a valid
+submission, the host discards the draft and uses the original specialized
+handoff session and its bounded transcript. Known request-size failures and
+exhausted image timeouts take that legacy path directly.
+
+App settings → Models → Compact v2 controls the shared `agent.compactV2` policy
+without a restart. Turning it off uses legacy synthesis. It is independent of
+`agent.autoHandoff`, which controls threshold-based triggering.
+
+The next physical segment starts with the continuation as a user-role message,
+alongside the activation system prompt. The continuation is persisted in the segment's
 `summary_context` and restored as a `__compaction_summary__` message on reload,
 for both JSONL and SQLite stores. The system prompt does not also inject the
 session-summary file; that file remains available for explicit reads.
-Tool-pair boundaries are respected before automatic compaction.
+Tool-pair boundaries are respected before automatic compaction. While compaction
+is running, incoming messages enter the session inbox instead of steering or
+interrupting the current turn. This also covers legacy fallback and segment
+publication. A failed in-loop compaction is not retried on the same usage sample
+before the queued inputs can reach normal inference. Typed `/compact` can load
+an inactive conversation with saved history and enqueue the same maintenance
+control without starting a chat turn. Interrupted conversations must be resolved
+first so their recovery history stays intact.
 After a successful handoff, context usage is cleared and persisted with the new
 segment so subsequent messages cannot trigger another handoff from stale usage.
 The triggering response retains its own usage in history and outbound events.

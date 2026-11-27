@@ -5,12 +5,16 @@ import { cleanupTempFiles } from '../utils/paths.ts'
 import { physicalSessionId } from './session-identity.ts'
 import { inputContent, sessionReplyAddress, type SessionInput, type SessionMessageInput, type SessionTurnFact } from './input.ts'
 import { followUpPhase } from './session-follow-up.ts'
-import type { ChatMessage, LLMProvider } from '../providers/provider.ts'
+import { isContextSizeError, type ChatMessage, type LLMProvider, type LLMProviderOptions, type LLMResponseUsage } from '../providers/provider.ts'
 import { estimateTokens } from '../utils/estimate-tokens.ts'
 import { Span } from '../otel/tracing.ts'
 import { errDetail, errMsg } from '../utils/truncate.ts'
 import type { Bus } from '../bus/bus.ts'
-import type { CompactResult, HandoffManager } from './handoff/manager.ts'
+import type { CompactResult, HandoffContext, HandoffManager } from './handoff/manager.ts'
+import { COMPACT_EVENT_SOURCE, COMPACT_EVENT_TYPE, compactEvent } from './handoff/current-context.ts'
+import { runCompactDraft, type CompactReadArgs } from './handoff/draft-runner.ts'
+import { scopeCompactRead } from './handoff/read-scope.ts'
+import { toolResultText, type ToolDefinition } from '../tools/tool.ts'
 import type { LlmRuntimeConfig } from '../agent/llm-config.ts'
 import { buildUserChatMessage } from '../agent/message-builder.ts'
 import { prepareNewMessageImages } from '../providers/new-message-images.ts'
@@ -22,7 +26,7 @@ import {
   resolveSessionLocations,
   type WorkdirLookup,
 } from './locality.ts'
-import { SessionResumeError } from './recovery.ts'
+import { pendingToolCalls, SessionResumeError } from './recovery.ts'
 import type { PromptCaptureStore } from './prompt-capture.ts'
 import { saveToolImages } from './tool-images.ts'
 
@@ -45,8 +49,24 @@ type LoopEvent =
   | { type: 'realign'; apply: () => Promise<void> }
   | { type: 'archive'; apply: () => Promise<void>; reject: (error: unknown) => void }
 
+interface CompactOptions {
+  signal?: AbortSignal
+  legacyOnly?: boolean
+  imageReferences?: string[]
+}
+
 export class Session extends BaseSession {
   private running = false
+  private compacting = false
+  private failedHotCompactionUsage?: LLMResponseUsage
+  private lastInference?: {
+    physicalId: string
+    messages: ChatMessage[]
+    tools: ToolDefinition[]
+    options: Omit<LLMProviderOptions, 'signal'>
+    history: readonly ChatMessage[]
+    legacyQQ: boolean
+  }
   private inbox: LoopEvent[] = []
   /** Host notification once the queue is actually waiting for input. */
   onIdle?: () => void
@@ -170,7 +190,12 @@ export class Session extends BaseSession {
     else this.setWebInputDelivery({ ...entry, status: 'failed' })
   }
 
-  protected override onInferenceDispatched(messages: readonly ChatMessage[]): void {
+  protected override onInferenceDispatched(
+    messages: ChatMessage[], tools: ToolDefinition[], options: Omit<LLMProviderOptions, 'signal'>,
+    history: readonly ChatMessage[], legacyQQ: boolean,
+  ): void {
+    // The projected request includes transient tool content that cannot be rebuilt from the log.
+    this.lastInference = { physicalId: this.physicalSessionId, messages, tools, options, history, legacyQQ }
     if (!this.webInputs.size) return
     let changed = false
     for (const message of messages) {
@@ -209,6 +234,13 @@ export class Session extends BaseSession {
     if (this.sleepTimer) {
       clearTimeout(this.sleepTimer)
       this.sleepTimer = null
+    }
+
+    // A compact can run inside an active turn. Do not let newly admitted
+    // messages steer it or let a retry interrupt its inference.
+    if (this.compacting && (msg.kind === 'message' || msg.command.type === 'retry')) {
+      this.pushEvent({ type: 'message', msg, llm })
+      return
     }
 
     if (msg.kind === 'control') {
@@ -301,9 +333,9 @@ export class Session extends BaseSession {
     )
       .then((intent) => {
         if (!this.accepting) return
-        if (this.turn?.classifyAbortController !== controller) {
+        if (this.compacting || this.turn?.classifyAbortController !== controller) {
           console.log(
-            `[session-loop] Turn changed during intent classification — defaulting to inbox for message:`,
+            `[session-loop] Turn unavailable for steering after intent classification — defaulting to inbox for message:`,
             {
               session: this.id,
             },
@@ -333,10 +365,10 @@ export class Session extends BaseSession {
       .catch((err) => {
         if (!this.accepting) return
         console.warn(
-          '[session-loop] classifyToolIntent error, falling back to steer:',
+          '[session-loop] classifyToolIntent error, falling back to normal admission:',
           errMsg(err),
         )
-        if (this.turn === capturedTurn) {
+        if (!this.compacting && this.turn === capturedTurn) {
           this.steerInput(capturedTurn, msg)
         } else {
           this.pushEvent({ type: 'message', msg, llm })
@@ -408,6 +440,7 @@ export class Session extends BaseSession {
     }
     Object.assign(this.state, next)
     this.messages = [{ role: 'system', content: system }, { role: 'user', name: '__context_handoff__', content: prompt }]
+    this.lastInference = undefined
     this.usage = undefined
     this.clearReadCache()
     await this.tools.resetDynamicAndWait()
@@ -453,7 +486,9 @@ export class Session extends BaseSession {
           this.stop()
           break
         } else if (event.type === 'compact') {
-          await this.compact(event.llm)
+          // A turn can enter recovery after the control was queued. Never
+          // replace the transcript needed to resume interrupted tool calls.
+          if (!this.state.recovery) await this.compact(event.llm)
         } else {
           const kickoff = this.automaticKickoffs.get(event.msg)
           const prepared = await this.prepareQueuedInput(event.msg)
@@ -553,10 +588,16 @@ export class Session extends BaseSession {
       )
 
       if (
-        !hasToolResults && !hasPendingToolCalls &&
+        !hasToolResults && !hasPendingToolCalls && usage !== this.failedHotCompactionUsage &&
         this.handoffManager.shouldHandoff(usage, true, extra, llm.contextWindow)
       ) {
-        await this.compact(llm)
+        try { await this.compact(llm) }
+        catch (error) {
+          // Do not fail every queued input by retrying a failed summary against
+          // the same usage sample before a normal inference can run again.
+          this.failedHotCompactionUsage = usage
+          throw error
+        }
       }
     }
 
@@ -623,13 +664,17 @@ export class Session extends BaseSession {
     llm: LlmRuntimeConfig,
   ): Promise<boolean> {
     console.warn(`[${this.id}] Token limit exceeded, compacting session`)
-    await this.compact(llm)
+    await this.compact(llm, { legacyOnly: true })
     return true
   }
 
   protected override async handleImageRequestTimeout(llm: LlmRuntimeConfig, signal: AbortSignal): Promise<boolean> {
     // Do not turn a hard-bounded evaluation/automation into extra model work.
     if (this.tools.inferenceRequestLimit !== undefined) return false
+    return this.whileCompacting(() => this.compactAfterImageTimeout(llm, signal))
+  }
+
+  private async compactAfterImageTimeout(llm: LlmRuntimeConfig, signal: AbortSignal): Promise<boolean> {
     signal.throwIfAborted()
     const locations = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup)
     const candidates = this.messages.flatMap(message => Array.isArray(message.content)
@@ -651,7 +696,7 @@ export class Session extends BaseSession {
       at: new Date().toISOString(), saved: paths.size, failed,
       omitted: Math.max(0, candidates.length - selected.length),
     } }])
-    await this.compact(llm, signal, [...paths])
+    await this.compactSegment(llm, { signal, legacyOnly: true, imageReferences: [...paths] })
     return true
   }
 
@@ -787,14 +832,114 @@ export class Session extends BaseSession {
     }
   }
 
-  /**
-   * Synthesize a compact continuity context and persist it as a handoff snapshot.
-   */
-  private async compact(
-    llm: LlmRuntimeConfig, signal = this.stopController.signal, imageReferences: string[] = [],
-  ): Promise<CompactResult> {
+  private async readCompactContext(args: CompactReadArgs, messageId: string, signal: AbortSignal): Promise<string> {
+    const read = this.tools.get('read')
+    if (!read) throw new Error('This session does not allow evidence reads; only the handoff draft is readable.')
+    const boundary = this.tools.boundary
+    const target = scopeCompactRead(args, this.state, !!boundary || !!this.state.channelBoundary || !!this.state.serviceGeneration)
+    if ('index' in target) return target.index
+    const request = target.args
+    if (read.readonly === false || (typeof read.readonly === 'function' && !read.readonly({ ...request }))) {
+      throw new Error('Compact cannot perform this read because it has side effects.')
+    }
+    const { workdir } = resolveSessionLocations(this.workspace, this.state, undefined, this.workdirLookup)
+    if (!target.virtual && !workdir.available) throw new Error('Session workdir is unavailable; no filesystem fallback is allowed.')
+    if (!target.virtual && workdir.available && workdir.locality === 'remote' && !this.remoteExecutor) {
+      throw new Error('Remote read is unavailable; no Main filesystem fallback is allowed.')
+    }
+    const reply = sessionReplyAddress(this.id)
+    const result = await this.tools.execute('read', { ...request }, {
+      tools: this.tools, projectId: this.state.projectId, memoryAccess: boundary?.memoryAccess,
+      sessionId: this.id, physicalSessionId: this.physicalSessionId, messageId, signal,
+      channel: reply?.channel ?? 'system', chatId: reply?.chatId ?? this.id, channelAddress: reply?.channelAddress,
+      senderId: 'session.compact', inputSource: 'event', folderId: this.state.folderId,
+      ...(workdir.available && workdir.locality === 'local' ? { cwd: workdir.path } : {}),
+      ...(workdir.available && workdir.locality === 'layerfs' ? { layerfsWorkdir: { workspace: workdir.workspace } } : {}),
+      ...(workdir.available && workdir.locality === 'remote' && this.remoteExecutor ? {
+        remoteWorkdir: { nodeId: workdir.workdir.nodeId, workdirId: workdir.workdir.workdirId, executor: this.remoteExecutor },
+      } : {}),
+    })
+    return toolResultText(result)
+  }
+
+  /** Run bounded maintenance in the active segment, outside normal turn dispatch. */
+  private async summarizeCurrentContext(llm: LlmRuntimeConfig, signal: AbortSignal): Promise<HandoffContext | undefined> {
+    const id = crypto.randomUUID()
+    const timestamp = new Date().toISOString()
+    const prefix = this.lastInference?.physicalId === this.physicalSessionId ? this.lastInference : undefined
+    const tools = prefix?.tools ?? this.tools.getDefinitions()
+    const carriers = ['read', 'write', 'invoke_tool']
+    if (!carriers.every(name => this.tools.has(name) && tools.some(def => def.function.name === name))) {
+      return undefined // Do not change the provider's tool prefix to add a missing carrier.
+    }
+    if (prefix && !prefix.history.every((message, index) => this.messages[index] === message)) {
+      return undefined // History was replaced; do not resurrect superseded input.
+    }
+    const options = prefix?.options ?? {
+      model: this.state.config?.model ?? llm.model,
+      temperature: this.state.config?.temperature ?? llm.temperature,
+      maxTokens: this.state.config?.maxTokens ?? llm.maxTokens,
+      thinking: this.state.config?.thinking ?? llm.thinking,
+      reasoningEffort: this.state.config?.reasoningEffort ?? llm.reasoningEffort,
+    }
+    const suffix = await this.projectModelHistory(signal, prefix?.legacyQQ ?? this.id.startsWith('qq:'), undefined,
+      this.messages.slice(prefix?.history.length ?? 0))
+    const messages = [...prefix?.messages ?? [], ...suffix, compactEvent(id, timestamp)]
     signal.throwIfAborted()
-    await this.tools.boundary?.beforeInference(signal)
+    // Keep an audit record, not a replayable user input or an unfinished tool call.
+    await this.store.appendRawEvents(this.physicalSessionId, [{
+      type: COMPACT_EVENT_TYPE, source: COMPACT_EVENT_SOURCE, id, timestamp,
+    }])
+    const deadline = AbortSignal.timeout(120_000)
+    const maintenanceSignal = AbortSignal.any([signal, deadline])
+    const assertCurrent = () => {
+      this.tools.assertSnapshot?.()
+      this.tools.boundary?.assertCurrent()
+    }
+    try {
+      const receipt = await runCompactDraft({
+        messages, signal: maintenanceSignal, assertCurrent,
+        read: args => this.readCompactContext(args, id, maintenanceSignal),
+        infer: async context => {
+          await this.tools.boundary?.beforeInference(maintenanceSignal)
+          maintenanceSignal.throwIfAborted()
+          assertCurrent()
+          return this.provider.chat(context, tools, { ...options, signal: maintenanceSignal })
+        },
+      })
+      if (!receipt) console.warn('[compact-v2] No submitted draft, using legacy synthesis')
+      return receipt
+    } catch (error) {
+      signal.throwIfAborted()
+      assertCurrent()
+      if (!deadline.aborted && !isContextSizeError(error)) throw error
+      console.warn(deadline.aborted ? '[compact-v2] Maintenance timed out, using legacy synthesis'
+        : '[compact-v2] Current context exceeds request size, using legacy synthesis')
+      return undefined
+    }
+  }
+
+  private async whileCompacting<T>(run: () => Promise<T>): Promise<T> {
+    this.compacting = true
+    try { return await run() }
+    finally { this.compacting = false }
+  }
+
+  private compact(llm: LlmRuntimeConfig, options: CompactOptions = {}): Promise<CompactResult> {
+    return this.whileCompacting(() => this.compactSegment(llm, options))
+  }
+
+  /** Synthesize continuity, then commit the same segment format for either strategy. */
+  private async compactSegment(llm: LlmRuntimeConfig, options: CompactOptions): Promise<CompactResult> {
+    const { legacyOnly, imageReferences = [] } = options
+    const boundary = this.tools.boundary
+    const useCurrentContext = !legacyOnly && this.handoffManager.compactV2 && !pendingToolCalls(this.messages).length
+    const signals = [options.signal ?? this.stopController.signal]
+    if (useCurrentContext && this.turn) signals.push(this.turn.abortController.signal)
+    if (boundary) signals.push(boundary.signal)
+    const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+    signal.throwIfAborted()
+    await boundary?.beforeInference(signal)
     const sessionId = this.id
     const state = this.state
     await this.recordContextEvent('work', this.tools.getWorkGuard()?.prompt(this.id) ?? '')
@@ -802,7 +947,10 @@ export class Session extends BaseSession {
 
     const sourcePhysicalId = physicalSessionId(state)
     const targetPhysicalId = physicalSessionId(state, state.segmentIndex + 1)
-    const handoff = await this.handoffManager.create(
+    const receipt = useCurrentContext ? await this.summarizeCurrentContext(llm, signal) : undefined
+    const handoff = receipt ? await this.handoffManager.createFromContext(
+      sessionId, sourcePhysicalId, targetPhysicalId, messages.length, receipt, signal, boundary,
+    ) : await this.handoffManager.create(
       sessionId,
       sourcePhysicalId,
       targetPhysicalId,
@@ -836,6 +984,7 @@ export class Session extends BaseSession {
     newMessages.push({ role: 'user', content: handoff.prompt })
     this.messages = newMessages
     // Previous usage describes the old segment, not the continuation prompt.
+    this.lastInference = undefined
     this.usage = undefined
     this.state.lastKnownTokens = 0
     await this.saveState()
@@ -859,7 +1008,7 @@ export class Session extends BaseSession {
   private scheduleSleepCheck(llm: LlmRuntimeConfig): void {
     // Do not discard runtime dispatch state for saved inputs that a resumed
     // turn can still include (for example after cancellation before dispatch).
-    if (!this.sleepInactivityMs || !this.accepting || this.turn || this.inbox.length || this.savedWebInputs.size) return
+    if (!this.sleepInactivityMs || !this.accepting || this.compacting || this.turn || this.inbox.length || this.savedWebInputs.size) return
     if (this.sleepTimer) clearTimeout(this.sleepTimer)
 
     const lastActive = this.state.lastActivityAt

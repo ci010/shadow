@@ -3826,6 +3826,69 @@ ${JSON.stringify(request)}`,
     }))
   }
 
+  /** Admit a typed command without adding a model-facing user turn. */
+  requestCommandCompact(sessionId: string, msg: InboundMessage, llm: LlmRuntimeConfig): Promise<'queued' | 'unsupported' | 'empty' | 'recovery'> {
+    sessionId = this.resolveSessionIdentity(sessionId)
+    if (!msg.admin || sessionId !== this.resolveSessionIdentity(deriveSessionId(msg))
+      || (this.deps.projectId && msg.channelAddress && msg.channelAddress.projectId !== this.deps.projectId)) {
+      return Promise.reject(new Error('Compaction command is not authorized for this conversation'))
+    }
+    const request = channelMessageInput(msg)
+    const input: SessionInput = {
+      id: request.id, timestamp: request.timestamp, source: request.source, replyTo: request.replyTo,
+      kind: 'control', command: { type: 'compact' },
+    }
+    return this.withSessionPreparation(sessionId, async () => {
+      const state = this.sessionStates[sessionId]
+      const checkScope = () => {
+        this.assertFolderAccess(sessionId)
+        this.assertHistoryWritable(sessionId)
+        this.authorizeConversationInput(sessionId, input)
+        return state?.mode === 'session' && !state.retirement && !state.automaticWork
+          && !state.channelBoundary && !state.serviceGeneration && !this.isManagedConversation(sessionId)
+          && (!this.deps.projectId || state.projectId === this.deps.projectId)
+      }
+      if (!checkScope() || !state || await this.store.isConversationArchived?.(sessionId)) return 'unsupported'
+      if (state.recovery) return 'recovery'
+      let session: Session | EphemeralSession | undefined = this.sessions[sessionId]
+      if (session && !session.accepting) {
+        await session.completion
+        session = undefined
+      }
+      if (!session && !state.lastActivityAt && state.segmentIndex === 0) {
+        // Channel ingress can create an identity for command receipts before
+        // dispatch. A receipt-only conversation should not start a model loop.
+        const history = await this.getHistory(sessionId)
+        if (!history.messages.some(message => message.role !== 'system')) return 'empty'
+      }
+      if (state.recovery) return 'recovery'
+      const created = !session
+      let queued = false
+      try {
+        if (this.deleting.has(sessionId) || this.stopped) throw new Error('Session is stopping')
+        if (!checkScope()) return 'unsupported'
+        session ??= await this.createActiveSession(sessionId, input)
+        if (this.deleting.has(sessionId) || this.stopped) throw new Error('Session is stopping')
+        if (!checkScope() || !(session instanceof Session)) return 'unsupported'
+        if (state.recovery) return 'recovery'
+        const personal = this.deps.conversationPolicies?.personal?.(sessionId)
+        const policy = this.deps.conversationPolicies?.resolve(sessionId)
+        this.personalContextGuards.get(session)?.()
+        const inference = resolveInferenceSettings(
+          llm, policy?.agent ?? (personal ? this.deps.agentTypes.resolve(personal.agent) : undefined), state.config,
+        )
+        this.configureWorkNotifications(session, sessionId)
+        session.dispatch(input, inference)
+        queued = true
+        return 'queued'
+      } finally {
+        // Authorization or lifecycle checks can change while context loads.
+        // Do not leave an admission-only activation behind after a failed command.
+        if (created && !queued) session?.stop()
+      }
+    })
+  }
+
   requestCompact(sessionId: string, llm: LlmRuntimeConfig): boolean {
     sessionId = this.resolveSessionIdentity(sessionId)
     this.assertFolderAccess(sessionId)

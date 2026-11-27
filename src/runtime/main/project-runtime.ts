@@ -798,6 +798,7 @@ export async function createProjectRuntime(
     {
       model: config.agent.model,
       autoHandoff: config.agent.autoHandoff,
+      compactV2: () => configStore.current().agent.compactV2,
       handoffMinThreshold: config.agent.handoffMinThreshold,
       handoffMaxThreshold: config.agent.handoffMaxThreshold,
     },

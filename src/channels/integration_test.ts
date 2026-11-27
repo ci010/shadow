@@ -518,6 +518,7 @@ test('compaction and learned instructions retain provenance and never enter sibl
   const scope = structuredClone(f.sessions.getSessionState(f.id())!.channelBoundary!)
   const before = f.sessions.getSessionState(f.id())!.segmentIndex
   f.requests.length = 0
+  // This restricted conversation does not offer write/invoke_tool; compaction must use v1.
   f.responses.push({ content: '', toolCalls: [{ id: 'summary', name: 'handoff_summary',
     arguments: { summary: 'HANDOFF_A_CANARY', currentObjective: 'Continue support', recentTranscript: [] } }] })
   assert.equal(f.sessions.requestCompact(f.id(), llm), true)
@@ -526,7 +527,10 @@ test('compaction and learned instructions retain provenance and never enter sibl
   const summary = (await f.sessions.getHistory(f.id(), { shallow: true })).messages.find(message => message.name === '__compaction_summary__')
   assert.match(String(summary?.content), /read\("v:memory"\)/)
   assert(!String(summary?.content).includes('read("v:sessions/'))
-  assert(f.requests.every(request => request.tools.length === 1 && request.tools[0] === 'handoff_summary'))
+  assert.match(String(summary?.content), /HANDOFF_A_CANARY/)
+  assert.ok(f.requests.length > 0)
+  for (const request of f.requests) assert.deepEqual(request.tools, ['handoff_summary'])
+  assert.doesNotMatch(JSON.stringify(f.requests), /session\.compact/)
   assert(!JSON.stringify(f.requests).includes('PRIVATE_PROJECT_CANARY'))
   const resources = f.memory.ownerResources().filter(resource => resource.domainId === scope.domainId)
   assert(resources.some(resource => resource.kind === 'skill'))
@@ -544,17 +548,14 @@ test('revocation cancels scoped compaction without publishing a stale summary or
   const f = await fixture(t)
   await f.send('201', 'OLD_COMPACTION_CANARY')
   const old = structuredClone(f.sessions.getSessionState(f.id())!)
-  const original = f.handoff.create.bind(f.handoff)
-  const finished = Promise.withResolvers<void>()
-  t.mock.method(f.handoff, 'create', async (...args: Parameters<HandoffManager['create']>) => {
-    try { return await original(...args) } finally { finished.resolve() }
-  })
+  const completion = f.sessions.getActiveSession(f.id())!.completion
   f.requests.length = 0
   f.hold(new Promise(() => {}))
   assert.equal(f.sessions.requestCompact(f.id(), llm), true)
   await until(() => f.requests.length > 0)
+  assert.deepEqual(f.requests[0].tools, ['handoff_summary'])
   await f.approve({ kind: 'bindings.save', bindings: [{ ...f.a, tools: ['read'] }] })
-  await finished.promise
+  await completion
   assert.equal(f.sessions.getSessionState(f.id())!.segmentIndex, old.segmentIndex)
   assert(!f.memory.ownerResources().some(resource => resource.kind === 'summary'))
   assert(!existsSync(join(f.home, 'memory', 'sessions')))

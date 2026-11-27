@@ -53,6 +53,8 @@ export interface HandoffConfig {
    * Whether to automatically trigger handoff when token usage ratio exceeds threshold. Default true.
    */
   autoHandoff?: boolean
+  /** Whether to try in-context synthesis before the legacy summarizer. */
+  compactV2?: boolean | (() => boolean)
   /**
    * Ratio of prompt tokens to max tokens that triggers auto handoff when exceeded. Value between 0.5 and 0.95, default 0.75.
    */
@@ -74,7 +76,7 @@ export class HandoffManager {
   constructor(
     private provider: LLMProvider,
     private contextWindow: number,
-    config: HandoffConfig,
+    private readonly config: HandoffConfig,
     private workspace: string,
     private store: SessionStore,
     private scope: ProjectScope | undefined = getProjectScope(),
@@ -82,6 +84,11 @@ export class HandoffManager {
     this.autoHandoff = config.autoHandoff ?? true
     this.handoffMinThreshold = config.handoffMinThreshold ?? 0.75
     this.handoffMaxThreshold = config.handoffMaxThreshold ?? 0.95
+  }
+
+  get compactV2(): boolean {
+    const value = this.config.compactV2
+    return typeof value === 'function' ? value() : value ?? true
   }
 
   /** Read-only view of the budget and thresholds actually used by auto handoff. */
@@ -144,16 +151,39 @@ export class HandoffManager {
       contextWindow,
     )
 
+    return this.buildResult(sessionId, sourceSessionId, targetSessionId, messages.length, context, !!boundary)
+  }
+
+  /** Persist an in-context receipt through the legacy continuation format. */
+  async createFromContext(
+    sessionId: string,
+    sourceSessionId: string,
+    targetSessionId: string,
+    sourceMessageCount: number,
+    context: HandoffContext,
+    signal: AbortSignal,
+    boundary?: RuntimeBoundary,
+  ): Promise<CompactResult> {
+    signal.throwIfAborted()
+    boundary?.assertCurrent()
+    await this.rememberSummary(sessionId, context, boundary)
+    return this.buildResult(sessionId, sourceSessionId, targetSessionId, sourceMessageCount, context, !!boundary)
+  }
+
+  private buildResult(
+    sessionId: string, sourceSessionId: string, targetSessionId: string, sourceMessageCount: number,
+    context: HandoffContext, scoped: boolean,
+  ): CompactResult {
     const snapshot: HandoffOptions = {
       sourceSessionKey: sessionId,
       sourceSessionId,
-      sourceMessageCount: messages.length,
+      sourceMessageCount,
       targetSessionId,
       ts: new Date().toISOString(),
       context,
     }
 
-    const summary = this.buildHandoffSummary(snapshot, !!boundary)
+    const summary = this.buildHandoffSummary(snapshot, scoped)
 
     return {
       targetSessionId,
@@ -202,9 +232,6 @@ export class HandoffManager {
     if (!transcript) return fallback
 
     const workspace = this.workspace
-
-    const memoryPath = sessionMemoryRelativePath(sessionId)
-    const absoluteMemoryPath = workspacePath(workspace, memoryPath)
 
     // Handoff no longer curates the full session-memory state — Modified Files,
     // events, keywords and conventions are maintained live elsewhere (see
@@ -288,16 +315,21 @@ export class HandoffManager {
 
     // The session-memory md IS the continuation Summary (MEM.md): current
     // focus + progress, produced only by compact.
-    const md = renderContinuationSummary(capture.context ?? fallback)
+    const context = capture.context ?? fallback
+    await this.rememberSummary(sessionId, context, boundary)
+    return context
+  }
+
+  private async rememberSummary(sessionId: string, context: HandoffContext, boundary?: RuntimeBoundary): Promise<void> {
+    const md = renderContinuationSummary(context)
     if (boundary) {
       boundary.rememberSummary(md)
-      return capture.context ?? fallback
+      return
     }
+    const absoluteMemoryPath = workspacePath(this.workspace, sessionMemoryRelativePath(sessionId))
     await mkdir(dirname(absoluteMemoryPath), { recursive: true })
     await writeFile(absoluteMemoryPath, md)
     console.info(`[handoff] Session summary written: ${absoluteMemoryPath}`)
-
-    return capture.context ?? fallback
   }
 
   // ── Helpers ─────────────────────────────────────────────────────────

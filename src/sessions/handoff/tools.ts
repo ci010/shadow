@@ -1,4 +1,4 @@
-import type { Tool, ToolParameters } from '../../tools/tool.ts'
+import type { Tool, ToolDefinition, ToolParameters } from '../../tools/tool.ts'
 import {
   applySessionMemoryUpdate,
   type SessionMemoryState,
@@ -63,30 +63,37 @@ export function parseHandoffArgs(
 
 // ── HandoffSummaryTool ───────────────────────────────────────────────
 
-export class HandoffSummaryTool implements Tool {
-  readonly name = 'handoff_summary'
-  readonly description =
-    'Record the handoff context summary. You MUST call this tool before any other tool.'
-  readonly parameters: ToolParameters = {
-    type: 'object',
-    properties: {
-      summary: {
-        type: 'string',
-        description:
-          'Markdown summary of conversation (20% or less of transcript)',
+export const handoffSummaryDefinition = {
+  type: 'function',
+  function: {
+    name: 'handoff_summary',
+    description: 'Record the handoff context summary. You MUST call this tool before any other tool.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'Markdown summary of conversation (20% or less of transcript)',
+        },
+        currentObjective: {
+          type: 'string',
+          description: '1-2 sentence next objective',
+        },
+        recentTranscript: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Human-readable one-liners for recent turns',
+        },
       },
-      currentObjective: {
-        type: 'string',
-        description: '1-2 sentence next objective',
-      },
-      recentTranscript: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Human-readable one-liners for recent turns',
-      },
+      required: ['summary', 'currentObjective', 'recentTranscript'],
     },
-    required: ['summary', 'currentObjective', 'recentTranscript'],
-  }
+  },
+} satisfies ToolDefinition
+
+export class HandoffSummaryTool implements Tool {
+  readonly name = handoffSummaryDefinition.function.name
+  readonly description = handoffSummaryDefinition.function.description
+  readonly parameters = handoffSummaryDefinition.function.parameters
 
   constructor(
     private capture: HandoffCapture,
