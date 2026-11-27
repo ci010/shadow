@@ -24,6 +24,7 @@ import { isCommandReceipt } from '../slash-commands/receipt.ts'
 import { signMediaReveal } from '../utils/media-reveal.ts'
 import { isMissingMediaFile, mediaFileResponse } from './media-response.ts'
 import { durableMediaRoots, isDurableMediaCandidate, resolveDurableMedia } from './durable-media.ts'
+import { executeRemoteFilesystemImage, RemoteFilesystemError } from '../execution/remote-filesystem-client.ts'
 
 function outboundPayload(msg: OutboundMessage) {
   if (msg.sessionMessage) return { event: 'session_message', message: msg.sessionMessage, media: msg.media }
@@ -626,8 +627,44 @@ export class WebChannel extends AbstractChannel {
       if (!workdir.available) return c.json({ error: 'Media unavailable' }, 404)
       if (workdir.locality === 'remote') {
         const image = await this.remoteImage(sessionId, rawPath)
-        if (!image) return c.json({ error: 'Media unavailable' }, 404)
-        return mediaFileResponse(image, c.req.raw, c.req.query('download') === '1')
+        if (image) return mediaFileResponse(image, c.req.raw, c.req.query('download') === '1')
+        // Explicit session IDs remain Main-private-upload-only. Child paths are
+        // opaque here: the registered executor enforces device-side containment.
+        if (explicitSessionId !== undefined || !isImagePath(rawPath) ||
+          /[\0\r\n]/.test(rawPath) || /^[a-z][a-z0-9+.-]*:/i.test(rawPath) && !/^[a-z]:[\\/]/i.test(rawPath) ||
+          rawPath.replaceAll('\\', '/').split('/').includes('..')) {
+          return c.json({ error: 'Media unavailable' }, 404)
+        }
+        const manager = this.sessionManager
+        const access = manager?.workdirLookup?.(workdir.workdir, 'filesystem.read')
+        if (!access || access.incompatible || access.node !== 'online' || !access.workdir?.online) {
+          return c.json({ error: 'Media unavailable' }, 404)
+        }
+        if (!manager?.remoteExecutor) return c.json({ error: 'Remote media executor unavailable' }, 503)
+        try {
+          const remote = await executeRemoteFilesystemImage({
+            executor: manager.remoteExecutor, ...workdir.workdir,
+            sessionId, turnId: randomUUID(), signal: c.req.raw.signal,
+          }, rawPath)
+          const url = remote.part.image_url.url
+          const bytes = Buffer.from(url.slice(url.indexOf(',') + 1), 'base64')
+          const filename = rawPath.replaceAll('\\', '/').split('/').pop() || 'image'
+          const encoded = encodeURIComponent(filename).replace(/[!'()*]/g,
+            char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+          return new Response(c.req.method === 'HEAD' ? null : bytes, { headers: {
+            'Content-Type': remote.mime,
+            'Content-Length': String(bytes.length),
+            'Content-Disposition': `${c.req.query('download') === '1' ? 'attachment' : 'inline'}; filename="${filename.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encoded}`,
+            'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+          } })
+        } catch (error) {
+          c.req.raw.signal.throwIfAborted()
+          const status = error instanceof RemoteFilesystemError
+            ? error.code === 'file-not-found' ? 404
+              : ['path-denied', 'invalid-filesystem-args', 'file-type-denied', 'invalid-image'].includes(error.code) ? 400 : 503
+            : 503
+          return c.json({ error: 'Remote media unavailable' }, status)
+        }
       }
 
       if (workdir.locality === 'layerfs') return c.json({ error: 'LayerFS media routes are not supported; no Main fallback' }, 404)

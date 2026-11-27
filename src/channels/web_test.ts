@@ -802,7 +802,8 @@ test('remote session images stay in Main uploads, preview safely and reach multi
     await symlink(arbitrary, link)
     for (const forbidden of [other, arbitrary, 'child.png', 'Z:\\private\\child\\image.png', link, 'data:image/png;base64,' + png.toString('base64')]) {
       assert.equal((await send([forbidden])).status, 403, forbidden)
-      assert.equal((await app.request(`/api/media?chatId=remote&path=${encodeURIComponent(forbidden)}`)).status, 404)
+      assert.equal((await app.request(`/api/media?chatId=remote&path=${encodeURIComponent(forbidden)}`)).status,
+        forbidden.startsWith('data:') ? 404 : 503, 'Child previews require an executor; admission remains Main-upload-only')
     }
     assert.equal(messages.length, 1)
     for (const file of [new File(['text'], 'note.txt'), new File(['fake'], 'fake.png', { type: 'image/png' })]) {
@@ -918,4 +919,75 @@ test('HTTP history null omission shares full, delta and revision projection', as
     assert.ok(cleared.data, 'clearing an existing field replaces full messages, never field-merges')
     assert.equal('content' in cleared.data.history[0], false)
   } finally { await channel.stop() }
+})
+
+
+test('remote workdir images use registered read executor, not Main paths', async () => {
+  const workspace = await createTempWorkspace()
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
+  const calls: string[] = []
+  let authorized = true
+  let folderAllowed = true
+  let readAllowed = true
+  let executorAvailable = true
+  let failure: string | undefined
+  const manager = {
+    getSessionState: (sessionId: string) => ({ sessionId, workdir: { version: 2, nodeId: 'child', workdirId: 'registered' } }),
+    assertFolderAccess: () => { if (!folderAllowed) throw new FolderError('denied', 'denied', 404) },
+    workdirLookup: (_ref: unknown, operation?: string) => ({ node: 'online', workdir: { online: operation !== 'filesystem.read' || readAllowed } }),
+    get remoteExecutor() {
+      return executorAvailable ? {
+        async *execute(request: import('../execution/contracts.ts').ExecutionRequestV2, signal: AbortSignal) {
+          assert.equal(signal.aborted, false)
+          assert.equal(request.nodeId, 'child')
+          assert.equal(request.workdirId, 'registered')
+          assert.equal(request.sessionId, 'web:remote')
+          assert.equal(request.operation, 'filesystem.read')
+          const args = request.args as { path: string; kind: string }
+          assert.equal(args.kind, 'image')
+          calls.push(args.path)
+          if (!failure) yield { type: 'stdout', chunk: 'data:image/png;base64,' + png.toString('base64') }
+          yield { type: failure ? 'failed' : 'completed', receipt: { version: 1, jobId: request.jobId, nodeId: 'child', state: failure ? 'failed' : 'completed', finishedAt: new Date().toISOString(), ...(failure ? { reason: { code: failure, message: 'fixture', retryable: false } } : {}) } }
+        },
+      } : undefined
+    },
+  } as unknown as SessionManager
+  const channel = new WebChannel(new Bus(), { workspace, authorize: () => authorized, sessionManager: manager })
+  const app = new Hono()
+  await channel.start(app)
+  const request = (path: string, method = 'GET', selector = 'chatId=remote') => app.request(`/api/media?${selector}&path=${encodeURIComponent(path)}&download=1`, { method })
+  try {
+    for (const path of ['outputs/image.png', 'Z:\\private\\child\\image.png']) {
+      for (const method of ['GET', 'HEAD']) {
+        const response = await request(path, method)
+        assert.equal(response.status, 200)
+        assert.equal(response.headers.get('content-type'), 'image/png')
+        assert.equal(response.headers.get('content-length'), String(png.length))
+        assert.match(response.headers.get('content-disposition')!, /^attachment; filename="image.png"/)
+        assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+        assert.equal(response.headers.get('cache-control'), 'no-store')
+        assert.deepEqual(Buffer.from(await response.arrayBuffer()), method === 'HEAD' ? Buffer.alloc(0) : png)
+      }
+    }
+    const count = calls.length
+    for (const path of ['../image.png', '..\\image.png', 'note.txt']) assert.equal((await request(path)).status, 404)
+    assert.equal((await request('image.png', 'GET', 'sessionId=web%3Aremote')).status, 404)
+    authorized = false
+    assert.equal((await request('image.png')).status, 401)
+    authorized = true
+    folderAllowed = false
+    assert.equal((await request('image.png')).status, 404)
+    folderAllowed = true
+    readAllowed = false
+    assert.equal((await request('image.png')).status, 404)
+    readAllowed = true
+    executorAvailable = false
+    assert.equal((await request('image.png')).status, 503)
+    executorAvailable = true
+    assert.equal(calls.length, count)
+    for (const [code, status] of [['file-not-found', 404], ['path-denied', 400], ['node-offline', 503]] as const) {
+      failure = code
+      assert.equal((await request('image.png')).status, status)
+    }
+  } finally { await channel.stop(); await rm(workspace, { recursive: true }) }
 })
