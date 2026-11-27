@@ -138,3 +138,53 @@ test('upgrade tickets are single-use, origin-bound and revoked with their browse
     await gateway.finished
   }
 })
+
+test('dirty projection churn degrades an active topic without dropping chat, then retries that topic', { timeout: 5000 }, async () => {
+  const diagnostics: string[] = []
+  const hub = new RealtimeHub({ diagnostic: reason => diagnostics.push(reason) })
+  let churnBatch = false, churnActive = 0, id = 'initial'
+  const publisher = hub.registerProject('main', undefined, undefined, undefined, () => {
+    if (churnBatch) publisher.invalidateIo!('run') // same topic becomes dirty while batch is in progress
+    else if (churnActive > 0) { churnActive--; hub.invalidateProjects() }
+    return { runs: [{ id }] }
+  })
+  const app = new Hono()
+  registerRealtimeRoute(app, hub, () => true, { authorize: () => true, authorizeTopic: () => true })
+  const server = serveGateway(app, { host: '127.0.0.1', port: 0 })
+  let socket: WebSocket | undefined
+  try {
+    await server.ready
+    socket = new WebSocket(`ws://127.0.0.1:${server.addr.port}/api/live/ws`)
+    const messages = on(socket, 'message', { signal: AbortSignal.timeout(3500) })
+    const receive = async () => JSON.parse(((await messages.next()).value as [RawData])[0].toString())
+    await once(socket, 'open')
+    const chat = { kind: 'chat', projectId: 'main', sessionId: 'fixture' }
+    const projection = { kind: 'io-runs', projectId: 'main' }
+    const subscribe = (id: number) => socket!.send(JSON.stringify({ type: 'subscribe', id, subscriptions: [{ topic: chat }, { topic: projection, snapshot: true }] }))
+    subscribe(1)
+    assert.deepEqual((await receive()).projections[0].snapshot.data, { runs: [{ id: 'initial' }] })
+    // One real domain event and exactly three unrelated mutations during its
+    // reads; no second domain event arrives to rescue a discarded dirty flag.
+    id = 'only update'; churnActive = 3; publisher.invalidateIo!('run')
+    const recovered = await receive()
+    assert.deepEqual(recovered.topic, projection)
+    assert.equal(recovered.payload.event, 'snapshot')
+    assert.deepEqual(recovered.payload.data, { runs: [{ id: 'only update' }] })
+    assert.deepEqual(diagnostics, ['projection-update-unstable'])
+    // Refresh the already active projection, including its real dirty drain.
+    id = 'after refresh'; churnBatch = true; subscribe(2)
+    const ack = await receive()
+    assert.equal(ack.type, 'subscribed')
+    assert.deepEqual(ack.projections, [{ topic: projection, error: 'projection_unavailable' }])
+    assert.deepEqual(diagnostics, ['projection-update-unstable', 'projection-batch-unstable'])
+    publisher.chat('fixture', 'still live')
+    assert.equal((await receive()).payload, 'still live')
+    churnBatch = false
+    const updated = await receive() // bounded retry succeeds without another domain event
+    assert.deepEqual(updated.topic, projection)
+    assert.equal(updated.payload.event, 'snapshot')
+    assert.deepEqual(updated.payload.data, { runs: [{ id: 'after refresh' }] })
+    assert.equal(hub.stats.clients, 1)
+    await messages.return?.()
+  } finally { socket?.terminate(); hub.close(); await server.shutdown(); await server.finished }
+})

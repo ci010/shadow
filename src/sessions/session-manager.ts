@@ -3373,7 +3373,14 @@ ${JSON.stringify(request)}`,
     const own = await readTokenUsage(this.store, state)
     const hasDelegates = queue.length > 1
     const role = this.resolveAgentTypeTools(state.agentType)
-    const canDelegate = this.getAllowedSubagentModes(sessionId).length > 0 &&
+    const policies = this.deps.conversationPolicies
+    const managed = this.isManagedConversation(sessionId)
+    const allowsChannelCall = !!(managed && state.channelBoundary && state.mode === 'session')
+    const policy = !state.config?.model || allowsChannelCall
+      ? (policies?.inspect ? policies.inspect(sessionId) : policies?.resolve(sessionId))
+      : undefined
+    const canDelegate = (managed ? allowsChannelCall && !!policy?.agent.allowedTools?.includes('subagent')
+      : this.getAllowedSubagentModes(sessionId).length > 0) &&
       (role.allowedTools !== undefined ? role.allowedTools.includes('subagent') : !role.blockedTools?.includes('subagent'))
     let subagentUsage: LLMResponseUsage | null = hasDelegates ? null : { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
     let usageIncomplete = own.incomplete
@@ -3392,7 +3399,7 @@ ${JSON.stringify(request)}`,
       remote ? node.nodeId === workdir.workdir.nodeId : node.role === 'main')
     const resource = node?.workdirs.find(resource =>
       resource.workdirId === workdir.workdir.workdirId)
-    const model = state.config?.model ?? this.deps.conversationPolicies?.resolve(sessionId)?.agent.model
+    const model = state.config?.model ?? policy?.agent.model
       ?? this.deps.getLlmRuntimeConfig?.().model
     // Inference overrides inherit the Project runtime context budget; model
     // catalog metadata is only a fallback for older integrations.

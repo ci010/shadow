@@ -1,8 +1,10 @@
 import { assertServiceOutput, stampServiceOutput } from '../bots/service-output.ts'
 import { channelAddressFromSessionId, channelSessionId } from '../bus/events.ts'
-import type { ConversationPolicies } from '../bots/conversation-policy.ts'
+import { ConversationAssignmentUnavailable, type ConversationPolicies } from '../bots/conversation-policy.ts'
 import type { DirectoryBots } from '../bots/runtime.ts'
 import type { BotInstanceStore } from './bot-store.ts'
+import { ChannelSetupError } from './setup.ts'
+import { IntegrationError } from './integration-store.ts'
 
 /** Enforced on session admission and policy refresh, including non-adapter inputs. */
 export function botConversationPolicies(store: BotInstanceStore, existing: ConversationPolicies, directory?: DirectoryBots): ConversationPolicies {
@@ -29,15 +31,15 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
   const resolve = (id: string) => {
     const bot = botFor(id)
     if (!bot) return existing.resolve(id)
-    if (!bot.enabled) throw new Error('Connection is disabled')
+    if (!bot.enabled) throw new ConversationAssignmentUnavailable('Connection is disabled')
     const assigned = explicitPersonal(id)
     if (assigned) {
-      if (!assigned.enabled) throw new Error('Personal inbox assignment is not active')
+      if (!assigned.enabled) throw new ConversationAssignmentUnavailable('Personal inbox assignment is not active')
       return undefined
     }
-    if (bot.platform === 'wechat') throw new Error('Explicit Personal WeChat direct inbox assignment required')
+    if (bot.platform === 'wechat') throw new ConversationAssignmentUnavailable('Explicit Personal WeChat direct inbox assignment required')
     const policy = existing.resolve(id)
-    if (!policy?.binding.enabled) throw new Error('Explicit service assignment required')
+    if (!policy?.binding.enabled) throw new ConversationAssignmentUnavailable('Explicit service assignment required')
     return policy
   }
   return {
@@ -58,6 +60,14 @@ export function botConversationPolicies(store: BotInstanceStore, existing: Conve
     },
     managed: id => retiredAddress.test(id) || (botFor(id) ? !explicitPersonal(id)?.enabled : existing.managed(id)),
     resolve,
+    inspect(id) {
+      try { return resolve(id) }
+      catch (error) {
+        if (error instanceof ConversationAssignmentUnavailable || error instanceof ChannelSetupError && error.code === 'unknown_bot'
+          || error instanceof IntegrationError && ['binding_required', 'bot_disabled', 'observation_disabled'].includes(error.code)) return undefined
+        throw error
+      }
+    },
     authorize: (id, input) => {
       resolve(id)
       if (explicitPersonal(id)?.enabled) {

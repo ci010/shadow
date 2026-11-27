@@ -4,7 +4,7 @@ import type { LiveSubscription } from './live-client.ts'
  * after the gate opens every invalidation is delivered (including during reads).
  * Callers serialize reads and abort HTTP work when hidden/disposed.
  */
-export function createInitialLiveSnapshot(options: { refresh: () => void; fallbackMs?: number }) {
+export function createInitialLiveSnapshot(options: { refresh: () => void; recover?: () => void; fallbackMs?: number }) {
   let disposed = false, started = false, attached = false, readyPending = true, recoveryPending = false
   const controller = new AbortController()
   let resolve!: () => void
@@ -17,10 +17,11 @@ export function createInitialLiveSnapshot(options: { refresh: () => void; fallba
     resolve()
     options.refresh()
   }
+  const refreshAfterGap = options.recover ?? options.refresh
   function recover() {
     if (disposed || !started) return
     if (readyPending) recoveryPending = true
-    else options.refresh()
+    else refreshAfterGap()
   }
   return {
     /** Resolve at initial ready or bounded fallback; consumers still apply their GET result. */
@@ -32,11 +33,11 @@ export function createInitialLiveSnapshot(options: { refresh: () => void; fallba
       void subscription.ready(controller.signal).then(() => {
         readyPending = false
         if (disposed) return
-        if (started) options.refresh() // fallback snapshot predates subscription readiness
+        if (started) refreshAfterGap() // fallback snapshot predates subscription readiness
         else start()
       }, () => {
         readyPending = false
-        if (!disposed && started && recoveryPending) options.refresh()
+        if (!disposed && started && recoveryPending) refreshAfterGap()
       })
     },
     invalidate() { if (!disposed && started) options.refresh() },

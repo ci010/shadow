@@ -1,3 +1,6 @@
+import { botConversationPolicies } from '../channels/bot-policies.ts'
+import { BotInstanceStore } from '../channels/bot-store.ts'
+import { channelSessionId } from '../bus/events.ts'
 import { createSelfSessionHandler } from '../vfs/session.ts'
 import assert, { deepEqual, equal } from 'node:assert/strict'
 import { test } from 'node:test'
@@ -47,6 +50,53 @@ const invalidConfigs = [
 ]
 
 for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
+  test(`${Store.name}: legacy QQ inbox details are readable without an execution assignment`, async () => {
+    await withTempWorkspace(async workspace => {
+      const projectId = 'p'
+      const bots = new BotInstanceStore({ projectId, path: join(workspace, 'connections.json') })
+      const connection = bots.create('qq', 'Fixture', { appId: 'fixture', secret: 'fixture', enabled: true })
+      const id = channelSessionId({ projectId, botInstanceId: connection.id, platform: 'qq', conversationId: 'group:fixture' })
+      const alias = id.replace(/^channel-inbox:/, 'bot:')
+      let broken = false
+      const policies = botConversationPolicies(bots, {
+        managed: () => false, resolve() { if (broken) throw new Error('Synthetic corrupt BOT policy store'); return undefined },
+        authorize() { assert.fail('Read must not authorize execution') }, tools() { assert.fail('Read must not create tools') },
+        prompt() { assert.fail('Read must not assemble a prompt') },
+      })
+      const store: SessionStore = new Store(join(workspace, 'sessions'))
+      await store.init()
+      const sessions = makeManager(workspace, store, { projectId, conversationPolicies: policies, sessionIdentityAliases: { [alias]: id } })
+      try {
+        await store.saveState(id, { sessionId: id, projectId, segmentIndex: 0, mode: 'session', channelIdentityMigration: 1 })
+        await store.createSessionLog(newPhysicalSessionId(id, 0, 1), [
+          { role: 'user', content: 'Stored inbox message' }, { role: 'assistant', content: 'Legacy answer', usage },
+        ])
+        await sessions.start()
+        const app = new Hono()
+        let reason: string | undefined
+        app.onError((error, c) => { reason = error.message; return c.text('Internal Server Error', 500) })
+        sessionsApiPlugin(sessions)(app)
+        const request = (id: string) => app.request(`/api/sessions/${encodeURIComponent(id)}/details`)
+        for (const key of [id, alias]) {
+          const response = await request(key)
+          equal(response.status, 200, reason)
+          const details = await response.json()
+          equal(details.sessionId, id)
+          equal(details.name, 'Stored inbox message')
+          equal(details.usage.promptTokens, 120)
+          equal(details.context.windowTokens, 999)
+          equal(details.context.usedTokens, 120)
+          equal(Object.hasOwn(details, 'subagentUsage'), false)
+        }
+        assert.throws(() => policies.resolve(id), /Explicit service assignment required/)
+        assert.throws(() => policies.authorize(id, {} as never), /Explicit service assignment required/)
+        broken = true
+        equal((await request(id)).status, 500)
+        equal(reason, 'Synthetic corrupt BOT policy store', 'Unexpected errors are not disguised as unavailable policy')
+      } finally { await sessions.stop(); store.close?.() }
+    })
+  })
+
   test(`${Store.name}: fallback title skips runtime context and uses the first user message`, async () => {
     await withTempWorkspace(async workspace => {
       const store: SessionStore = new Store(join(workspace, 'sessions'))

@@ -43,7 +43,7 @@
 import UiInput from './UiInput.vue'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import ChannelsView from './ChannelsView.vue'
 import ModelDefaultsForm from './ModelDefaultsForm.vue'
@@ -53,7 +53,7 @@ import { createProjectSettingsClient, type ProjectConfig } from '../project-sett
 import { useInstallationContext } from '../composables/useInstallationContext.ts'
 
 const livePool = useLiveClientPool()
-const props = defineProps<{ apiBase: string; hostApiBase: string; projectId: string }>()
+const props = withDefaults(defineProps<{ apiBase: string; hostApiBase: string; projectId: string; active?: boolean }>(), { active: true })
 defineOptions({ name: 'ProjectSettings' })
 const route = useRoute()
 const installation = useInstallationContext()
@@ -74,24 +74,40 @@ const error = ref('')
 const notice = ref('')
 let request: AbortController | undefined
 let mutation: AbortController | undefined
-function accept(value: ProjectConfig) { config.value = value }
+let client: ReturnType<typeof createProjectSettingsClient> | undefined
+let unobserveConfig: (() => void) | undefined
+let mounted = false, boundBase: string | undefined
+function releaseConfig() {
+  boundBase = undefined
+  request?.abort(); request = undefined
+  mutation?.abort(); mutation = undefined
+  loading.value = saving.value = false
+  unobserveConfig?.(); unobserveConfig = undefined
+  client?.release(); client = undefined
+  config.value = undefined
+}
 async function load() {
+  if (!mounted || !props.active) return
   if (!available.value) { error.value = t('Main is unavailable'); return }
   request?.abort()
   const controller = new AbortController()
   request = controller
   loading.value = true
   error.value = ''
-  const client = createProjectSettingsClient(props.apiBase, fetch, livePool)
+  if (!client) {
+    client = createProjectSettingsClient(props.apiBase, fetch, livePool)
+    unobserveConfig = client.subscribe(value => { config.value = value })
+  }
   try {
-    const [catalog, next] = await Promise.all([
+    // Do not capture config across the independent catalog request. The
+    // subscription is authoritative, including a newer value or revocation.
+    const [catalog] = await Promise.all([
       createProjectsClient(props.hostApiBase).list(controller.signal), client.load(controller.signal),
     ])
     if (controller.signal.aborted) return
     project.value = catalog.find(item => item.id === props.projectId)
     if (!project.value) throw new Error(t('This project is unavailable. Return to conversations and refresh the catalog.'))
     name.value = project.value.name
-    accept(next)
   } catch (cause) {
     if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load project settings. Retry.')
   } finally { if (request === controller) loading.value = false }
@@ -119,8 +135,24 @@ function projectDeleted(projectId: string) {
   deleting.value = false
   window.dispatchEvent(new CustomEvent('shadow:project-deleted', { detail: { projectId } }))
 }
-onMounted(load)
-onUnmounted(() => { request?.abort(); mutation?.abort() })
+function bind() {
+  const base = mounted && props.active && available.value ? props.apiBase : undefined
+  if (base === boundBase) return
+  releaseConfig()
+  if (!base) {
+    if (mounted && props.active && !available.value) error.value = t('Main is unavailable')
+    return
+  }
+  boundBase = base
+  void load()
+}
+function activate() { mounted = true; bind() }
+function deactivate() { mounted = false; releaseConfig() }
+onMounted(activate)
+onActivated(activate)
+onDeactivated(deactivate)
+watch(() => [props.apiBase, props.active, available.value], bind)
+onUnmounted(deactivate)
 </script>
 
 <style scoped>

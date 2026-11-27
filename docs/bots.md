@@ -848,6 +848,9 @@ remain accessible rather than being assigned by title or guessed from bindings.
 
 This is a display projection, not a subscription change or history migration.
 New platform receipts and bound BOT replies share the fixed `channel-inbox:` ID.
+Authorized history details remain readable when the inbox has no active BOT
+assignment. The read uses stored context metadata when available and does not
+authorize or start execution. Missing assignments do not rewrite history.
 Existing legacy `bot:` histories require the reviewed
 [channel identity migration](channel-session-migration.md); sidebar grouping alone
 does not migrate history. Neither grouping nor migration

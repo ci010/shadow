@@ -308,6 +308,7 @@ test('removed project leases cannot publish late events or contaminate replaceme
   await removed.next()
   old.close()
   assert.deepEqual(await removed.next(), { type: 'reset', cursor: hub.cursor, reason: 'project-removed' })
+  assert.deepEqual(await removed.next(), { type: 'unavailable', cursor: hub.cursor, topics: [chat()] })
   assert.equal((await removed.reader.read()).done, true)
   const replacement = hub.registerProject('one')
   const cursor = hub.cursor

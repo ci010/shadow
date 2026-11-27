@@ -181,7 +181,7 @@ test('disconnected projections fall back and authorization errors clear protecte
       return { ready: () => new Promise<void>(() => {}), close() {}, refreshProjection: () => live }
     } }),
     observeHost(_base, next) { host = next; return () => {} },
-  }, { base: '', topic, parse: value => value as { runs: unknown[] }, load: async () => { reads++; throw Object.assign(new Error('Denied'), { status: 403 }) } })
+  }, { base: 'http://isolated-projection.test', topic, parse: value => value as { runs: unknown[] }, load: async () => { reads++; throw Object.assign(new Error('Denied'), { status: 403 }) } })
   observer.projectionSnapshot!({ event: 'snapshot', revision: 'one', data: { runs: [{ id: 'private' }] } })
   host({ phase: 'live' }); t.mock.timers.tick(30_000); await flush()
   assert.equal(reads, 0)
@@ -257,4 +257,61 @@ test('shared sidebar catalogs use one authorized socket for initial and changed 
     assert.equal(first.state.value.status, 'forbidden')
     assert.equal(groups.state.value.value, undefined)
   } finally { first.release(); second.release(); groups.release(); resources.dispose(); client.dispose(); hub.close(); await server.shutdown(); await server.finished }
+})
+
+test('legacy changes remain dirty if WS recovery fails during an older HTTP read', async t => {
+  const observers = new Map<string, LiveObserver>()
+  const older = Promise.withResolvers<number>(), started = Promise.withResolvers<void>()
+  let requests = 0, refreshed = 0
+  const projection = createLiveProjection({ client: () => ({ subscribe(t, observer) {
+    observers.set(t.kind, observer)
+    return { close() {}, ready: async () => {}, refreshProjection() { refreshed++; return true } }
+  } }) }, { base: 'https://dirty-while-recovering.test/projects/fixture', topic, parse: value => value as number,
+    load: async () => { if (++requests === 1) { started.resolve(); return older.promise } return 2 },
+  })
+  t.after(() => projection.dispose())
+  observers.get('io-runs')!.projectionUnavailable!(true)
+  await started.promise
+  observers.get('io')!.event({ type: 'event', cursor: 'fixture:1', topic: { kind: 'io', projectId: 'fixture' }, payload: { event: 'invalidate' } })
+  assert.equal(refreshed, 1)
+  observers.get('io-runs')!.projectionUnavailable!(true)
+  older.resolve(1)
+  await projection.read()
+  assert.equal(projection.state.value, 2)
+  assert.equal(requests, 2, 'one trailing HTTP read catches up with the true change')
+})
+
+test('an accepted restore with a failed WS projection falls back once; denied restore does not read', { timeout: 5000 }, async () => {
+  const app = new Hono()
+  app.use('*', async (c, next) => { normalizeGatewayUpgradeRequest(c); await next() })
+  const hub = new RealtimeHub({ projectExists: () => true })
+  let publisher = hub.registerProject('fixture', undefined, undefined, undefined, () => ({ runs: ['initial'] }))
+  let allowed = true, sockets = 0, reads = 0
+  registerRealtimeRoute(app, hub, () => true, { authorize: () => true, authorizeTopic: (_request, topic) => topic.kind !== 'io-runs' || allowed })
+  const server = serveGateway(app, { host: '127.0.0.1', port: 0 }); await server.ready
+  const base = `http://127.0.0.1:${server.addr.port}`
+  const client = createLiveClient(base, { socket(url, protocols) {
+    sockets++; const socket = new WebSocket(url, protocols)
+    return { addEventListener(type, receive) { (socket as unknown as globalThis.WebSocket).addEventListener(type, receive) }, send(text) { socket.send(text) }, close() { socket.close() } }
+  } })
+  const projection = createLiveProjection({ client: () => client }, { base, topic, legacy: false, fallbackMs: 200,
+    parse: value => value as { runs: unknown[] }, load: async () => { reads++; return { runs: ['restored via HTTP'] } },
+  })
+  try {
+    await projection.read(); assert.equal(reads, 0)
+    publisher.close()
+    await until(() => projection.state.status === 'forbidden')
+    assert.equal(projection.state.value, undefined)
+    publisher = hub.registerProject('fixture', undefined, undefined, undefined, () => { throw new Error('Temporary snapshot failure') })
+    await until(() => projection.state.value?.runs[0] === 'restored via HTTP')
+    assert.equal(reads, 1); assert.equal(sockets, 1)
+    publisher.close()
+    await until(() => projection.state.status === 'forbidden')
+    allowed = false
+    hub.registerProject('fixture', undefined, undefined, undefined, () => ({ runs: ['must stay hidden'] }))
+    await new Promise(resolve => setTimeout(resolve, 250))
+    assert.equal(reads, 1); assert.equal(sockets, 1)
+    assert.equal(projection.state.status, 'forbidden')
+    assert.equal(projection.state.value, undefined)
+  } finally { projection.dispose(); client.dispose(); hub.close(); await server.shutdown(); await server.finished }
 })

@@ -92,20 +92,39 @@ cache. Lease replacement, replay gaps and reconnects use fresh snapshots rather
 than attempting to replay private inventory data.
 
 Reads retry across concurrent published mutations and recheck runtime identity
-and topic authorization before delivery. Repeated instability/read failure on
-an active projection disconnects for resnapshot. Existing per-client bounded
-send queues also apply to snapshots and deltas. HTTP remains an exceptional
-recovery/older-host path, not the normal response to projection changes. SSE
-retains its legacy invalidation topics and HTTP baselines; it does not supply
-these WebSocket acknowledgement projections. Audio status remains HTTP: its
-readiness includes externally changed executable/model paths without an
-observable authoritative change feed.
+and topic authorization before delivery. If a subscription batch cannot obtain
+a stable watermark after three attempts, its ACK marks the affected projections
+unavailable rather than disconnecting the shared chat/resource stream. The next
+successful projection update can supply a fresh baseline. Transient churn in
+the active push path drops the unstable base and retries only that topic with
+capped backoff, even without another domain event; a different read failure
+still disconnects for resnapshot.
+Existing per-client bounded send queues also apply to snapshots and deltas.
 
 Renderer projection owners wait for the negotiated initial snapshot, not an
 HTTP read triggered by subscription readiness or a 750ms race. Unsupported
-peers signal immediate HTTP fallback; stalled/failed transport has a bounded
-10-second recovery deadline. Explicit Project removal clears protected values
-immediately; restoration requires a fresh authorized snapshot.
+peers signal HTTP fallback; stalled transport has a 10-second recovery deadline.
+HTTP snapshots for projections and audio/config/model catalog share a renderer
+budget per Main across Projects: at most four concurrent requests, started at
+least 40 ms apart, with a 12-second transport deadline from dispatch. A pushed
+snapshot, revoked access, or disposal cancels queued/obsolete reads. SSE keeps
+legacy invalidation topics and HTTP baselines; it does not carry these projection
+snapshots. Explicit Project removal or a denied read clears protected values;
+restoration requires authorized data. SSE availability frames scope a removal to
+its Project, and a mixed subscription can reconnect without the removed Project
+blocking healthy topics. If an older server closes after a removal marker without
+its scope, the renderer hides possibly revoked data until availability is known.
+
+Audio status remains HTTP because external executable/model files have no
+authoritative change feed. Visible consumers share audio/config/model owners
+by Project endpoint and transport identity; transparent development logging does
+not change identity or merge injected transports. The last lease releases the
+subscription, cache and pending work. Invalidate-only owners reconcile once per
+observed disconnect/recovery gap; genuine invalidations during an HTTP snapshot
+still trigger a trailing read. WebSocket diagnostics report only fixed stage and
+failure labels and an optional numeric close code, not URLs, close reasons,
+tickets or payloads. These signals locate future failures; a network trace without
+WebSocket close information cannot establish the cause of prior disconnects.
 
 The global Project directory still uses the existing authorized `projects`
 notification topic and one shared HTTP catalog owner. Child workspace health

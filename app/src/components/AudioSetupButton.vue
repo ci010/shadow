@@ -78,14 +78,28 @@ function cancel() {
   clearTimeout(limit); clearTimeout(arm); clearTimeout(hold); arm = hold = undefined
   owner = undefined; pendingStop = false; pointerId = undefined; suppressClick = false; blockedChord = false; phase.value = 'idle'; loading.value = false
 }
+let capability: ReturnType<typeof audioStatusResource> | undefined
+let unobserveCapability: (() => void) | undefined
+function releaseCapability() {
+  unobserveCapability?.(); unobserveCapability = undefined
+  capability?.release(); capability = undefined
+  status.value = undefined
+}
+function activateCapability() {
+  if (!active || !props.visible || capability) return
+  capability = audioStatusResource(livePool, props.apiBase)
+  unobserveCapability = capability.subscribe(value => { status.value = value })
+  void refresh()
+}
 async function refresh(fresh = false, preservePopup = false) {
+  if (!capability) return
   const previousPopup = popup.value, previousPanel = panel.value
   cancel()
   if (preservePopup) { popup.value = previousPopup; panel.value = previousPanel }
   status.value = undefined; error.value = ''; loading.value = true
   const own = generation; controller = new AbortController()
   try {
-    const value = await audioStatusResource(livePool, props.apiBase).read(controller.signal, fresh)
+    const value = await capability.read(controller.signal, fresh)
     if (own === generation) status.value = value
   } catch (e) { if (own === generation) error.value = e instanceof Error ? e.message : String(e) }
   finally { if (own === generation) loading.value = false }
@@ -191,12 +205,12 @@ function keyUp(e: KeyboardEvent) {
 }
 function visibility() { if (document.hidden) cancel() }
 function attach() { active = true; window.addEventListener('keydown', keyDown); window.addEventListener('keyup', keyUp); window.addEventListener('pointerup', pointerUp); window.addEventListener('pointercancel', cancel); window.addEventListener('blur', cancel); document.addEventListener('visibilitychange', visibility) }
-function detach() { active = false; cancel(); window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp); window.removeEventListener('pointerup', pointerUp); window.removeEventListener('pointercancel', cancel); window.removeEventListener('blur', cancel); document.removeEventListener('visibilitychange', visibility) }
-onMounted(() => { attach(); void refresh() }); onActivated(() => { attach(); void refresh() }); onDeactivated(detach); onUnmounted(detach)
-watch(() => props.apiBase, () => { panel.value = false; void refresh() })
+function detach() { active = false; cancel(); releaseCapability(); window.removeEventListener('keydown', keyDown); window.removeEventListener('keyup', keyUp); window.removeEventListener('pointerup', pointerUp); window.removeEventListener('pointercancel', cancel); window.removeEventListener('blur', cancel); document.removeEventListener('visibilitychange', visibility) }
+onMounted(() => { attach(); activateCapability() }); onActivated(() => { attach(); activateCapability() }); onDeactivated(detach); onUnmounted(detach)
+watch(() => props.apiBase, () => { panel.value = false; cancel(); releaseCapability(); activateCapability() })
 watch(() => [props.draftKey, props.sessionId], () => { panel.value = false; cancel() })
 watch(() => props.disabled, value => { if (value) cancel() })
-watch(() => props.visible, value => { if (value === false) cancel(); else void refresh() })
+watch(() => props.visible, value => { if (!value) { cancel(); releaseCapability() } else activateCapability() })
 watch(() => props.keyboardActive, value => { if (value === false && (owner === 'keyboard' || arm)) cancel() })
 </script>
 <style scoped>

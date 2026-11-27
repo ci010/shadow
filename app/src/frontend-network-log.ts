@@ -1,5 +1,22 @@
 import { hostBase } from './api-url.ts'
 
+// Only this module's transparent diagnostic wrappers are aliases. Custom or
+// authenticated injected transports remain distinct, even for identical URLs.
+const instrumentedFetch = new WeakMap<typeof fetch, typeof fetch>()
+export function fetchTransportIdentity(request: typeof fetch): typeof fetch {
+  while (instrumentedFetch.has(request)) request = instrumentedFetch.get(request)!
+  return request
+}
+
+/** Retain the transport authority, but dispatch through its current logger. */
+export function diagnosticFetch(request: typeof fetch): typeof fetch {
+  const identity = fetchTransportIdentity(request)
+  return (input, init) => {
+    const current = globalThis.fetch
+    return Reflect.apply(fetchTransportIdentity(current) === identity ? current : identity, globalThis, [input, init])
+  }
+}
+
 /** Development metadata only: no headers, query, bodies or arbitrary paths.
  * Chromium's native error codes are not exposed by fetch/EventSource. */
 export function installFrontendNetworkLog(
@@ -38,6 +55,7 @@ export function installFrontendNetworkLog(
       throw error
     })
   }
+  instrumentedFetch.set(wrappedFetch, originalFetch)
   target.fetch = wrappedFetch
   const OriginalSource = target.EventSource
   const controller = new AbortController()

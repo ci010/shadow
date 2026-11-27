@@ -107,7 +107,8 @@
           <ProjectWorkbench v-else-if="tab === 'board'" :api-base="projectBase(apiBase, projectId)" :project-id="projectId"
             :visible="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))"
             @navigate="navigate(projectId, $event)" @compose="composeFromWorkbench(projectId, $event)" />
-          <ProjectSettings v-else :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId" />
+          <ProjectSettings v-else :api-base="projectBase(apiBase, projectId)" :host-api-base="installation.apiBase" :project-id="projectId"
+            :active="visible && !appTab && selectedProjectId === projectId && editorGroups.visible(projectEditorId(projectId, tab))" />
         </div>
       </EditorViewHost>
     </template>

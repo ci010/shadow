@@ -22,9 +22,9 @@ import { EditorOwnerKey } from '../editor-groups.ts'
 import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { t } from '../i18n.ts'
 import type { LabeledInputReference, AttachReferenceResult } from '../workflow-input-references.ts'
-import { computed, onMounted, onUnmounted, provide, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, provide, ref, shallowRef, watch } from 'vue'
 import ChatWorkspace from './ChatWorkspace.vue'
-import { createProjectSettingsClient, configReasoning } from '../project-settings.ts'
+import { createProjectSettingsClient, configReasoning, type ProjectConfig } from '../project-settings.ts'
 import { scopedModelCatalog } from '../model-catalog.ts'
 import { isRecord } from '../folders-sidebar.ts'
 import type { ReasoningSettings } from '../session-settings.ts'
@@ -44,12 +44,15 @@ provide(EditorOwnerKey, props.resourceKey ?? `${props.projectId}:${props.session
 const workspace = ref<InstanceType<typeof ChatWorkspace>>()
 const current = ref('')
 const defaultReasoning = ref<ReasoningSettings>({})
-const catalog = scopedModelCatalog(props.apiBase, livePool)
-const options = computed(() => catalog.value.value?.models ?? [])
+const catalog = shallowRef<ReturnType<typeof scopedModelCatalog>>()
+let client: ReturnType<typeof createProjectSettingsClient> | undefined
+let unobserveConfig: (() => void) | undefined
+let mounted = false, boundBase: string | undefined
+const options = computed(() => catalog.value?.value.value?.models ?? [])
 const configuredProviders = ref<ProviderInstanceLabel[]>([])
 const providers = computed(() => {
   const labels = new Map(configuredProviders.value.map(provider => [provider.id, provider]))
-  for (const provider of catalog.value.value?.providers ?? []) labels.set(provider.id, provider)
+  for (const provider of catalog.value?.value.value?.providers ?? []) labels.set(provider.id, provider)
   return [...labels.values()]
 })
 const error = ref('')
@@ -58,8 +61,8 @@ let request: AbortController | undefined
 let previousDefault: string | undefined
 provideModelSelection({
   current, defaultReasoning, options, providers, error, loading, disabled: computed(() => loading.value),
-  catalogRevision: catalog.revision,
-  async loadCatalog(signal) { await catalog.read(signal) },
+  catalogRevision: computed(() => catalog.value?.revision.value ?? 0),
+  async loadCatalog(signal) { await catalog.value?.read(signal) },
   async select(model) {
     if (!model.trim()) { error.value = t('Choose a model for this conversation.'); return }
     current.value = model
@@ -67,38 +70,67 @@ provideModelSelection({
   },
 })
 async function load() {
+  if (!client) return
   request?.abort()
   const controller = new AbortController()
   request = controller
   loading.value = true
   error.value = ''
-  const client = createProjectSettingsClient(props.apiBase, fetch, livePool)
   try {
-    const config = await client.load(controller.signal)
-    if (controller.signal.aborted) return
-    if (!current.value || current.value === previousDefault) current.value = config.agent.model
-    previousDefault = config.agent.model
-    defaultReasoning.value = configReasoning(config)
-    configuredProviders.value = Object.entries(isRecord(config.providers) ? config.providers : {}).flatMap(([id, provider]) =>
-      isRecord(provider) ? [{ id, type: typeof provider.type === 'string' ? provider.type : id,
-        name: typeof provider.name === 'string' ? provider.name : undefined }] : [])
+    await client.load(controller.signal) // The subscription alone publishes configuration.
   } catch (cause) {
     if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load project models. Retry.')
   } finally { if (request === controller) loading.value = false }
 }
-onMounted(load)
+function accept(config: ProjectConfig | undefined) {
+  if (!config) {
+    if (current.value === previousDefault) current.value = ''
+    previousDefault = undefined
+    defaultReasoning.value = {}
+    configuredProviders.value = []
+    return
+  }
+  if (!current.value || current.value === previousDefault) current.value = config.agent.model
+  previousDefault = config.agent.model
+  defaultReasoning.value = configReasoning(config)
+  configuredProviders.value = Object.entries(isRecord(config.providers) ? config.providers : {}).flatMap(([id, provider]) =>
+    isRecord(provider) ? [{ id, type: typeof provider.type === 'string' ? provider.type : id,
+      name: typeof provider.name === 'string' ? provider.name : undefined }] : [])
+}
+function release() {
+  boundBase = undefined
+  request?.abort()
+  unobserveConfig?.(); unobserveConfig = undefined
+  client?.release(); client = undefined
+  catalog.value?.release(); catalog.value = undefined
+  loading.value = false
+  accept(undefined)
+}
+function bind() {
+  const base = mounted && props.visible ? props.apiBase : undefined
+  if (base === boundBase) return
+  release()
+  if (!base) return
+  boundBase = base
+  client = createProjectSettingsClient(base, fetch, livePool)
+  unobserveConfig = client.subscribe(accept)
+  catalog.value = scopedModelCatalog(base, livePool)
+  void load()
+}
 function defaultsChanged(event: Event) {
   const id = (event as CustomEvent<{ projectId?: string }>).detail?.projectId
-  if (!id || id === props.projectId) {
-    createProjectSettingsClient(props.apiBase, fetch, livePool).invalidate()
+  if (client && (!id || id === props.projectId)) {
+    client.invalidate()
     void load()
   }
 }
-onMounted(() => window.addEventListener('shadow:config-changed', defaultsChanged))
-onUnmounted(() => {
-  request?.abort()
-  window.removeEventListener('shadow:config-changed', defaultsChanged)
-})
+function activate() { mounted = true; bind() }
+function deactivate() { mounted = false; release() }
+onMounted(() => { activate(); window.addEventListener('shadow:config-changed', defaultsChanged) })
+onActivated(activate)
+onDeactivated(deactivate)
+watch(() => [props.visible, props.apiBase], bind)
+onUnmounted(() => { deactivate(); window.removeEventListener('shadow:config-changed', defaultsChanged) })
 defineExpose({ canReplaceSidebarTab: () => workspace.value?.canReplaceSidebarTab() ?? false, appendInputReference: (item: LabeledInputReference): AttachReferenceResult => workspace.value?.appendInputReference(item) ?? 'unavailable', focusConversation: () => workspace.value?.focusConversation(), appendDraft: (text: string) => workspace.value?.appendDraft(text), requestSession: (id: string) => workspace.value?.requestSession(id) })
 </script>
 

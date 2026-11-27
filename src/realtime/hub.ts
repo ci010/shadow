@@ -143,6 +143,8 @@ export class RealtimeHub {
           }
           if (client.removeProject) { client.removeProject(projectId); continue }
           client.send(this.frame({ type: 'reset', reason: 'project-removed', cursor: this.cursor }))
+          client.send(this.frame({ type: 'unavailable', cursor: this.cursor,
+            topics: client.topics.filter(topic => topic.projectId === projectId) }))
           client.close()
         }
       },
@@ -245,6 +247,25 @@ export class RealtimeHub {
     const refreshing = new Set<string>()
     const dirty = new Set<string>()
     const isProjection = (topic: RealtimeTopic): topic is ProjectionTopic => (projectionKinds as readonly string[]).includes(topic.kind)
+    const projectionRetries = new Map<string, { attempt: number; timer?: ReturnType<typeof setTimeout> }>()
+    function clearProjectionRetry(key: string) {
+      clearTimeout(projectionRetries.get(key)?.timer)
+      projectionRetries.delete(key)
+    }
+    function retryProjection(topic: ProjectionTopic) {
+      const key = realtimeTopicKey(topic)
+      if (ended || !active.has(key) || !authorizeTopic(topic)) return
+      const retry = projectionRetries.get(key) ?? { attempt: 0 }
+      if (retry.timer !== undefined) return
+      projectionRetries.set(key, retry)
+      retry.timer = setTimeout(() => {
+        retry.timer = undefined
+        if (!ended && active.has(key) && authorizeTopic(topic)) void refreshProjection(topic)
+        else clearProjectionRetry(key)
+      }, Math.min(10_000, 250 * 2 ** Math.min(retry.attempt++, 6)))
+      retry.timer.unref?.()
+    }
+    class ProjectionChanged extends Error {}
     const readProjection = async (topic: ProjectionTopic) => {
       for (let attempt = 0; attempt < 3; attempt++) {
         const project = this.projects.get(topic.projectId)
@@ -257,18 +278,19 @@ export class RealtimeHub {
         if (before !== this.mutation) continue
         return { data: structuredClone(data), revision: projectionRevision(data) }
       }
-      throw new Error('projection_changed')
+      throw new ProjectionChanged('projection_changed')
     }
     const refreshProjection = async (topic: ProjectionTopic) => {
       const key = realtimeTopicKey(topic)
       dirty.add(key)
-      if (refreshing.has(key) || updating) return
+      if (refreshing.has(key) || updating || projectionRetries.get(key)?.timer !== undefined) return
       refreshing.add(key)
       try {
         while (!ended && dirty.delete(key) && active.has(key)) {
           const next = await readProjection(topic)
           if (ended || !active.has(key) || !authorizeTopic(topic)) return
           if (updating) { dirty.add(key); return }
+          clearProjectionRetry(key)
           const previous = projected.get(key)
           if (previous?.revision === next.revision) continue
           const payload = projectionPayload(topic, next.data, previous)
@@ -276,10 +298,17 @@ export class RealtimeHub {
           send(JSON.stringify({ type: 'event', cursor: `${this.epoch}:${++this.sequence}`, topic, payload }))
           projected.set(key, next)
         }
-      } catch {
-        // No invalidate/GET normal path: a failed projection closes the socket
-        // so reconnect resnapshots, while HTTP remains the exceptional fallback.
-        if (!ended && active.has(key)) client.close(new Error('Realtime projection failed; reconnect and resnapshot'))
+      } catch (error) {
+        if (error instanceof ProjectionChanged && !ended && active.has(key)) {
+          // Retain the gap even if no more domain events are published; retry
+          // this topic with capped backoff instead of spinning or closing WS.
+          projected.delete(key)
+          dirty.delete(key)
+          this.options.diagnostic('projection-update-unstable')
+          retryProjection(topic)
+        } else if (!ended && active.has(key)) {
+          client.close(new Error('Realtime projection failed; reconnect and resnapshot'))
+        }
       } finally { refreshing.delete(key) }
     }
 
@@ -296,6 +325,7 @@ export class RealtimeHub {
     const remove = (key: string) => {
       active.get(key)?.release()
       active.delete(key)
+      clearProjectionRetry(key)
       projected.delete(key)
       dirty.delete(key)
       client.keys.delete(key)
@@ -315,9 +345,14 @@ export class RealtimeHub {
       client.topics = [...active.values()].map(entry => entry.topic)
       send(JSON.stringify({ type: 'topic-reset', cursor: this.cursor, topics, reason,
         unavailable: this.projects.has(projectId) ? [] : topics }))
-      for (const topic of topics) if (!removed && isProjection(topic) && this.projects.has(projectId)) {
-        projected.delete(realtimeTopicKey(topic))
-        void refreshProjection(topic)
+      // Restoration is followed by the client's explicit snapshot command.
+      // Its failure stays on the per-topic ACK path rather than starting a
+      // parallel potentially fatal push before it can ACK.
+      for (const topic of topics) if (isProjection(topic)) {
+        const key = realtimeTopicKey(topic)
+        clearProjectionRetry(key)
+        dirty.delete(key)
+        projected.delete(key)
       }
     }
     const cleanup = () => {
@@ -438,6 +473,7 @@ export class RealtimeHub {
           conversationMutation = this.mutation
           updating = false
         }
+        let unstableBatch = false
         const projectionReads: Array<{ topic: ProjectionTopic; value: { revision: string; data: unknown } }> = []
         const projectionTopics = [...desired].flatMap(([key, { topic, snapshot }]) =>
           isProjection(topic) && (!active.has(key) || snapshot) ? [topic] : [])
@@ -451,7 +487,19 @@ export class RealtimeHub {
             catch { return { topic, error: 'projection_unavailable' } }
           }))
           if (before !== this.mutation) {
-            if (attempt === 2) throw new Error('Projection batch changed')
+            if (attempt === 2) {
+              // Do not tear down the same host's chat/resource streams when a
+              // busy projection batch cannot get a common stable watermark.
+              // The client uses bounded HTTP until the next authoritative push.
+              unstableBatch = true
+              this.options.diagnostic('projection-batch-unstable')
+              ack.projections = projectionTopics.map(topic => ({ topic, error: 'projection_unavailable' }))
+              for (const topic of projectionTopics) {
+                const key = realtimeTopicKey(topic)
+                projected.delete(key)
+                dirty.delete(key)
+              }
+            }
             continue
           }
           for (const entry of reads) {
@@ -461,6 +509,12 @@ export class RealtimeHub {
           break
         }
         if (ended) return
+        for (const topic of projectionTopics) {
+          if (authorizeTopic(topic)) continue
+          desired.delete(realtimeTopicKey(topic))
+          ack.rejected.push(topic)
+        }
+        if (ack.projections) ack.projections = ack.projections.filter(entry => desired.has(realtimeTopicKey(entry.topic)))
         if (ack.conversations && conversationMutation !== this.mutation) {
           ack.conversations = ack.conversations.map(({ topic }) => ({ topic, error: 'conversation_changed' }))
           opening.clear()
@@ -488,13 +542,18 @@ export class RealtimeHub {
           if (after !== undefined && event.sequence > after && (!event.conversationOnly || client.conversationTopics?.has(event.key)) && !client.send(event.frame)) return
         }
         for (const { topic, value } of projectionReads) {
-          if (!authorizeTopic(topic)) throw new Error('Projection access revoked')
+          const key = realtimeTopicKey(topic)
+          if (!desired.has(key)) continue
+          clearProjectionRetry(key)
           projected.set(realtimeTopicKey(topic), value)
           ack.projections ??= []
           ack.projections.push({ topic, snapshot: { event: 'snapshot', ...value } })
         }
         ack.cursor = this.cursor
         send(JSON.stringify(ack))
+        if (unstableBatch) for (const topic of projectionTopics) if (desired.has(realtimeTopicKey(topic)) && this.projects.has(topic.projectId)) {
+          retryProjection(topic)
+        }
         for (const key of dirty) {
           const topic = active.get(key)?.topic
           if (topic && isProjection(topic)) void refreshProjection(topic)
@@ -513,7 +572,10 @@ export class RealtimeHub {
     if (this.closed) return Response.json({ error: 'realtime_stopping' }, { status: 503 })
     // Also validate direct callers; the HTTP route is not the trust boundary.
     topics = parseRealtimeTopics(JSON.stringify(topics))
-    if (topics.some(topic => topic.kind !== 'projects' && !this.projects.has(topic.projectId) && !this.options.projectExists(topic.projectId))) {
+    // A vanished Project must not reject the entire multiplexed SSE reconnect.
+    // Unknown-only requests keep their existing 404; mixed streams mark just
+    // the absent topics unavailable and cannot publish any data for them.
+    if (topics.length > 0 && !topics.some(topic => topic.kind === 'projects' || this.projects.has(topic.projectId) || this.options.projectExists(topic.projectId))) {
       return Response.json({ error: 'unknown_realtime_project' }, { status: 404 })
     }
     const { reason, after } = this.resume(topics, cursor)

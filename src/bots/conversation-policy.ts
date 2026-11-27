@@ -22,9 +22,14 @@ import { conversationBindingKey, type ResolvedConversationPolicy, type PolicyToo
 import type { SessionState } from '../sessions/session-store.ts'
 import type { ChannelBoundary } from '../channels/integration-contract.ts'
 
+// Read-only projections can omit a missing execution assignment; execution
+// paths must continue to reject it instead of treating it as a grant.
+export class ConversationAssignmentUnavailable extends Error {}
+
 export interface ConversationPolicies {
   personal?(sessionId: string): { agent: string; prompt: string; assertCurrent?: () => void } | undefined
   managed(sessionId: string): boolean
+  inspect?(sessionId: string): ResolvedConversationPolicy | undefined
   resolve(sessionId: string): ResolvedConversationPolicy | undefined
   authorize(sessionId: string, input: SessionInput): void
   assertInputAvailable?(sessionId: string): void
@@ -72,7 +77,7 @@ export class DirectoryBotService implements ConversationPolicies {
     if (!address) return undefined
     const policy = this.policyStore.resolve(address)
     if (!policy?.binding.enabled && this.policyStore.isManaged(address)) {
-      throw new Error('This conversation agent is disabled or no longer published. Ask the Project owner to configure it.')
+      throw new ConversationAssignmentUnavailable('This conversation agent is disabled or no longer published. Ask the Project owner to configure it.')
     }
     return policy
   }

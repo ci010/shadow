@@ -100,7 +100,11 @@ function fixture(t: TestContext, canWrite = false, socketSnapshot = false) {
   const invalidate = (projectId: string) => {
     for (const subscription of subscriptions) if (!subscription.closed && subscription.projectId === projectId) subscription.observer.reset('subscription')
   }
-  return { mount, invalidate, requests, subscriptions, refreshRequests: () => refreshRequests,
+  async function waitForRequests(count: number) {
+    for (let i = 0; i < 50 && requests.length < count; i++) await settle()
+    assert.ok(requests.length >= count, `Expected ${count} dispatched requests, got ${requests.length}`)
+  }
+  return { mount, invalidate, requests, waitForRequests, subscriptions, refreshRequests: () => refreshRequests,
     disconnectSocket: () => { socketSnapshot = false } }
 }
 
@@ -370,7 +374,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   const b = f.mount('b')
   f.invalidate('a')
   f.invalidate('b')
-  await settle()
+  await f.waitForRequests(4)
   assert.equal(f.requests.length, 4)
   for (const request of f.requests) request.finish(request.path.endsWith('/summary') ? graph()
     : { activity: { [root]: { stage: 'idle' }, [task]: { stage: 'waiting' } } })
@@ -379,7 +383,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   assert.equal(stage(a), 'Waiting for a response')
   assert.equal(stage(b), 'Waiting for a response')
   f.invalidate('a')
-  await settle()
+  await f.waitForRequests(6)
   assert.equal(f.requests.length, 6)
   assert.match(f.requests[4].path, /^\/projects\/a\/api\/sessions\/summary$/)
   f.requests[4].finish(graph())
@@ -390,12 +394,12 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   assert.equal(stage(b), 'Waiting for a response')
   assert.equal(a.state().inputText, 'Keep this exact unsent draft')
   const poll = a.state().refreshSessionActivity()
-  await settle()
+  await f.waitForRequests(7)
   f.requests[6].finish({ activity: { [root]: { stage: 'idle' }, [task]: { stage: 'waiting' } } })
   await poll
   assert.equal(stage(a), 'Waiting for a response', 'Clearing call-wait metadata cannot retain a stale graph flag')
   f.invalidate('a')
-  await settle()
+  await f.waitForRequests(9)
   a.props.projectId = 'c'
   a.props.apiBase = 'http://fixture/projects/c'
   await Vue.nextTick()
@@ -407,6 +411,7 @@ test('sessions invalidation refreshes mounted chat graph and metadata-only call 
   await settle()
   assert.equal(stage(a), 'Status unavailable', 'Switching Projects clears the old graph instead of showing foreign execution metadata')
   assert.deepEqual(a.state().allSessions, [])
+  await f.waitForRequests(11)
   f.requests[9].finish(graph())
   await settle()
   const state = a.state()
@@ -427,11 +432,11 @@ test('admin uses the ordinary writable chat and SSE-discovered topics navigate i
   assert.equal(f.requests.length, 0, 'Mounting a admin does not ensure or send a turn')
   assert.equal(a.state().isDirectChat, true)
   f.invalidate('a')
-  await settle()
+  await f.waitForRequests(2)
   f.requests[0]!.finish({ nodes: [], sessions: [
     { sessionId: 'web:chat-admin', mode: 'session', parentSessionId: null },
     { sessionId: 'web:chat-topic', sessionKind: 'topic', mode: 'session', parentSessionId: null,
-      createdBySessionId: 'web:chat-admin', topic: { title: 'Installer', goal: 'Ship', scope: 'Windows' } },
+      createdBySessionId: 'web:chat-admin', topic: 'Installer' },
   ] })
   await settle()
   f.requests[1]!.finish({ activity: {} })
@@ -785,7 +790,7 @@ test('scratch draft status reads wait for persistence, not ID allocation or fail
 test('navigation selection callback ensures shared snapshots while explicit reload still forces refresh', async t => {
   const f = fixture(t)
   const view = f.mount('a')
-  await settle()
+  await f.waitForRequests(2)
   const graphRead = f.requests.find(request => request.path.endsWith('/summary'))!
   const stagesRead = f.requests.find(request => request.path.endsWith('/stages'))!
   graphRead.finish(graph())
@@ -803,7 +808,7 @@ test('navigation selection callback ensures shared snapshots while explicit relo
   assert.equal(count('/summary'), 1, 'selection must not force a graph refresh')
   assert.equal(count('/stages'), 1, 'initial chat reset and selection reuse activity')
   const reload = view.state().loadSessionList()
-  await settle()
+  for (let i = 0; i < 50 && (count('/summary') < 2 || count('/stages') < 2); i++) await settle()
   assert.equal(count('/summary'), 2, 'explicit reload retains force semantics')
   assert.equal(count('/stages'), 2)
   f.requests.filter(request => request.path.endsWith('/summary')).at(-1)!.finish(graph())

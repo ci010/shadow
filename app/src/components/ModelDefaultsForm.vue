@@ -34,7 +34,6 @@
 </template>
 
 <script setup lang="ts">
-import { useLiveClientPool } from '../composables/useLiveClient.ts'
 import { modelOptionLabel, type ProviderInstanceLabel } from '../model-selection.ts'
 import { CONTEXT_WINDOWS } from '../../../src/agent/llm-config.ts'
 import UiSelect from './UiSelect.vue'
@@ -42,10 +41,9 @@ import UiCombobox from './UiCombobox.vue'
 import { t } from '../i18n.ts'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { createModelDefaultsClient, type ModelDefaultsState } from '../model-defaults.ts'
-import { createProjectSettingsClient } from '../project-settings.ts'
+import { readProjectModelCatalog } from '../project-settings.ts'
 import { contextWindowLabel, currentEffort, effortOptionsForModel, reasoningSettingsForEffort, type EffortChoice } from '../session-settings.ts'
 
-const livePool = useLiveClientPool()
 const props = defineProps<{ apiBase: string; scope: 'app' | 'project'; projectId?: string }>()
 
 const parentLabel = computed(() => props.scope === 'app' ? t('built-in defaults') : t('App defaults'))
@@ -80,7 +78,7 @@ async function load() {
   await Promise.all([
     client.load(controller.signal).then(value => { if (!controller.signal.aborted) accept(value) })
       .catch(cause => { if (!controller.signal.aborted) error.value = cause instanceof Error ? cause.message : t('Could not load defaults.') }),
-    createProjectSettingsClient(props.apiBase, fetch, livePool).catalog(controller.signal).then(value => { if (!controller.signal.aborted) { models.value = value.models; providers.value = value.providers } })
+    readProjectModelCatalog(props.apiBase, controller.signal).then(value => { if (!controller.signal.aborted) { models.value = value.models; providers.value = value.providers } })
       .catch(cause => { if (!controller.signal.aborted) modelsError.value = cause instanceof Error ? cause.message : t('Could not load model choices.') }),
   ])
   if (request === controller) loading.value = false

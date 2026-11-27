@@ -61,7 +61,7 @@ test('client uses one real socket for rapid chat switches, then replays before l
     assert.equal(sockets.length, 1)
     assert.deepEqual(sidebar.resets, ['initial'])
     assert.deepEqual(b.resets, [])
-    assert.deepEqual(denied.resets, [])
+    assert.deepEqual(denied.resets, ['project-removed'], 'rejecting an entitled-looking topic also clears any observer baseline')
     const live = once(sockets[0], 'message')
     publisher.chat('a', 'removed')
     publisher.chat('denied', 'denied')
@@ -334,4 +334,107 @@ test('active conversation keeps append and completion while a refresh snapshot i
     release.resolve()
     client.dispose(); hub.close(); await server.shutdown(); await server.finished
   }
+})
+
+test('an authorized conversation restore clears revocation on both snapshot and fallback ACK', { timeout: 5000 }, async () => {
+  const app = new Hono()
+  app.use('*', async (c, next) => { normalizeGatewayUpgradeRequest(c); await next() })
+  const hub = new RealtimeHub({ projectExists: id => id === 'default' })
+  let publisher = hub.registerProject('default', undefined, async () => ({ data: 'initial' }))
+  registerRealtimeRoute(app, hub, () => true, { authorize: () => true, authorizeTopic: () => true })
+  const server = serveGateway(app, { host: '127.0.0.1', port: 0 }); await server.ready
+  let opened = 0
+  const client = createLiveClient(`http://127.0.0.1:${server.addr.port}`, { socket(url, protocols) {
+    opened++
+    const socket = new WebSocket(url, protocols)
+    return { addEventListener(type, receive) { (socket as unknown as globalThis.WebSocket).addEventListener(type, receive) }, send(text) { socket.send(text) }, close() { socket.close() } }
+  } })
+  const view = observe()
+  const snapshots: unknown[] = []
+  let failures = 0
+  const sidebar = client.subscribe({ kind: 'projects' }, observe().observer)
+  async function until(check: () => boolean) {
+    for (let i = 0; i < 160; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)) }
+    assert.fail('Timed out waiting for authorized chat restore')
+  }
+  try {
+    // Opening the conversation uses the capability negotiated on the host ACK.
+    await sidebar.ready()
+    const subscription = client.subscribe(chat('restored'), { ...view.observer,
+      conversationSnapshot: value => snapshots.push(value), conversationRefreshFailed: () => { failures++ },
+    })
+    await subscription.ready()
+    assert.deepEqual(snapshots, ['initial'])
+    for (const result of ['snapshot', 'fallback'] as const) {
+      publisher.close()
+      await until(() => view.resets.filter(reason => reason === 'project-removed').length === (result === 'snapshot' ? 1 : 2))
+      await assert.rejects(subscription.ready(), /unavailable/)
+      publisher = hub.registerProject('default', undefined, async () => result === 'snapshot' ? { data: 'restored' } : { error: 'conversation_unavailable' })
+      await until(() => result === 'snapshot' ? snapshots.length === 2 : failures === 1)
+      await subscription.ready()
+      publisher.chat('restored', result)
+      await until(() => view.events.includes(result))
+    }
+    assert.equal(opened, 1)
+    assert.deepEqual(snapshots, ['initial', 'restored'])
+    assert.deepEqual(view.events, ['snapshot', 'fallback'])
+  } finally { sidebar.close(); client.dispose(); hub.close(); await server.shutdown(); await server.finished }
+})
+
+test('an old in-flight open ACK cannot release a replacement conversation topology', { timeout: 5000 }, async () => {
+  const app = new Hono()
+  app.use('*', async (c, next) => { normalizeGatewayUpgradeRequest(c); await next() })
+  const hub = new RealtimeHub({ projectExists: id => id === 'default' })
+  const enteredOld = Promise.withResolvers<void>(), finishOld = Promise.withResolvers<void>()
+  const enteredNew = Promise.withResolvers<void>(), finishNew = Promise.withResolvers<void>()
+  let oldReads = 0, newReads = 0
+  const publisher = hub.registerProject('default', undefined, async () => {
+    if (++oldReads === 1) return { data: 'initial' }
+    enteredOld.resolve(); await finishOld.promise
+    return { data: 'stale old runtime' }
+  })
+  registerRealtimeRoute(app, hub, () => true, { authorize: () => true, authorizeTopic: () => true })
+  const server = serveGateway(app, { host: '127.0.0.1', port: 0 }); await server.ready
+  const commands: string[] = []
+  const client = createLiveClient(`http://127.0.0.1:${server.addr.port}`, { socket(url, protocols) {
+    const socket = new WebSocket(url, protocols)
+    return { addEventListener(type, receive) { (socket as unknown as globalThis.WebSocket).addEventListener(type, receive) },
+      send(text) { commands.push(JSON.parse(text).type); socket.send(text) }, close() { socket.close() } }
+  } })
+  const view = observe()
+  const snapshots: unknown[] = []
+  let fallback = 0
+  const sidebar = client.subscribe({ kind: 'projects' }, observe().observer)
+  const until = async (check: () => boolean) => {
+    for (let i = 0; i < 160; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)) }
+    assert.fail('Timed out waiting for topology transition')
+  }
+  try {
+    await sidebar.ready()
+    const sub = client.subscribe(chat('restored'), { ...view.observer, conversationSnapshot: value => snapshots.push(value), conversationRefreshFailed: () => { fallback++ } })
+    await sub.ready(); assert.deepEqual(snapshots, ['initial'])
+    assert.equal(sub.refreshConversation?.(), true)
+    await enteredOld.promise
+    publisher.close()
+    await until(() => view.resets.includes('project-removed'))
+    await assert.rejects(sub.ready(), /unavailable/)
+    const replacement = hub.registerProject('default', undefined, async () => {
+      newReads++; enteredNew.resolve(); await finishNew.promise
+      return { data: 'replacement runtime' }
+    })
+    finishOld.resolve()
+    await enteredNew.promise
+    assert.equal(fallback, 0, 'old in-flight ACK must not become the authorized fallback')
+    assert.deepEqual(snapshots, ['initial'], 'no old snapshot or speculative grant')
+    let ready = false
+    const restored = sub.ready().then(() => { ready = true })
+    await new Promise(resolve => setTimeout(resolve, 15))
+    assert.equal(ready, false, 'the current conversation snapshot still owns readiness')
+    finishNew.resolve(); await restored
+    assert.deepEqual(snapshots, ['initial', 'replacement runtime'])
+    assert.equal(newReads, 1)
+    assert.deepEqual(commands, ['subscribe', 'openConversation', 'openConversation', 'openConversation'])
+    replacement.chat('restored', 'live again')
+    await until(() => view.events.includes('live again'))
+  } finally { finishOld.resolve(); finishNew.resolve(); sidebar.close(); client.dispose(); hub.close(); await server.shutdown(); await server.finished }
 })

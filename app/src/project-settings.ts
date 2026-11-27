@@ -1,5 +1,6 @@
 import { coalescedRead, configResource } from './settings-resource.ts'
 import { apiUrl } from './api-url.ts'
+import { diagnosticFetch } from './frontend-network-log.ts'
 import type { ResourceLivePool } from './live-resource-refresh.ts'
 import type { ProviderInstanceLabel } from './model-selection.ts'
 import { t } from './i18n.ts'
@@ -49,10 +50,15 @@ export function mergeProjectSettings(config: ProjectConfig, section: 'agent' | '
 }
 
 export function createProjectSettingsClient(base: string, request: typeof fetch = fetch, pool?: ResourceLivePool) {
-  const load = async (signal?: AbortSignal) => parseProjectConfig(await projectJson(base, '/api/config', { signal }, request))
+  const dispatch = diagnosticFetch(request)
+  const load = async (signal?: AbortSignal) => parseProjectConfig(await projectJson(base, '/api/config', { signal, cache: 'no-store' }, dispatch))
   const shared = pool ? configResource(pool, base, request, load) : undefined
   return {
     invalidate: () => shared?.invalidate(),
+    release: () => shared?.release(),
+    subscribe(listener: (value: ProjectConfig | undefined) => void) {
+      return shared?.subscribe(state => listener(state.value === undefined ? undefined : parseProjectConfig(state.value)))
+    },
     load: (signal?: AbortSignal) => shared ? shared.read(signal).then(parseProjectConfig) : load(signal),
     async save(section: 'agent' | 'learning', patch: Record<string, unknown>, signal?: AbortSignal) {
       // The config endpoint replaces the document. Read immediately before merging
@@ -63,14 +69,16 @@ export function createProjectSettingsClient(base: string, request: typeof fetch 
         return parseProjectConfig(await projectJson(base, '/api/config', { method: 'PATCH', body: JSON.stringify(next), signal }, request))
       } finally { shared?.invalidate() }
     },
-    async catalog(signal?: AbortSignal): Promise<{ models: string[]; providers: ProviderInstanceLabel[] }> {
-      const result = await coalescedRead(request, apiUrl(base, '/api/models').toString(), signal => projectJson(base, '/api/models', { signal }, request), signal)
-      return parseModelCatalog(result)
-    },
+    catalog: (signal?: AbortSignal) => readProjectModelCatalog(base, signal, request),
     async models(signal?: AbortSignal): Promise<string[]> {
       return (await this.catalog(signal)).models
     },
   }
+}
+
+export async function readProjectModelCatalog(base: string, signal?: AbortSignal, request: typeof fetch = fetch) {
+  const result = await coalescedRead(request, apiUrl(base, '/api/models').toString(), signal => projectJson(base, '/api/models', { signal }, diagnosticFetch(request)), signal)
+  return parseModelCatalog(result)
 }
 
 export async function fetchModelCatalog(base: string, request: typeof fetch, signal: AbortSignal) {

@@ -358,3 +358,96 @@ for (const mode of ['disconnect', 'retry'] as const) {
     assert.equal(next.closed, false)
   })
 }
+
+test('WS reconnect resends the current topic set once and records bounded failure metadata', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  class FakeSocket extends EventTarget {
+    sent: Array<{ id: number; subscriptions: Array<{ topic: RealtimeTopic }> }> = []
+    send(text: string) { this.sent.push(JSON.parse(text)) }
+    close() {}
+    ack(index: number) {
+      const command = this.sent[index]
+      this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'subscribed', id: command.id,
+        cursor: cursor(1), added: command.subscriptions.map(({ topic }) => ({ topic, reason: 'initial' })), removed: [], rejected: [] }) }))
+    }
+  }
+  const sockets: FakeSocket[] = [], diagnostics: unknown[] = []
+  const client = createLiveClient('https://private.test/projects/secret', {
+    socket() { const socket = new FakeSocket(); sockets.push(socket); return socket },
+    ticket: async () => ['fixture-private-proof'], diagnostic: value => diagnostics.push(value),
+  })
+  t.after(() => client.dispose())
+  const observer = { event() {}, reset() {} }
+  const first = client.subscribe(topic('one'), observer)
+  const open = async (after: number) => {
+    t.mock.timers.tick(after); await Promise.resolve(); await Promise.resolve()
+    const socket = sockets.at(-1)!
+    socket.dispatchEvent(new Event('open'))
+    return socket
+  }
+  const failed = await open(0)
+  assert.deepEqual(failed.sent[0].subscriptions.map(s => s.topic), [topic('one')])
+  const second = client.subscribe(topic('two'), observer)
+  t.mock.timers.tick(0); assert.equal(failed.sent.length, 1, 'never overlaps subscription commands')
+  failed.dispatchEvent(new Event('error'))
+  failed.dispatchEvent(Object.assign(new Event('close'), { code: 1006, reason: 'private-frame-data' }))
+  const recovered = await open(500)
+  assert.notEqual(failed, recovered)
+  assert.deepEqual(recovered.sent[0].subscriptions.map(s => s.topic), [topic('one'), topic('two')])
+  recovered.ack(0); await Promise.all([first.ready(), second.ready()])
+  t.mock.timers.tick(100)
+  assert.equal(recovered.sent.length, 1)
+  assert.deepEqual(diagnostics, [{ transport: 'ws', stage: 'subscribe', code: 'closed', closeCode: 1006 }])
+})
+
+test('legacy SSE removal followed by EOF without scope fails closed until availability is known', async t => {
+  const h = harness(t)
+  const one = h.subscribe(topic('one', 'a')), two = h.subscribe(topic('two', 'b'))
+  const source = h.open(); await Promise.all([one.ready(), two.ready()])
+  source.send({ type: 'reset', reason: 'project-removed', cursor: cursor(1) })
+  source.dispatchEvent(new Event('error'))
+  assert.deepEqual(h.resets.filter(reason => reason === 'project-removed'), ['project-removed', 'project-removed'])
+  t.mock.timers.tick(500)
+  h.sources.at(-1)!.send({ type: 'ready', cursor: cursor(1) })
+  await Promise.all([one.ready(), two.ready()])
+  assert.deepEqual(h.resets.filter(reason => reason === 'project-restored'), ['project-restored', 'project-restored'])
+})
+
+test('changing an SSE topic set before old-peer EOF still revokes unresolved data', async t => {
+  const h = harness(t)
+  const a = h.subscribe(topic('one', 'a'))
+  const old = h.open(); await a.ready()
+  old.send({ type: 'reset', reason: 'project-removed', cursor: cursor(1) })
+  assert.equal(h.resets.filter(reason => reason === 'project-removed').length, 0)
+  h.subscribe(topic('two', 'b'))
+  t.mock.timers.tick(0)
+  assert.equal(old.closed, true)
+  assert.deepEqual(h.resets, ['subscription', 'project-removed'], 'only topics the old stream had subscribed can be revoked')
+  old.dispatchEvent(new Event('error'))
+  assert.equal(h.sources.length, 2, 'a stale EOF cannot supersede the replacement connection')
+})
+
+test('late WS subscriptions inherit rejected and unavailable bootstrap topics', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const socket = Object.assign(new EventTarget(), { close() {}, send() {} })
+  const client = createLiveClient('https://ws-denial.test', { ticket: async () => ['fixture'], socket: () => socket })
+  t.after(() => client.dispose())
+  const observer = { event() {}, reset() {} }
+  const rejected = { kind: 'resources', projectId: 'a' } as const
+  const unavailable = { kind: 'resources', projectId: 'b' } as const
+  client.subscribe(rejected, observer); client.subscribe(unavailable, observer)
+  t.mock.timers.tick(0); await Promise.resolve(); await Promise.resolve()
+  socket.dispatchEvent(new Event('open'))
+  socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'subscribed', id: 1,
+    cursor: cursor(1), added: [{ topic: unavailable, unavailable: true }], removed: [], rejected: [rejected] }) }))
+  const seen: Array<[string, LiveResetReason]> = []
+  const a = client.subscribe(rejected, { event() {}, reset: reason => seen.push(['a', reason]) })
+  const b = client.subscribe({ kind: 'folders', projectId: 'b' }, { event() {}, reset: reason => seen.push(['b', reason]),
+    projectionUnavailable() { assert.fail('known denial must not fall back to HTTP') },
+  })
+  await Promise.all([assert.rejects(a.ready(), /not available/), assert.rejects(b.ready(), /unavailable/)])
+  socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ type: 'topic-reset', reason: 'project-restored',
+    cursor: cursor(2), topics: [unavailable], unavailable: [unavailable] }) }))
+  await assert.rejects(b.ready(), /unavailable/, 'a restoration marker alone does not grant access')
+  assert.deepEqual(seen, [['a', 'project-removed'], ['b', 'project-removed']])
+})

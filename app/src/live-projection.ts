@@ -1,4 +1,5 @@
 import { shallowReactive, shallowReadonly } from 'vue'
+import { budgetLiveHttp } from './live-http-budget.ts'
 import { createResource } from './resources/engine.ts'
 import type { ProjectionTopic } from '../../src/realtime/projection-wire.ts'
 import type { LiveObserver, LiveSubscription, LiveStatus, LiveResetReason } from './live-client.ts'
@@ -23,8 +24,18 @@ export function createLiveProjection<T>(pool: ProjectionPool, options: {
   const optionsPoolObservation = !!pool.observeHost
   let initialized = false, live = false, readyFailure = false, revoked = false
   let timer: ReturnType<typeof setTimeout> | undefined
-  const resource = createResource(options.load, 0, { initialLoading: true, reconcile: options.reconcile, onError(error) {
-    if (record(error) && (error.status === 401 || error.status === 403)) { clearTimeout(timer); timer = undefined }
+  let poll = false, recovering = false, recoverySeen = false, dirtyDuringRead = false
+  function clearTimer() { clearTimeout(timer); timer = undefined; poll = false }
+  function offlinePoll() {
+    if (!live && optionsPoolObservation && !revoked && !disposed) {
+      poll = true
+      timer = setTimeout(fallback, 30_000)
+    }
+  }
+  // Bare embedded adapters lack a transport status/recovery wave to stagger,
+  // but use the same host concurrency ceiling.
+  const resource = createResource(signal => budgetLiveHttp(options.base, signal, options.load, optionsPoolObservation), 0, { initialLoading: true, reconcile: options.reconcile, onError(error) {
+    if (record(error) && (error.status === 401 || error.status === 403)) clearTimer()
     options.failed?.(error)
   } })
   const state = shallowReactive({ ...resource.state })
@@ -32,21 +43,38 @@ export function createLiveProjection<T>(pool: ProjectionPool, options: {
   const stop = resource.subscribe(next => { Object.assign(state, next); if (next.value !== notified) { notified = next.value; options.changed?.(next.value) } })
   function fallback() {
     if (disposed || revoked) return
-    clearTimeout(timer); timer = undefined
+    clearTimer(); recovering = false
     revision = undefined; wire = undefined
-    resource.reset('projection-fallback'); initialized = true; resolve()
-    if (!live && optionsPoolObservation) timer = setTimeout(fallback, 30_000)
+    // Duplicate fallback signals (deadline, unsupported ACK, reset) never
+    // abort or invalidate a queued/active read from the same recovery.
+    if (dirtyDuringRead || !initialized || !resource.state.loading) resource.invalidate('projection-fallback')
+    dirtyDuringRead = false
+    initialized = true; resolve()
+    offlinePoll()
   }
-  function recover() {
+  function recover(change = false) {
     if (disposed || revoked) return
+    // A real legacy change still invalidates an older HTTP response even
+    // when we first attempt to recover through an authorized WS snapshot.
+    if (change && initialized && resource.state.loading) dirtyDuringRead = true
+    if (recovering) return
     revision = undefined; wire = undefined
-    clearTimeout(timer)
-    timer = setTimeout(fallback, options.fallbackMs ?? 10_000)
-    if (!subscription.refreshProjection?.() && initialized) {
-      clearTimeout(timer); timer = undefined
-      resource.invalidate('legacy-invalidation'); resolve()
-      if (!live && optionsPoolObservation) timer = setTimeout(fallback, 30_000)
-    }
+    clearTimer()
+    if (subscription.refreshProjection?.() || !initialized) {
+      recovering = true
+      timer = setTimeout(fallback, options.fallbackMs ?? 10_000)
+    } else if (change) {
+      // A real legacy change is not a recovery signal. If it arrives during
+      // the HTTP read it still requires the resource engine's trailing read.
+      dirtyDuringRead = false
+      resource.invalidate('legacy-invalidation')
+      offlinePoll()
+    } else fallback()
+  }
+  function recoverGap() {
+    if (optionsPoolObservation && recoverySeen) return
+    recoverySeen = true
+    recover()
   }
   function apply(payload: unknown) {
     if (disposed) return
@@ -76,7 +104,7 @@ export function createLiveProjection<T>(pool: ProjectionPool, options: {
       const parsed = options.parse(next)
       revoked = false
       wire = next; revision = payload.revision
-      clearTimeout(timer); timer = undefined
+      clearTimer(); recovering = dirtyDuringRead = false
       resource.replace(parsed)
       initialized = true; resolve()
     } catch {
@@ -87,33 +115,45 @@ export function createLiveProjection<T>(pool: ProjectionPool, options: {
   function resetProjection(reason?: LiveResetReason) {
     if (reason === 'project-removed') {
       revoked = true
-      clearTimeout(timer); timer = undefined
+      clearTimer(); recovering = dirtyDuringRead = false
       revision = undefined; wire = undefined
       resource.revoke('Project is unavailable')
       initialized = true; resolve()
     } else {
-      if (reason === 'project-restored') revoked = false
+      if (reason === 'project-restored') { revoked = false; recoverySeen = false }
       if (revoked) return
-      if (reason === undefined && revision === undefined && initialized) resource.reset('projection-reset')
-      else recover()
+      if (reason === undefined && revision === undefined && initialized) {
+        // The session domain uses this reset when its HTTP generation is
+        // known obsolete. Cancel that generation once per observed gap.
+        if (optionsPoolObservation && recoverySeen) return
+        recoverySeen = true
+        clearTimer(); recovering = dirtyDuringRead = false
+        resource.reset('projection-reset')
+        offlinePoll()
+      } else recoverGap()
     }
   }
   const subscription = pool.client(options.base).subscribe(options.topic, {
-    projectionSnapshot: apply, projectionUnavailable() { readyFailure = true; fallback() }, event: event => apply(event.payload),
-    reset: resetProjection, reconnected() { recover() },
+    projectionSnapshot: apply, projectionUnavailable(authorized) {
+      // An accepted WS topic can be available even when its snapshot read
+      // fails. Only that ACK (or a real restoration) can lift a topology revoke.
+      if (authorized) revoked = false
+      readyFailure = true; fallback()
+    }, event: event => apply(event.payload),
+    reset: resetProjection, reconnected: recoverGap,
   })
   const legacyKind = options.topic.kind === 'io-runs' ? 'io' : options.topic.kind.startsWith('session-') ? 'sessions' : 'resources'
   const legacy = options.legacy === false ? undefined : pool.client(options.base).subscribe({ kind: legacyKind, projectId: options.topic.projectId }, {
     event(event) {
       if (revision !== undefined) return
       const payload = event.payload
-      if (legacyKind !== 'resources' || record(payload) && (payload.resource === (options.topic.kind === 'folder-devices' ? 'nodes' : options.topic.kind) || options.topic.kind === 'folder-devices' && payload.resource === 'folders')) recover()
+      if (legacyKind !== 'resources' || record(payload) && (payload.resource === (options.topic.kind === 'folder-devices' ? 'nodes' : options.topic.kind) || options.topic.kind === 'folder-devices' && payload.resource === 'folders')) recover(true)
     },
     reset(reason) {
       if (reason === 'project-removed' || reason === 'project-restored') resetProjection(reason)
-      else if (initialized && revision === undefined) recover()
+      else if (initialized && revision === undefined) recoverGap()
     },
-    reconnected() { if (revision === undefined) recover() },
+    reconnected() { if (revision === undefined) recoverGap() },
   })
   timer = setTimeout(fallback, options.fallbackMs ?? 10_000)
   // Readiness acknowledges a subscription, not a missing data deadline. A
@@ -122,26 +162,28 @@ export function createLiveProjection<T>(pool: ProjectionPool, options: {
   void subscription.ready(lifetime.signal).then(() => {
     // Legacy adapters without the projection capability use HTTP on ready.
     if (!disposed && !readyFailure && revision === undefined && !subscription.refreshProjection) {
-      if (initialized) resource.invalidate('late-ready')
-      else fallback()
+      fallback()
     }
   }, () => {
     if (!disposed && !readyFailure && revision === undefined) fallback()
   })
   const unobserve = pool.observeHost?.(options.base, status => {
-    live = status.phase === 'live'
-    if (!live && initialized && timer === undefined) timer = setTimeout(fallback, options.fallbackMs ?? 10_000)
+    const next = status.phase === 'live'
+    if (live && !next) recoverySeen = false
+    live = next
+    if (live && poll) clearTimer()
+    if (!live && initialized && !revoked && timer === undefined) timer = setTimeout(fallback, options.fallbackMs ?? 10_000)
   })
   // SSE and old servers never receive fixed projection topics. They retain the
   // legacy notification subscription at the domain owner, with HTTP recovery.
   return {
     state: shallowReadonly(state),
     async read() { await first; await resource.read() },
-    refresh() { recover(); return first.then(() => resource.read()) },
-    invalidate() { recover() }, reset: resetProjection,
+    refresh() { recover(true); return first.then(() => resource.read()) },
+    invalidate() { recover(true) }, reset: resetProjection,
     update: resource.update,
     replace(value: T) { resource.replace(value) },
     get hasSnapshot() { return revision !== undefined },
-    dispose() { disposed = true; lifetime.abort(); clearTimeout(timer); unobserve?.(); subscription.close(); legacy?.close(); resource.dispose(); stop(); resolve() },
+    dispose() { disposed = true; lifetime.abort(); clearTimer(); unobserve?.(); subscription.close(); legacy?.close(); resource.dispose(); stop(); resolve() },
   }
 }
