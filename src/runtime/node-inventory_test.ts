@@ -105,7 +105,7 @@ test('Main inventory uses configured identity and live registered folder availab
     const folder = await folders.register(directory)
     const inventory = () => mainLocalNodeInventory({ ...options, shellAvailable: true })
     assert.deepEqual(inventory().support, { operations: ['process.execute'] })
-    assert.deepEqual(inventory().workdirs, [{ version: 2 as const, nodeId: 'installation-main', workdirId: `local-project-v1:${folder.id}`, displayName: folder.name, displayPath: folder.path, online: true, support: { operations: ['filesystem.read','filesystem.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute'] } }])
+    assert.deepEqual(inventory().workdirs, [{ version: 2 as const, nodeId: 'installation-main', workdirId: `local-project-v1:${folder.id}`, displayName: folder.name, displayPath: folder.path, online: true, support: { operations: ['filesystem.read','filesystem.write','filesystem.copy.read','filesystem.copy.write','workdir.git.status','workdir.git.diff','workdir.identity','workdir.process.execute'] } }])
     assert.equal(inventory().workdirs[0].workdirId, `local-project-v1:${folder.id}`)
     assert.equal(inventory().workdirs[0].support.operations.includes('workdir.process.execute'), true)
     assert.equal(inventory().workdirs[0].support.operations.includes('workdir.process.execute-once'), false)

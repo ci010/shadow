@@ -4,7 +4,7 @@ export const LEGACY_MANAGED_SERVICE_ID = 'managed-sessions-v1'
 export const MANAGED_SESSION_OPERATION = 'workdir.session.allocate'
 export const MANAGED_WORKDIR_PREFIX = 'managed-v1:'
 export const MANAGED_WORKDIR_OPERATIONS = [
-  'filesystem.read', 'filesystem.write', 'workdir.process.execute', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
+  'filesystem.read', 'filesystem.write', 'filesystem.copy.read', 'filesystem.copy.write', 'workdir.process.execute', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity',
   'workdir.process.execute-once', 'workdir.process.reconcile', 'workdir.git.derive',
 ]
 

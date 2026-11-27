@@ -32,6 +32,7 @@ Start with the [project README](../README.md) for installation and commands,
 - [Localization development](localization.md)
 - [Architecture and implementation boundaries](architecture.md)
 - [Devices, Folders and session execution](execution-model.md)
+- [File and recursive directory copy between Workspaces](workspace-copy.md)
 - [Visual design system](../DESIGN.md)
 - [File spaces](file-spaces.md) and [media attachments](media-attachments.md)
 - [Session references](session-references.md), [proxy sessions](session-proxy.md),

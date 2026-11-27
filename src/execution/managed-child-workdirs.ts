@@ -215,7 +215,7 @@ export class ManagedChildWorkdirs {
   get operationHandlers(): readonly (LocalJobOperationHandler | LocalProcessOperationHandler)[] {
     return [{
       handles: operation => [FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(operation) || operation === MANAGED_SESSION_OPERATION || [
-        'filesystem.read', 'filesystem.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity', DERIVED_WORKSPACE_OPERATION,
+        'filesystem.read', 'filesystem.write', 'filesystem.copy.read', 'filesystem.copy.write', 'workdir.git.status', 'workdir.git.diff', 'workdir.identity', DERIVED_WORKSPACE_OPERATION,
       ].includes(operation),
       execute: async (request, signal) => {
         if ([FOLDER_BROWSE_OPERATION, FOLDER_SELECT_OPERATION].includes(request.operation)) return this.#pick(request, signal)

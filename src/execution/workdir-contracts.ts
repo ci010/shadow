@@ -21,7 +21,7 @@ export interface WorkdirAdvertisement {
 
 export const EXECUTION_PROTOCOL_FEATURE = 'workdir-execution-v2'
 export const IMPLEMENTED_OPERATIONS = [
-  'process.execute', 'filesystem.read', 'filesystem.write', 'workdir.git.status',
+  'process.execute', 'filesystem.read', 'filesystem.write', 'filesystem.copy.read', 'filesystem.copy.write', 'workdir.git.status',
   'workdir.mcp', 'workdir.git.diff', 'workdir.identity', 'workdir.process.execute',
   'workdir.process.execute-once', 'workdir.process.reconcile', 'workdir.git.derive',
   'workdir.session.allocate', 'owner.folder.browse', 'owner.folder.select', 'layerfs.service',

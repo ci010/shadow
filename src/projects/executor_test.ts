@@ -265,3 +265,20 @@ test('abort during host access check prevents dispatch and releases the Folder l
   assert.equal(records, 0)
   assert.equal(scoped.hasPendingJobs, false)
 })
+
+test('copy jobs have no durable process reservation after transport loss', async () => {
+  const records: string[] = []
+  const executor: Executor = {
+    async *execute(value) {
+      yield { version: 1, jobId: value.jobId, sequence: 0, timestamp: value.createdAt, type: 'accepted' }
+      throw new Error('receipt lost')
+    }, getStatus: async () => null, cancel: async () => { throw new Error('Unused') },
+  }
+  for (const operation of ['filesystem.copy.read', 'filesystem.copy.write']) {
+    const scoped = new ProjectExecutor('project', executor, () => {}, (id, active) => records.push(`${id}:${active}`))
+    await assert.rejects(async () => { for await (const _event of scoped.execute(request({ operation }), new AbortController().signal)) {} }, /receipt lost/)
+    assert.equal(scoped.hasPendingJobs, false)
+    assert.equal(await scoped.getStatus('same-job'), null)
+  }
+  assert.deepEqual(records, [])
+})

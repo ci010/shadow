@@ -161,6 +161,7 @@ import { SkillEditStore } from '../../skills/edit-store.ts'
 import { LogTool } from '../../tools/log.ts'
 import { registerInternalEventTools } from '../../tools/internal-events.ts'
 import { WriteTool } from '../../tools/filesystem.ts'
+import { CopyTool } from '../../tools/copy.ts'
 import type { LoadableEntry } from '../../tools/load-tool.ts'
 import { InvokeTool } from '../../tools/invoke-tool.ts'
 import { ImportTool } from '../../tools/load-tool.ts'
@@ -728,6 +729,7 @@ export async function createProjectRuntime(
   const importTool = new ImportTool(loadable, workspace, project.id, name => skills.getSkillDirectory(name), undefined, coordinator?.canImport, id => { const folder = folderRegistry.list().find(folder => folder.id === id); return folder?.kind === 'local' ? { id: folder.id, path: folder.path } : undefined })
   cleanup.push(() => importTool.shutdownBrowser())
   tools.register(new SearchTool(workspace, webSearchTool, vfs, dependencies.localExecutor !== false))
+  importTool.registerBuiltin('copy', new CopyTool())
   tools.register(new InvokeTool(importTool))
   registerDevelopmentRestart(importTool)
 

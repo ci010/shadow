@@ -1,3 +1,4 @@
+import { COPY_READ, COPY_WRITE, executeCopyFilesystem } from './filesystem-copy.ts'
 import { readImage } from '../utils/image-input.ts'
 import { parseFilesystemSearch, searchFilesystem, type FilesystemSearch } from './filesystem/search-text.ts'
 import { workdirIdOf } from './workdir-contracts.ts'
@@ -77,7 +78,7 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
   }
 
   handles(operation: string): boolean {
-    return operation === FILESYSTEM_READ_OPERATION ||
+    return operation === COPY_READ || operation === COPY_WRITE || operation === FILESYSTEM_READ_OPERATION ||
       operation === FILESYSTEM_WRITE_OPERATION
   }
 
@@ -90,6 +91,14 @@ export class CapabilityFilesystem implements LocalJobOperationHandler {
       )
     }
     signal.throwIfAborted()
+    if (request.operation === COPY_READ || request.operation === COPY_WRITE) {
+      try {
+        return await executeCopyFilesystem(root, JSON.stringify([request.projectScope, request.sessionId, workdirIdOf(request)]), request.operation, request.args, signal)
+      } catch (error) {
+        signal.throwIfAborted()
+        throw new CapabilityFilesystemError('filesystem-io-failed', error instanceof Error && !('code' in error) ? error.message : 'Copy filesystem operation failed')
+      }
+    }
     if (request.operation === FILESYSTEM_READ_OPERATION) {
       return await this.#read(root, request.args, signal)
     }
