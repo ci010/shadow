@@ -88,6 +88,49 @@ test('readonly consumers get independently consumable responses and failed acces
   } finally { owner.dispose() }
 })
 
+for (const kind of ['direct', 'readonly'] as const) {
+  const target = new URL(kind === 'direct' ? url : 'http://localhost/api/sessions/logical?shallow=true')
+  target.searchParams.set('historyWindow', 'recent')
+  target.searchParams.set('historyPhysicalId', 'old-segment')
+  target.searchParams.set('historyFrom', '40')
+  const error = kind === 'direct' ? 'session_segment_changed' : 'history_conflict'
+  const read = (owner: ReturnType<typeof createChatResources>) => kind === 'direct'
+    ? owner.readDirect(target, scope, signal()) : owner.readReadonly(target, scope, signal())
+
+  test(`${kind} history retries one segment-change conflict inside the shared read`, async () => {
+    const requests: string[] = []
+    const owner = createChatResources(async url => {
+      requests.push(String(url))
+      if (requests.length === 1) return Response.json({ error }, { status: 409 })
+      return Response.json(kind === 'direct' ? envelope() : { messages: [] })
+    })
+    try {
+      const [a, b] = await Promise.all([read(owner), read(owner)])
+      assert.equal(a.ok && b.ok, true)
+      assert.equal(requests.length, 2)
+      assert.equal(requests[0], requests[1])
+    } finally { owner.dispose() }
+  })
+
+  test(`${kind} history surfaces persistent or unrelated conflicts`, async () => {
+    for (const [code, expectedReads] of [[error, 2], ['unrelated_conflict', 1]] as const) {
+      let reads = 0
+      const owner = createChatResources(async () => {
+        reads++
+        return Response.json({ error: code }, { status: 409 })
+      })
+      try {
+        const result = await read(owner)
+        assert.equal(result.status, 409)
+        assert.equal(reads, expectedReads)
+        const response = result instanceof Response ? result : !result.ok && result.response
+        assert.ok(response)
+        assert.deepEqual(await response.json(), { error: code })
+      } finally { owner.dispose() }
+    }
+  })
+}
+
 test('chat Pinia owners isolate Vue roots, dispose protected memory and reject reads after unmount', async () => {
   const a = createPinia(), b = createPinia()
   const first = useChatResourceStore(a).owner

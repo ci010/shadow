@@ -7,6 +7,16 @@ import { canonicalResourceKey, createResource, ResourceRegistry } from '../resou
 export interface ChatReadScope { projectId: string; authGeneration?: number }
 type Result<T> = { value: T; error?: never } | { error: unknown; value?: never }
 
+/** A rollover can race the snapshot read. Retry the same pinned request once;
+ * the server will use a fresh recent window if the physical ID has changed. */
+async function readWithRolloverRetry<T extends { status: number }>(load: () => Promise<T>,
+  response: (result: T) => Response | undefined, errorCode: string, signal: AbortSignal): Promise<T> {
+  const result = await load()
+  if (result.status !== 409 || signal.aborted) return result
+  const error = await response(result)?.clone().json().catch(() => undefined)
+  return error?.error === errorCode && !signal.aborted ? load() : result
+}
+
 /** History is a specialized protocol adapter, not an ordinary entity collection.
  * Adapter caches retain their byte/entry budgets and validators. The registry owns
  * only active flights; it never keeps another long-lived copy of message bodies.
@@ -68,7 +78,9 @@ export function createChatResources(request: typeof fetch = fetch) {
   }
   return {
     async readDirect(url: string | URL, scope: ChatReadScope, signal: AbortSignal): Promise<ChatHistorySnapshotResult> {
-      const result = await read('direct-history-v1', url, scope, signal, (signal, adapters) => adapters.direct.read(url, signal))
+      const result = await read('direct-history-v1', url, scope, signal, (signal, adapters) =>
+        readWithRolloverRetry(() => adapters.direct.read(url, signal), result => result.ok ? undefined : result.response,
+          'session_segment_changed', signal))
       // The adapter already transfers an independently owned body. The usual
       // single-pane path adds no deep image/base64 traversal. Only additional
       // concurrent panes require another independently mutable presentation body.
@@ -77,7 +89,8 @@ export function createChatResources(request: typeof fetch = fetch) {
     },
     async readReadonly(url: string | URL, scope: ChatReadScope, signal: AbortSignal): Promise<Response> {
       const result = await read('readonly-history-v1', url, scope, signal, async (signal, adapters) => {
-        const response = await adapters.readonly.read(url, signal)
+        const response = await readWithRolloverRetry(() => adapters.readonly.read(url, signal), result => result,
+          'history_conflict', signal)
         return { status: response.status, statusText: response.statusText, headers: response.headers,
           body: await response.text() }
       })

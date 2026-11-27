@@ -13,7 +13,8 @@ export function projectHistoryMessages<T extends object>(messages: readonly T[],
 
 /** An initial suffix, or an already-visible offset pinned to its segment.
  * Back up over tool results so a window never begins inside a call/result pair. */
-export const HISTORY_WINDOW_SIZE = 40
+export const HISTORY_INITIAL_WINDOW_SIZE = 120
+export const HISTORY_PREPEND_PAGE_SIZE = 40
 // A larger contiguous prepend can fall back to a complete snapshot (e.g. search).
 export const HISTORY_DELTA_PREPEND_LIMIT = 256
 export function historyWindowCacheKey(url: URL): string {
@@ -34,7 +35,7 @@ export function recentHistoryWindow<T extends { role: string }>(history: readonl
   const messages = history.filter(message => message.role !== 'system')
   const offset = parseHistoryOffset(query.get('historyFrom'))
   let start = query.get('historyPhysicalId') === physicalId && offset !== undefined && offset <= messages.length
-    ? offset : Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
+    ? offset : Math.max(0, messages.length - HISTORY_INITIAL_WINDOW_SIZE)
   while (start > 0 && messages[start]?.role === 'tool') start--
   return { messages: projectHistoryMessages(messages.slice(start), true), start }
 }

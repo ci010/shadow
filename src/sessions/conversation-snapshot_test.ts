@@ -12,7 +12,7 @@ function fixture() {
     assertHistoricalFolderAccess: async () => { calls.push('folder') },
     getHistory: async () => {
       calls.push('history')
-      return { messages: Array.from({ length: 60 }, (_, i) => ({ role: 'user', content: `${i}`, provider_state: 'private' })) }
+      return { messages: Array.from({ length: 140 }, (_, i) => ({ role: 'user', content: `${i}`, provider_state: 'private' })) }
     },
     getCommandResults: async () => [],
     getYieldRecords: async () => [],
@@ -28,7 +28,7 @@ test('snapshot checks folder access before reading and projects only recent disp
   assert.deepEqual(calls, ['folder', 'history'])
   assert.ok(result.data && 'chat' in result.data)
   assert.equal(result.data.chat.historyStart, 20)
-  assert.equal(result.data.chat.history.length, 40)
+  assert.equal(result.data.chat.history.length, 120)
   assert.deepEqual(result.data.chat.history[0], { role: 'user', content: '20' })
 })
 

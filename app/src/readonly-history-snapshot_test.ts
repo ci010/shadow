@@ -39,7 +39,7 @@ test('readonly snapshot validates unchanged, append, receipts/decisions, rewrite
 })
 
 test('recent readonly snapshots merge one earlier page plus concurrently appended rows', async () => {
-  const history = Array.from({ length: 82 }, (_, i) => ({ role: 'user', content: `row-${i}` }))
+  const history = Array.from({ length: 162 }, (_, i) => ({ role: 'user', content: `row-${i}` }))
   const envelopes: Record<string, any>[] = []
   const cache = createReadonlyHistorySnapshots((async target => {
     const query = new URL(String(target)).searchParams
@@ -57,7 +57,7 @@ test('recent readonly snapshots merge one earlier page plus concurrently appende
   assert.equal(data.historyStart, 2)
   assert.deepEqual(data.messages, history.slice(2))
   assert.deepEqual(envelopes.at(-1)?.delta.leadingMessages, history.slice(2, 42))
-  assert.deepEqual(envelopes.at(-1)?.delta.messages, history.slice(82))
+  assert.deepEqual(envelopes.at(-1)?.delta.messages, history.slice(162))
   assert.deepEqual(await read(expanded), data)
   assert.equal(envelopes.at(-1)?.unchanged, true)
 })

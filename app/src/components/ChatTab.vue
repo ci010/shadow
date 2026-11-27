@@ -554,7 +554,7 @@ import { mergeInputDelivery } from '../chat-input-delivery.ts'
 import { isChatInputDelivery, webInputRequestId, type ChatInputDelivery } from '../../../src/shared/chat-input-delivery.ts'
 import { ref, shallowRef, shallowReactive, reactive, computed, inject, provide, nextTick, onActivated, onDeactivated, onMounted, onUpdated, onUnmounted, useId, watch } from 'vue'
 import { captureHistoryScroll, historyPresentationRows, historyRevealRow, useProgressiveHistory } from '../progressive-history'
-import { HISTORY_WINDOW_SIZE } from '../../../src/shared/history-wire.ts'
+import { HISTORY_PREPEND_PAGE_SIZE } from '../../../src/shared/history-wire.ts'
 import { createCommitBottomScroll, firstSessionIndex } from '../chat-render-hotspots'
 import { useRoute, useRouter } from 'vue-router'
 import { useProviderReadiness, providerReadinessMessage, providerBlocksSubmission } from '../provider-readiness.ts'
@@ -1602,7 +1602,7 @@ async function prependOlderSegment(): Promise<void> {
   if (!canLoadOlder.value || loadingHistory.value || historyRequest) return
   if (currentHistoryStart.value > 0) {
     browseHistory()
-    const from = Math.max(0, currentHistoryStart.value - HISTORY_WINDOW_SIZE)
+    const from = Math.max(0, currentHistoryStart.value - HISTORY_PREPEND_PAGE_SIZE)
     if (isDirectChat.value) await loadDirectChat(true, from)
     else await loadReadonlySession(true, from)
     return

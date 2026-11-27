@@ -17,7 +17,7 @@ test('recent direct history keeps a tool pair intact and prepends alongside live
   const app = new Hono()
   let segmentIndex = 0
   let contextReads = 0
-  let history = Array.from({ length: 85 }, (_, i) => ({
+  let history = Array.from({ length: 165 }, (_, i) => ({
     role: i === 44 ? 'assistant' : i === 45 ? 'tool' : 'user', content: `row-${i}`, provider_state: { private: i },
     ...(i === 44 ? { tool_calls: [{ id: 'tool-1' }] } : i === 45 ? { tool_call_id: 'tool-1' } : {}),
   }))
@@ -50,14 +50,14 @@ test('recent direct history keeps a tool pair intact and prepends alongside live
     assert.equal(expanded.historyStart, 4)
     assert.deepEqual(expanded.history, expected().slice(4))
     assert.deepEqual(wire.at(-1)?.delta.leadingHistory, expected().slice(4, 44))
-    assert.deepEqual(wire.at(-1)?.delta.history, expected().slice(85))
+    assert.deepEqual(wire.at(-1)?.delta.history, expected().slice(165))
     assert.deepEqual(await read(`${pinned}&historyFrom=4`), expanded)
     assert.equal(wire.at(-1)?.unchanged, true)
     history[50] = { ...history[50]!, content: 'rewritten' }
     assert.deepEqual((await read(`${pinned}&historyFrom=4`)).history, expected().slice(4))
     assert.ok(wire.at(-1)?.data)
     segmentIndex++
-    history = Array.from({ length: 41 }, (_, i) => ({ role: 'user', content: `new-${i}`, provider_state: { private: i } }))
+    history = Array.from({ length: 121 }, (_, i) => ({ role: 'user', content: `new-${i}`, provider_state: { private: i } }))
     const rolled = await read(`${pinned}&historyFrom=4`)
     assert.equal(rolled.historyStart, 1)
     assert.deepEqual(rolled.history, expected().slice(1))
@@ -74,7 +74,7 @@ test('history revalidation works through gateway no-store without readable ETag 
   const urls: string[] = []
   const wireBodies: string[] = []
   const channel = new WebChannel(new Bus(), { authorize: () => true, sessionManager: {
-    getSessionState: () => exists ? { sessionId: 'web:cached' } : null,
+    getSessionState: () => exists ? { sessionId: 'web:cached', segmentIndex: 0 } : null,
     getContext: async () => ({ systemPrompt: 'Prompt', tools: [] }),
     getHistory: async () => ({ messages: [{ role: 'user', content }, ...appended] }),
     getCommandResults: async () => [], getYieldRecords: async () => [],

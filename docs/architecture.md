@@ -818,10 +818,11 @@ count from the end, and offset-only or malformed numeric queries return 400.
 `shallow=true` selects the current physical segment; it is not a metadata-only
 or automatically small response. The conversation pane opts into
 `historyWindow=recent` for direct chat and shallow readonly history. The first
-read returns the latest 40 non-system messages, extending backward when needed
+read returns the latest 120 non-system messages, extending backward when needed
 so a tool call and its results stay together. The returned `historyStart` and
 `currentPhysicalId` pin the loaded window during refresh; scrolling up moves the
-start back by one page, then reads older physical segments on demand. A stale
+start back by 40 messages, then reads older physical segments on demand. The
+conversation pane retries a transient HTTP segment-change conflict once. A stale
 physical ID selects a fresh recent window, never an offset in the wrong segment.
 For windowed snapshots, a matching cached block can be reused between an earlier
 page and concurrent appends. Full-history search and physical navigation remain
