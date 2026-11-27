@@ -2,7 +2,7 @@ import { apiUrl, projectBase, hostBase } from './api-url.ts'
 
 export interface QuickAction { id: string; name: string; command: string; folderId: string; pinned: boolean }
 export interface ActionRun { id: string; actionId: string; name: string; command: string; folderId: string; state: 'running' | 'stopping' | 'succeeded' | 'failed' | 'stopped'; startedAt: string; finishedAt?: string; exitCode?: number | null; stdout: string; stderr: string }
-export interface ActionFolder { id: string; name: string; path: string; kind: 'local' | 'remote' }
+export interface ActionFolder { id: string; name: string; path: string; kind: 'local' | 'remote' | 'layerfs' }
 export interface ActionScript { name: string; command: string }
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const invalid = () => new Error('Main returned invalid Quick Actions data. Refresh before retrying.')
@@ -45,7 +45,7 @@ export function createQuickActionsClient(base: string, projectId: string, reques
         // FolderRecord's legacy/local wire shape deliberately omits kind. Only an
         // absent kind means local; unknown explicit kinds must never become local.
         if (!record(value) || !text(value.id) || !text(value.name) || typeof value.path !== 'string'
-          || (value.kind !== undefined && value.kind !== 'local' && value.kind !== 'remote')) throw invalid()
+          || (value.kind !== undefined && value.kind !== 'local' && value.kind !== 'remote' && value.kind !== 'layerfs')) throw invalid()
         return { id: value.id, name: value.name, path: value.path, kind: value.kind ?? 'local' } as ActionFolder
       })
     },

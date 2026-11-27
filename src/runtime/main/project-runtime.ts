@@ -534,7 +534,7 @@ export async function createProjectRuntime(
 
   const commandHandler = new CommandHandlerManager()
   const processManager = new ProcessManager()
-  const userActions = new ProjectActions(workspace, folderRegistry, processManager, dependencies.localExecutor !== false)
+  const userActions = new ProjectActions(workspace, folderRegistry, processManager, dependencies.localExecutor !== false, remoteExecutor)
   await userActions.init()
   cleanup.push(() => userActions.shutdown())
   commandHandler.register(

@@ -52,6 +52,8 @@ test('Quick Actions accepts the actual local FolderRecord wire shape and preserv
     assert.equal((await client.folders())[0]?.kind, 'local')
     const remote = createQuickActionsClient('http://fixture', 'p', async () => new Response(JSON.stringify({ folders: [{ id: 'remote', name: 'Remote', path: 'opaque', kind: 'remote' }] })))
     assert.equal((await remote.folders())[0]?.kind, 'remote')
+    const mixed = createQuickActionsClient('http://fixture', 'p', async () => new Response(JSON.stringify({ folders: [...payload, { id: 'layer', name: 'LayerFS', path: 'opaque', kind: 'layerfs' }] })))
+    assert.deepEqual((await mixed.folders()).map(folder => folder.kind), ['local', 'layerfs'], 'An unsupported execution target must not break loading other actions')
     const malformed = createQuickActionsClient('http://fixture', 'p', async () => new Response(JSON.stringify({ folders: [{ id: 'remote', name: 'Remote', path: 'opaque', kind: 'unsupported' }] })))
     await assert.rejects(malformed.folders(), /invalid/)
   } finally { await rm(directory, { recursive: true, force: true }) }

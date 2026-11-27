@@ -3,7 +3,7 @@
 Quick Actions are project-owned, reusable command buttons. Open an existing
 conversation and use **Actions** beside conversation Search. Actions are
 not attached to that conversation: each definition saves an explicit registered
-local Folder as its execution target. Switching chats does not change that target.
+local or remote Folder as its execution target. Switching chats does not change that target.
 There are no Quick Action launch icons on Folder rows.
 
 ## Create and pin
@@ -22,7 +22,8 @@ unsupported. No runner or package installation is performed automatically.
 You can also save an ordinary CLI command directly, for example `pnpm run build`
 or `node scripts/check.cjs --verbose`; an action need not be a package script.
 Commands use the host's default managed shell (`sh` on POSIX, `cmd` on Windows)
-and inherited backend environment/PATH, not an interactive terminal profile.
+and inherited executing backend environment/PATH, not an interactive terminal
+profile. For remote targets this is the Child backend, not Main.
 The selected CLI must already be installed and reachable by that backend.
 
 Pin an action to show the same definition on the Project Board. Editing or
@@ -54,12 +55,25 @@ Definitions persist in the Project Home; current run history and process handles
 are in memory. Restarting the backend does not rerun saved actions, and Project
 shutdown stops its active action processes.
 
-The initial implementation supports registered **local** folders only. Remote
-folder display paths must not be executed or inspected on Main. Remote Windows
-folders and LayerFS folders are not supported by this execution route; they are
-rejected rather than falling back to Main. Main coordinator-only mode also denies
-local runs. It does not yet provide multi-folder workflows or automatic service-URL
-discovery.
+Registered **local and remote** folders are supported. Remote definitions can be
+saved while the Child is offline; execution and script discovery require a live,
+compatible Child and current Project access to that exact folder. Commands use
+the Child's default shell and environment, never Main's copy of its display path.
+Remote runs use the Project-owned Child execution chain (durable execute-once,
+until-exit lifetime, bounded streamed logs and explicit cancellation). Script
+discovery uses Child filesystem reads of the folder root and `package.json`, with
+the same package-manager rules; no shell is invoked for discovery. A missing read
+grant, incompatible Child, oversized result (1 MiB), or disconnection is an error,
+not an empty result or Main fallback.
+
+Stop waits for confirmed Child cleanup. If transport is lost, the run remains
+active with an outcome-unknown diagnostic in its log: restore the connection and
+retry Stop. A failed/unconfirmed stop is reported rather than claiming the process
+has stopped; Project ownership protection is retained. In-memory run controls do
+not survive a Main restart, and Quick Actions does not yet expose journal recovery
+for such runs. LayerFS actions remain unsupported. Main coordinator-only mode
+denies local runs but permits authorized Child runs. Multi-folder workflows and
+automatic service-URL discovery are not provided.
 
 ## Stable conversation Search
 

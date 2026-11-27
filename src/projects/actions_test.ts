@@ -56,7 +56,7 @@ test('all endpoints require admin authorization; malformed payloads are rejected
   } finally { await f.close() }
 })
 
-test('npm discovery reads registered local package, rejects remote before filesystem access', async () => {
+test('npm discovery reads local packages and never inspects remote paths without a Child executor', async () => {
   const f = await fixture()
   try {
     await writeFile(join(f.folder, 'package.json'), JSON.stringify({ scripts: { test: 'node --test', dev: 'vite' }, packageManager: 'untrusted-command' }))
@@ -64,8 +64,8 @@ test('npm discovery reads registered local package, rejects remote before filesy
     await assert.rejects(f.actions.scripts('missing'), { code: 'folder_not_found' })
     let touched = false
     const remote = new ProjectActions(f.home, { get: () => ({ kind: 'remote', path: f.folder }), acquireAccess: () => () => {}, requireAvailable: () => { touched = true; throw new Error('must not access') } } as unknown as FolderRegistry)
-    await assert.rejects(remote.scripts(f.record.id), { code: 'remote_actions_unsupported' }); assert.equal(touched, false)
-    await assert.rejects(remote.create({ name: 'remote', command: 'echo bad', folderId: f.record.id }), { code: 'remote_actions_unsupported' }); assert.equal(touched, false)
+    await assert.rejects(remote.scripts(f.record.id), { code: 'remote_executor_unavailable' }); assert.equal(touched, false)
+    await remote.create({ name: 'remote', command: 'echo bad', folderId: f.record.id }); assert.equal(touched, false)
   } finally { await f.close() }
 })
 
@@ -229,8 +229,8 @@ test('saved actions cannot run or discover on remote Windows or LayerFS targets 
         requireAvailable: () => { accessed = true; throw new Error('must not inspect target on Main') },
       } as unknown as FolderRegistry, { spawn: async () => assert.fail('must not execute on Main') } as unknown as ProcessManager)
       await actions.init()
-      await assert.rejects(actions.run(action.id), { code: 'remote_actions_unsupported', status: 409 })
-      await assert.rejects(actions.scripts(f.record.id), { code: 'remote_actions_unsupported', status: 409 })
+      await assert.rejects(actions.run(action.id), { code: kind === 'remote' ? 'remote_executor_unavailable' : 'remote_actions_unsupported', status: kind === 'remote' ? 503 : 409 })
+      await assert.rejects(actions.scripts(f.record.id), { code: kind === 'remote' ? 'remote_executor_unavailable' : 'remote_actions_unsupported', status: kind === 'remote' ? 503 : 409 })
       assert.equal(accessed, false)
       assert.deepEqual(actions.runs(), [])
       await actions.shutdown()

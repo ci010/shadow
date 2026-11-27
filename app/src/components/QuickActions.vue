@@ -6,9 +6,9 @@
     <p v-if="error" role="alert">{{ error }} <button type="button" :disabled="busy" @click="refresh">{{ t('Retry') }}</button></p>
     <p v-if="!pinnedOnly && !shown.length && !busy && !error">{{ pinnedOnly ? t('Pin an action from chat to show it here.') : t('No actions yet. Create one or discover package scripts.') }}</p>
     <div v-for="action in shown" :key="action.id" class="action-row">
-      <div class="action-heading"><strong>{{ action.name }}</strong><span v-if="latest(action.id)" class="state">{{ t(latest(action.id)!.state) }}</span><button v-if="canWrite" class="run-button" type="button" :disabled="busy || !isLocal(action.folderId) || !!latest(action.id) && actionRunning(latest(action.id)!)" @click="confirmRun = action.id"><span class="action-icon i-lucide-play" style="width:13px;height:13px" aria-hidden="true" />{{ t('Run') }}</button></div>
+      <div class="action-heading"><strong>{{ action.name }}</strong><span v-if="latest(action.id)" class="state">{{ t(latest(action.id)!.state) }}</span><button v-if="canWrite" class="run-button" type="button" :disabled="busy || !isSupported(action.folderId) || !!latest(action.id) && actionRunning(latest(action.id)!)" @click="confirmRun = action.id"><span class="action-icon i-lucide-play" style="width:13px;height:13px" aria-hidden="true" />{{ t('Run') }}</button></div>
       <code class="command-preview">{{ action.command }}</code><p class="target"><span class="action-icon i-lucide-folder" style="width:13px;height:13px" aria-hidden="true" />{{ folderName(action.folderId) }} · {{ folderPath(action.folderId) }}</p>
-      <p v-if="!isLocal(action.folderId)" class="target">{{ t('Remote execution is unavailable.') }}</p>
+      <p v-if="!isSupported(action.folderId)" class="target">{{ t('Remote execution is unavailable.') }}</p>
       <details><summary>{{ t('Details') }}</summary>
       <div class="buttons">
         <button v-if="canWrite" type="button" :disabled="busy" @click="pin(action)">{{ action.pinned ? t('Unpin') : t('Pin to Dashboard') }}</button>
@@ -27,12 +27,12 @@
         <h3>{{ editingId ? t('Edit action') : t('New action') }}</h3>
         <label>{{ t('Name') }}<UiInput ref="nameInput" v-model="form.name" required maxlength="120" /></label>
         <label>{{ t('Command') }}<textarea v-model="form.command" required spellcheck="false" /></label>
-        <label>{{ t('Target folder') }}<UiSelect v-model="form.folderId" required><option value="" disabled>{{ t('Choose a folder explicitly') }}</option><option v-for="folder in folders" :key="folder.id" :value="folder.id" :disabled="folder.kind !== 'local'">{{ folder.name }} · {{ folder.path }}{{ folder.kind !== 'local' ? ' · ' + t('Remote execution is unavailable.') : '' }}</option></UiSelect></label>
+        <label>{{ t('Target folder') }}<UiSelect v-model="form.folderId" required><option value="" disabled>{{ t('Choose a folder explicitly') }}</option><option v-for="folder in folders" :key="folder.id" :value="folder.id" :disabled="folder.kind !== 'local' && folder.kind !== 'remote'">{{ folder.name }} · {{ folder.path }}{{ folder.kind !== 'local' && folder.kind !== 'remote' ? ' · ' + t('Remote execution is unavailable.') : '' }}</option></UiSelect></label>
         <label class="checkbox"><input v-model="form.pinned" type="checkbox" />{{ t('Pin to Dashboard') }}</label>
-        <div class="buttons"><button type="submit" :disabled="busy || !localTarget">{{ t('Save') }}</button><button type="button" @click="editing = false">{{ t('Cancel') }}</button></div>
+        <div class="buttons"><button type="submit" :disabled="busy || !supportedTarget">{{ t('Save') }}</button><button type="button" @click="editing = false">{{ t('Cancel') }}</button></div>
       </form>
       <details class="discovery" :open="importOpen" @toggle="importOpen = ($event.target as HTMLDetailsElement).open"><summary>{{ t('package.json scripts') }}</summary>
-        <label>{{ t('Target folder') }}<UiSelect v-model="discoveryFolder" :disabled="busy"><option value="" disabled>{{ t('Choose a folder explicitly') }}</option><option v-for="folder in folders.filter(f => f.kind === 'local')" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</option></UiSelect></label>
+        <label>{{ t('Target folder') }}<UiSelect v-model="discoveryFolder" :disabled="busy"><option value="" disabled>{{ t('Choose a folder explicitly') }}</option><option v-for="folder in folders.filter(f => f.kind === 'local' || f.kind === 'remote')" :key="folder.id" :value="folder.id">{{ folder.name }} · {{ folder.path }}</option></UiSelect></label>
         <button type="button" :disabled="busy || !discoveryFolder" @click="discover">{{ t('Discover scripts') }}</button>
         <p v-if="discovered">{{ packageManager }} · {{ scripts.length }} {{ t('scripts found') }}</p>
         <p v-if="unsupportedScripts.length" role="status">{{ t('Unsupported script names (not imported):') }} {{ unsupportedScripts.join(', ') }}</p>
@@ -57,10 +57,10 @@ const actions = ref<QuickAction[]>([]), runs = ref<ActionRun[]>([]), folders = r
 const busy = ref(false), error = ref(''), editing = ref(false), editingId = ref(''), deleting = ref(''), confirmRun = ref(''), nameInput = ref<InstanceType<typeof UiInput>>(), root = ref<HTMLElement>()
 const form = reactive({ name: '', command: '', folderId: '', pinned: false })
 const importOpen = ref(false)
-const isLocal = (id: string) => folders.value.some(folder => folder.id === id && folder.kind === 'local')
+const isSupported = (id: string) => folders.value.some(folder => folder.id === id && (folder.kind === 'local' || folder.kind === 'remote'))
 const discoveryFolder = ref(''), scripts = ref<ActionScript[]>([]), packageManager = ref(''), discovered = ref(false), unsupportedScripts = ref<string[]>([])
 const shown = computed(() => actions.value.filter(action => !props.pinnedOnly || action.pinned))
-const localTarget = computed(() => folders.value.some(folder => folder.id === form.folderId && folder.kind === 'local'))
+const supportedTarget = computed(() => folders.value.some(folder => folder.id === form.folderId && (folder.kind === 'local' || folder.kind === 'remote')))
 let controller: AbortController | undefined, timer: ReturnType<typeof setTimeout> | undefined, generation = 0
 const folderName = (id: string) => folders.value.find(folder => folder.id === id)?.name ?? t('Unavailable folder')
 const folderPath = (id: string) => folders.value.find(folder => folder.id === id)?.path ?? id
@@ -104,11 +104,11 @@ async function edit(action?: QuickAction) {
   await nextTick(); nameInput.value?.$el.focus()
 }
 function save() {
-  if (!localTarget.value) return
+  if (!supportedTarget.value) return
   const scope = capture(), input = { ...form }, id = editingId.value || undefined
   return operate(async () => { await scope.api.save(input, id, scope.signal); if (!scope.valid()) return; editing.value = false; await changedActions(scope) })
 }
-function runAction(id: string) { if (!isLocal(actions.value.find(action => action.id === id)?.folderId ?? '')) return; const scope = capture(); return operate(async () => { const run = await scope.api.run(id, scope.signal); if (!scope.valid()) return; setRun(run); confirmRun.value = '' }) }
+function runAction(id: string) { if (!isSupported(actions.value.find(action => action.id === id)?.folderId ?? '')) return; const scope = capture(); return operate(async () => { const run = await scope.api.run(id, scope.signal); if (!scope.valid()) return; setRun(run); confirmRun.value = '' }) }
 function stop(id: string) { const scope = capture(); return operate(async () => { const run = await scope.api.stop(id, scope.signal); if (scope.valid()) setRun(run) }) }
 function discover() {
   const scope = capture(), folderId = discoveryFolder.value
