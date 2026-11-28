@@ -23,6 +23,18 @@ export interface OtioNode {
   trackKind?: string
   enabled: boolean
 }
+export interface OtioMarker {
+  id: string
+  ownerId: string
+  name: string
+  color: string
+  comment: string
+  markedRange: OtioRange
+  /** Clipped timeline-relative seconds, not global_start_time timecode. */
+  start: number
+  end: number
+  point: boolean
+}
 export type OtioWarning = 'transition-cut' | 'clip-effects' | 'unsupported-item' | 'unsupported-track'
 export interface OtioModel {
   root: OtioNode
@@ -31,6 +43,7 @@ export interface OtioModel {
   duration: number
   globalStart: OtioTime | null
   warnings: OtioWarning[]
+  markers: OtioMarker[]
 }
 
 type Obj = Record<string, unknown>
@@ -90,6 +103,9 @@ export function parseOtio(text: string): OtioModel {
   const globalStart = obj.global_start_time == null ? null : time(obj.global_start_time, '/global_start_time')
   const nodes: OtioNode[] = []
   const warnings = new Set<OtioWarning>()
+  const markers: OtioMarker[] = []
+  const authoredMarkers = new Map<string, OtioMarker[]>()
+  let markerCount = 0
   let compositionRate: number | undefined
   let visualRate: number | undefined
 
@@ -112,6 +128,23 @@ export function parseOtio(text: string): OtioModel {
     }
     if (parent?.trackKind !== undefined) node.trackKind = parent.trackKind
     nodes.push(node)
+    if (obj.markers != null) {
+      if (!Array.isArray(obj.markers)) fail(id, 'invalid markers')
+      authoredMarkers.set(id, obj.markers.map((raw, index) => {
+        const markerId = `${id}/markers/${index}`
+        if (++markerCount > MAX_NODES) fail(markerId, 'marker limit exceeded')
+        const marker = object(raw, markerId)
+        if (!['Marker.1', 'Marker.2'].includes(String(marker.OTIO_SCHEMA))) fail(markerId, 'unsupported marker schema')
+        return {
+          id: markerId, ownerId: id,
+          name: typeof marker.name === 'string' ? marker.name : '',
+          color: typeof marker.color === 'string' ? marker.color : '',
+          comment: typeof marker.comment === 'string' ? marker.comment : '',
+          markedRange: range(marker.marked_range, `${markerId}/marked_range`),
+          start: 0, end: 0, point: false,
+        }
+      }))
+    }
     const item: Item = { node, children: [], duration: 0, offset: 0, trim: 0, source: null, inOffset: 0 }
     if (kind === 'Timeline') {
       const tracks = build(obj.tracks, '/tracks', node)
@@ -127,6 +160,7 @@ export function parseOtio(text: string): OtioModel {
     }
     if (obj.effects != null && !Array.isArray(obj.effects)) fail(id, 'invalid effects')
     const hasEffects = Array.isArray(obj.effects) && obj.effects.length > 0
+    if (hasEffects) authoredMarkers.delete(id)
     if (kind === 'Transition') {
       if (parent?.kind !== 'Track') fail(id, 'expected Transition inside a Track')
       const inOffset = time(obj.in_offset, `${id}/in_offset`, true)
@@ -239,6 +273,25 @@ export function parseOtio(text: string): OtioModel {
         value: finite(item.source.value + elapsed * item.source.rate, node.id), rate: item.source.rate,
       }
     }
+    // Markers use the owner's untrimmed/source coordinates. Parent trims
+    // have already shifted origin; subtract this owner's trim exactly once.
+    // Effects have no supported time mapping, just as for source playback.
+    if (node.end > node.start && (node.kind === 'Timeline' || node.kind === 'Transition' || item.source || item.trim === 0)) {
+      for (const marker of authoredMarkers.get(node.id) ?? []) {
+        const start = finite(origin + seconds(marker.markedRange.start) - item.trim, marker.id)
+        const span = seconds(marker.markedRange.duration)
+        const range = marker.markedRange
+        const localEnd = range.start.rate === range.duration.rate
+          ? (range.start.value + range.duration.value) / range.start.rate
+          : seconds(range.start) + span
+        const end = finite(origin + localEnd - item.trim, marker.id)
+        marker.point = span === 0
+        if (marker.point ? start < node.start || start >= node.end : end <= node.start || start >= node.end) continue
+        marker.start = Math.max(node.start, start)
+        marker.end = Math.min(node.end, end)
+        markers.push(marker)
+      }
+    }
     for (const child of item.children) {
       const childOrigin = finite(origin + (child.offset - item.trim), child.node.id)
       const childEnd = child.trackEnd === undefined ? undefined :
@@ -253,7 +306,7 @@ export function parseOtio(text: string): OtioModel {
   if (frameCount > Number.MAX_SAFE_INTEGER || (frameCount === 0 && tree.duration > 0)) {
     fail('', 'timeline frame count cannot be represented')
   }
-  return { root: tree.node, nodes, rate: displayRate, duration: tree.duration, globalStart, warnings: [...warnings] }
+  return { root: tree.node, nodes, rate: displayRate, duration: tree.duration, globalStart, warnings: [...warnings], markers }
 }
 
 const pictureIndex = new WeakMap<OtioModel, { node: OtioNode; blocked: boolean }[]>()

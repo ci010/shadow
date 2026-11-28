@@ -589,6 +589,17 @@ to seek; focus it and use the arrow keys to step one timeline frame. Selecting a
 visual clip opens its **Clip source**; choose **Timeline** to see the top visible
 picture at the same position. This is a read-only viewer, not a timeline editor.
 
+Authored `Marker.1` / `Marker.2` annotations appear in owner-labelled rows below
+tracks: points have a diamond, ranges have a colored top edge and their name.
+Overlapping annotations use separate rows. Hover or keyboard-focus a marker for
+its name, color, owner, visible timeline seconds, original rational-time range and
+comment. They share track zoom/pan, are clipped to owner/ancestor trims, and never
+change the file. Marker times use owner source/local coordinates, not
+`global_start_time` timecode or metadata frame hints. Unknown colors use a neutral
+edge. Clip effects lack a supported source-time mapping, so their markers are not
+projected (the existing effects warning still applies). This is inspection only;
+there are no marker creation, drag, rename or delete controls.
+
 Tracks use distinct colors; the track header identifies its type and provides local
 hide or mute controls. Audio clips show measured peaks from linked, uncompressed
 PCM or 32-bit float WAV files up to 8 MiB. The waveform follows the source trim

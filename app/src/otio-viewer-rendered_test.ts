@@ -29,7 +29,10 @@ const schema = (kind: string, fields = {}) => ({ OTIO_SCHEMA: `${kind}.1`, ...fi
 const time = (value: number) => schema('RationalTime', { value, rate: 24 })
 const range = (start: number, duration: number) => schema('TimeRange', { start_time: time(start), duration: time(duration) })
 const clip = (name: string, source: number, duration: number, url: string) => schema('Clip', {
-  name, source_range: range(source, duration), media_reference: schema('ExternalReference', { target_url: url, available_range: range(source - 12, 144) }),
+  name, source_range: range(source, duration), markers: source === 48 ? [
+    { OTIO_SCHEMA: 'Marker.2', name: 'Review range', color: 'GREEN', marked_range: range(source, duration / 2) },
+    { OTIO_SCHEMA: 'Marker.1', name: 'Review point', color: 'RED', marked_range: range(source + duration / 2, 0) },
+  ] : [], media_reference: schema('ExternalReference', { target_url: url, available_range: range(source - 12, 144) }),
 })
 const track = (name: string, children: unknown[]) => schema('Track', { name, kind: 'Video', children })
 const timeline = JSON.stringify(schema('Timeline', { name: 'Assembly', global_start_time: time(240), tracks: schema('Stack', { children: [
@@ -240,6 +243,15 @@ app.whenReady().then(async()=>{
   });
   assert.ok(renderedWave.width>0 && renderedWave.height>0 && renderedWave.clearsLabel);
   assert.equal(renderedWave.gap,false);
+  const marks = await run(() => [...document.querySelectorAll('.otio-mark')].map(el => ({
+    point: el.classList.contains('point'), label: el.getAttribute('aria-label'),
+    focusable: el.getAttribute('tabindex'), width: el.getBoundingClientRect().width,
+  })));
+  assert.ok(marks.some(mark => mark.point && mark.label.includes('Review point')));
+  assert.ok(marks.some(mark => !mark.point && mark.label.includes('Review range') && mark.width > 0));
+  assert.ok(marks.every(mark => mark.focusable === '0'));
+  await run(() => document.querySelector('.otio-mark').focus({ preventScroll: true }));
+  assert.equal(await run(() => document.activeElement.classList.contains('otio-mark')), true);
   const starts=[.0625,.25,.4375,.625,.8125];
   for(const start of starts)assert.ok(renderedWave.points.some(([x,h])=>x>=start-.005&&x<start+.025&&h>14));
   assert.ok(renderedWave.points.every(([x])=>starts.some(start=>x>=start-.005&&x<start+.061)), JSON.stringify(renderedWave));

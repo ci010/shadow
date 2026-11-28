@@ -49,6 +49,21 @@
           <span class="playhead" aria-hidden="true" />
         </div>
       </div>
+      <div v-for="row in markerRows" :key="row.id" class="lane-row marker-row">
+        <div class="ruler-label">{{ row.owner.name || itemKind(row.owner) }}</div>
+        <div class="lane">
+          <template v-for="mark in row.markers" :key="mark.id">
+            <HoverInfo v-if="otioMarkerGeometry(mark, window)" :text="markerLabel(mark, row.owner)">
+              <template #default="{ triggerProps }">
+                <span v-bind="triggerProps" tabindex="0" role="note" class="otio-mark" :class="{ point: mark.point }"
+                  :style="{ ...otioMarkerGeometry(mark, window), '--mark-color': otioMarkerColor(mark.color) }"
+                  :aria-label="markerLabel(mark, row.owner)">{{ mark.name || '◆' }}</span>
+              </template>
+            </HoverInfo>
+          </template>
+          <span class="playhead" aria-hidden="true" />
+        </div>
+      </div>
       <p v-if="!lanes.length" class="empty">{{ t('No tracks') }}</p>
     </div>
   </section>
@@ -58,7 +73,8 @@
 import { computed, ref, shallowReactive, watch } from 'vue'
 import { fitOtioWindow, wheelOtioWindow } from '../../otio-viewport.ts'
 import { t } from '../../i18n.ts'
-import type { OtioModel, OtioNode } from '../../otio-model.ts'
+import { otioMarkerColor, otioMarkerGeometry, otioMarkerRows } from '../../otio-markers.ts'
+import type { OtioMarker, OtioModel, OtioNode } from '../../otio-model.ts'
 import { lastOtioFrame, otioLanes, otioPercent, scrubOtioFrame } from '../../otio-navigation.ts'
 
 import { otioAudioTracks } from '../../otio-audio.ts'
@@ -79,6 +95,14 @@ function toggleLabel(node: OtioNode) {
 function toggleIcon(node: OtioNode) {
   return node.trackKind === 'Audio' ? (excluded(node) ? 'i-lucide-volume-x' : 'i-lucide-volume-2')
     : (excluded(node) ? 'i-lucide-eye-off' : 'i-lucide-eye')
+}
+const markerRows = computed(() => otioMarkerRows(props.model))
+function markerLabel(marker: OtioMarker, owner: OtioNode) {
+  const range = marker.markedRange
+  return `${marker.name || '◆'} · ${marker.color}\n${owner.name || itemKind(owner)}\n` +
+    `${formatSeconds(marker.start)}–${formatSeconds(marker.end)}s\n` +
+    `${range.start.value}/${range.start.rate} + ${range.duration.value}/${range.duration.rate}s` +
+    (marker.comment ? `\n${marker.comment}` : '')
 }
 const duration = computed(() => props.model.duration)
 const rate = computed(() => props.model.rate)
@@ -222,6 +246,11 @@ function onKey(event: KeyboardEvent) {
 </script>
 
 <style scoped>
+.marker-row { min-height: 28px; }
+.otio-mark { position: absolute; top: 4px; height: 20px; box-sizing: border-box; border-inline-start: 2px solid var(--mark-color); border-block-start: 3px solid var(--mark-color); background: var(--c-bg-soft); color: var(--c-text); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; }
+.otio-mark.point { overflow: visible; font-size: 0; }
+.otio-mark.point::after { content: ''; position: absolute; top: -3px; left: -4px; width: 7px; height: 7px; background: var(--mark-color); transform: rotate(45deg); }
+.otio-mark:focus-visible { outline: 2px solid var(--c-primary); outline-offset: -2px; z-index: 2; }
 .tracks { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: 100%; background: var(--c-bg-card); color: var(--c-text); }
 .heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; padding: 8px 10px; background: var(--c-bg-soft); border-block-end: 1px solid var(--c-border); }
 h3 { margin: 0; font-size: 12px; font-weight: 650; }
