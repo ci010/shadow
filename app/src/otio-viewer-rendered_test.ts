@@ -68,7 +68,9 @@ const modified = '2026-01-01T00:00:00Z'
 const images = { 'cuts/lower.bmp': bitmapFixture(240, 100), 'cuts/upper.bmp': bitmapFixture(180, 90) }
 
 const entry = `import 'uno.css'; import '/src/styles.css';
-import {createApp,h,ref,reactive} from 'vue';
+import {createApp,h,ref,reactive,nextTick} from 'vue';
+import Outline from '/src/components/files/OtioOutline.vue';
+window.outlineFixture={createApp,h,nextTick,Outline};
 import FilePreviewModal from '/src/components/files/FilePreviewModal.vue';
 import {composeOtioReferenceMessage,createOtioDraftBridge,OtioDraftKey} from '/src/otio-draft.ts';
 import {appendChatAttachments,imageAttachmentReference} from '/src/chat-attachments.ts';
@@ -252,6 +254,39 @@ app.whenReady().then(async()=>{
   assert.ok(marks.every(mark => mark.focusable === '0'));
   await run(() => document.querySelector('.otio-mark').focus({ preventScroll: true }));
   assert.equal(await run(() => document.activeElement.classList.contains('otio-mark')), true);
+  await run(() => {
+    const rows=[...document.querySelectorAll('.otio-structure .row')];
+    const point=rows.find(row=>row.textContent.includes('Review point'));
+    if(!point)throw Error('Marker missing from Structure outline');
+    point.click();
+  });
+  await wait('outline marker selection seeks and inspects without clip reference semantics',()=>{
+    const inspector=document.querySelector('.inspector');
+    return inspector.querySelector('h4')?.textContent==='Review point' && inspector.textContent.includes('0.5 s') &&
+      document.querySelector('.readout')?.textContent.includes('12') && document.querySelector('.reference-action')?.disabled;
+  });
+  await run(() => [...document.querySelectorAll('.otio-structure .row')].find(row=>row.textContent.includes('Review range')).click());
+  await wait('range marker selection',()=>document.querySelector('.inspector h4')?.textContent==='Review range' && document.querySelector('.inspector .numeric')?.textContent.includes('0.5'));
+  await run(() => document.querySelector('.otio-structure .row').click());
+  await wait('ordinary node selection restores references',()=>!document.querySelector('.reference-action')?.disabled);
+  const bounded=await run(async()=>{
+    const {createApp,h,nextTick,Outline}=window.outlineFixture;
+    const root={id:'',name:'543-marker clip',kind:'Clip',schema:'Clip.1',parentId:null,depth:0,start:0,end:100,sourceStart:null,enabled:true};
+    const markers=Array.from({length:543},(_,i)=>({id:'/markers/'+i,ownerId:'',name:'Shot '+i,color:'GREEN',start:i/24,end:(i+1)/24,point:false}));
+    const host=document.createElement('div');document.body.append(host);
+    const app=createApp({render:()=>h(Outline,{model:{root,nodes:[root],markers},selectedId:''})});
+    try {
+      app.mount(host); await nextTick();
+      const first=host.querySelectorAll('.row').length;
+      host.querySelector('[aria-label="Next page"]').click(); await nextTick();
+      const second=host.querySelectorAll('.row').length, name=host.querySelector('.row').textContent;
+      host.querySelector('[aria-label="Previous page"]').click(); await nextTick();
+      host.querySelector('[aria-label="Collapse 543-marker clip"]').click(); await nextTick();
+      return {first,second,name,collapsed:host.querySelectorAll('.row').length,pager:!!host.querySelector('footer')};
+    } finally {app.unmount();host.remove();}
+  });
+  assert.equal(bounded.first,100);assert.equal(bounded.second,100);
+  assert.ok(bounded.name.includes('Shot 99'));assert.equal(bounded.collapsed,1);assert.equal(bounded.pager,false);
   const starts=[.0625,.25,.4375,.625,.8125];
   for(const start of starts)assert.ok(renderedWave.points.some(([x,h])=>x>=start-.005&&x<start+.025&&h>14));
   assert.ok(renderedWave.points.every(([x])=>starts.some(start=>x>=start-.005&&x<start+.061)), JSON.stringify(renderedWave));
@@ -501,7 +536,7 @@ app.whenReady().then(async()=>{
   await wait('desktop monitor restored',()=>!document.querySelector('.compact-tabs').getClientRects().length);
   const initial=await state();
   const baseDocument={path:${JSON.stringify(documentPath)},owner:{session:'fixture',space:'workdir'},modified:${JSON.stringify(modified)},sha256:${JSON.stringify(createHash('sha256').update(timeline).digest('hex'))}};
-  const elements=[[0,'Timeline.1',''],[1,'Stack.1','/tracks'],[2,'Track.1','/tracks/children/0'],[3,'Clip.1','/tracks/children/0/children/0'],[4,'Clip.1','/tracks/children/0/children/1'],[7,'Gap.1','/tracks/children/0/children/4']];
+  const elements=[[0,'Timeline.1',''],[1,'Stack.1','/tracks'],[2,'Track.1','/tracks/children/0'],[3,'Clip.1','/tracks/children/0/children/0'],[6,'Clip.1','/tracks/children/0/children/1'],[9,'Gap.1','/tracks/children/0/children/4']];
   for(const [index,[row,schema,pointer]] of elements.entries()){
     await run(row=>document.querySelectorAll('.otio-structure .row')[row].click(),row);
     assert.equal(await run(()=>document.querySelector('.inspector .schema')?.textContent),schema);

@@ -7,7 +7,7 @@
     <h3 v-else>{{ t('Outline') }}</h3>
     <div v-show="!explorer || expanded" :id="treeId" ref="viewport" class="viewport">
       <ul>
-        <li v-for="node in rows" :key="node.id" :data-selected="node.id === selectedId"
+        <li v-for="node in rows" :key="node.id" :data-selected="node.id === (selectedMarkerId ?? selectedId)"
           :style="{ '--indent': Math.min(node.depth, 6) }">
           <HoverInfo v-if="index.parents.has(node.id)" :text="disclosureLabel(node)">
             <template #default="{ triggerProps, close }">
@@ -18,10 +18,11 @@
             </template>
           </HoverInfo>
           <span v-else class="spacer" aria-hidden="true" />
-          <button type="button" class="row" :aria-current="node.id === selectedId ? 'true' : undefined" @click="emit('select', node.id)">
-            <span class="schema-icon" :class="icons[node.kind] ?? 'i-lucide-box'" aria-hidden="true" />
+          <button type="button" class="row" :aria-current="node.id === (selectedMarkerId ?? selectedId) ? 'true' : undefined" @click="node.marker ? emit('select-marker', node.id) : emit('select', node.id)">
+            <span class="schema-icon" :class="node.marker ? 'i-lucide-bookmark' : icons[node.kind] ?? 'i-lucide-box'" :style="node.marker ? { color: otioMarkerColor(node.marker.color) } : undefined" aria-hidden="true" />
             <span class="name">{{ label(node) }}<small v-if="index.ordinal.has(node.id)"> #{{ index.ordinal.get(node.id) }}</small></span>
-            <span v-if="node.name" class="kind">{{ kindLabel(node) }}</span>
+            <span v-if="node.marker" class="kind">{{ markerRange(node.marker) }}</span>
+            <span v-else-if="node.name" class="kind">{{ kindLabel(node) }}</span>
           </button>
         </li>
       </ul>
@@ -46,13 +47,15 @@
 import { computed, nextTick, ref, useId, watch } from 'vue'
 import { t, type MessageKey } from '../../i18n.ts'
 import type { OtioModel, OtioNode } from '../../otio-model.ts'
-import { visibleOtioNodes } from '../../otio-navigation.ts'
+import { otioOutlineRows, type OtioOutlineRow } from '../../otio-outline.ts'
+import { otioMarkerColor } from '../../otio-markers.ts'
+import type { OtioMarker } from '../../otio-model.ts'
 import HoverInfo from '../HoverInfo.vue'
 
-const props = defineProps<{ model: OtioModel; selectedId: string; explorer?: boolean }>()
+const props = defineProps<{ model: OtioModel; selectedId: string; selectedMarkerId?: string; explorer?: boolean }>()
 const expanded = ref(true)
 const treeId = `otio-outline-${useId()}`
-const emit = defineEmits<{ select: [id: string] }>()
+const emit = defineEmits<{ select: [id: string]; 'select-marker': [id: string] }>()
 const icons: Record<string, string> = {
   Timeline: 'i-lucide-timer', Stack: 'i-lucide-layers', Track: 'i-lucide-align-start-horizontal',
   Clip: 'i-lucide-film', Gap: 'i-lucide-square-dashed', Transition: 'i-lucide-blend',
@@ -74,22 +77,24 @@ const index = computed(() => {
     group.push(node.id)
     duplicates.set(key, group)
   }
+  for (const marker of props.model.markers ?? []) parents.add(marker.ownerId)
   const ordinal = new Map<string, number>()
   for (const group of duplicates.values()) {
     if (group.length > 1) group.forEach((id, i) => ordinal.set(id, i + 1))
   }
   return { nodes, parents, ordinal }
 })
-const visible = computed(() => visibleOtioNodes(props.model.nodes, collapsed.value))
+const visible = computed(() => otioOutlineRows(props.model, collapsed.value))
 const lastPage = computed(() => Math.max(0, Math.ceil(visible.value.length / pageSize) - 1))
 const rows = computed(() => visible.value.slice(page.value * pageSize, (page.value + 1) * pageSize))
 
-function kindLabel(node: OtioNode) {
+function markerRange(marker: OtioMarker) { return marker.point ? `${marker.start.toFixed(3)} s` : `${marker.start.toFixed(3)}–${marker.end.toFixed(3)} s` }
+function kindLabel(node: Pick<OtioOutlineRow, 'kind'>) {
   const key = Object.hasOwn(kinds, node.kind) ? kinds[node.kind as keyof typeof kinds] : undefined
   return key ? t(key as MessageKey) : node.kind
 }
-function label(node: OtioNode) { return node.name || kindLabel(node) }
-function disclosureLabel(node: OtioNode) {
+function label(node: Pick<OtioOutlineRow, 'name' | 'kind'>) { return node.name || (node.kind === 'Marker' ? t('Marker') : kindLabel(node)) }
+function disclosureLabel(node: OtioOutlineRow) {
   const name = label(node)
   return collapsed.value.has(node.id) ? t('Expand {name}', { name }) : t('Collapse {name}', { name })
 }
@@ -104,14 +109,16 @@ function toggle(id: string) {
   if (position >= 0) page.value = Math.floor(position / pageSize)
 }
 watch(() => props.model, () => { collapsed.value.clear(); changePage(0) })
-watch([() => props.model, () => props.selectedId], async () => {
-  let node = index.value.nodes.get(props.selectedId)
+watch([() => props.model, () => props.selectedId, () => props.selectedMarkerId], async () => {
+  const marker = props.model.markers?.find(marker => marker.id === props.selectedMarkerId)
+  let node = index.value.nodes.get(marker?.ownerId ?? props.selectedId)
+  if (marker && node) collapsed.value.delete(node.id)
   if (!node) return
   while (node?.parentId != null) {
     collapsed.value.delete(node.parentId)
     node = index.value.nodes.get(node.parentId)
   }
-  const position = visible.value.findIndex(row => row.id === props.selectedId)
+  const position = visible.value.findIndex(row => row.id === (props.selectedMarkerId ?? props.selectedId))
   if (position < 0) return
   page.value = Math.floor(position / pageSize)
   await nextTick()

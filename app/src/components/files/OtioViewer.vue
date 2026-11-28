@@ -11,7 +11,7 @@
     <div class="bench" :class="{ reviewing: review, 'with-inline-outline': inlineOutline }" :data-panel="activePanel">
       <Teleport :to="outlineTarget ?? 'body'" :disabled="!outlineTarget">
         <OtioOutline v-show="outlineTarget || inlineOutline" :class="{ 'outline-pane': inlineOutline }" :explorer="!!outlineTarget"
-          :model="model" :selected-id="selected.id" @select="select" />
+          :model="model" :selected-id="selected.id" :selected-marker-id="selectedMarker?.id" @select="select" @select-marker="selectMarker" />
       </Teleport>
       <section ref="monitorPane" class="monitor-pane" :class="{ 'storyboard-pane': board && !review }" :aria-label="t(board ? 'Storyboard' : 'Picture monitor')">
         <header v-if="!board" class="panel-bar">
@@ -57,11 +57,11 @@
       <section class="inspector" :aria-label="t('Selection')">
         <header class="panel-bar"><h3>{{ t('Selection') }}</h3></header>
         <div class="inspector-body">
-          <span class="schema">{{ selected.schema }}</span>
-          <h4 class="selectable-text">{{ selected.name || t('Unnamed element') }}</h4>
+          <span class="schema">{{ selectedMarker ? t('Marker') : selected.schema }}</span>
+          <h4 class="selectable-text">{{ (selectedMarker ? selectedMarker.name : selected.name) || t('Unnamed element') }}</h4>
           <dl><dt>{{ t('Timeline range') }}</dt><dd class="numeric">{{ rangeLabel }}</dd>
-            <template v-if="selected.authoredRange"><dt>{{ t('Source in / duration') }}</dt><dd class="numeric">{{ displayTime(selected.authoredRange.start) }} / {{ displayTime(selected.authoredRange.duration) }}</dd></template>
-            <dt>{{ t('Element path') }}</dt><dd class="pointer">{{ selected.id || t('Document root') }}</dd>
+            <template v-if="!selectedMarker && selected.authoredRange"><dt>{{ t('Source in / duration') }}</dt><dd class="numeric">{{ displayTime(selected.authoredRange.start) }} / {{ displayTime(selected.authoredRange.duration) }}</dd></template>
+            <dt>{{ t('Element path') }}</dt><dd class="pointer">{{ selectedMarker?.id ?? (selected.id || t('Document root')) }}</dd>
           </dl>
           <p v-if="selected.kind === 'Transition' && !requiresCompositePreview" class="destination cut-notice">{{ t('Transitions are shown as cuts, not rendered blends.') }}</p>
           <template v-if="review">
@@ -78,7 +78,7 @@
                 <button v-bind="triggerProps" type="button" class="mark-action" :disabled="board || !canReference || !captureReady || locked || playing" @click="begin(true, $event)"><span class="i-lucide-pencil" aria-hidden="true" />{{ t('Draw on frame') }}</button>
               </HoverInfo>
             </div>
-            <p v-if="!canReference && active" class="destination">{{ t('This source cannot add a review to a local conversation.') }}</p>
+            <p v-if="!canReference && active && !selectedMarker" class="destination">{{ t('This source cannot add a review to a local conversation.') }}</p>
             <details v-if="!requiresCompositePreview && model.warnings.length" class="limits"><summary>{{ t('Preview limits') }}</summary><ul><li v-for="warning in model.warnings" :key="warning">{{ t(warnings[warning]) }}</li></ul></details>
           </template>
         </div>
@@ -117,16 +117,18 @@ const compact = ref<typeof panels[number]['id']>('monitor')
 const draft = inject(OtioDraftKey, null)
 const destination = computed(() => props.active && props.canReview ? draft?.target(props.apiBase) : null)
 const canStart = computed(() => !!(props.active && props.canReview && draft?.canStart?.(props.apiBase)))
-const canReference = computed(() => !!destination.value || canStart.value)
+const canReference = computed(() => !selectedMarker.value && (!!destination.value || canStart.value))
 const byId = computed(() => new Map(props.model.nodes.map(node => [node.id, node])))
 const selection = ref(props.model.root.id), frame = ref(0), mode = ref<'timeline' | 'clip' | 'track'>('timeline')
 const board = ref(false), boardOpened = ref(false), trackId = ref<string>()
 const videoTrack = computed(() => trackId.value === undefined ? undefined : byId.value.get(trackId.value))
+const markerSelection = ref<string>()
+const selectedMarker = computed(() => props.model.markers?.find(marker => marker.id === markerSelection.value))
 const selected = computed(() => byId.value.get(selection.value) ?? props.model.root)
 const last = computed(() => lastOtioFrame(props.model.duration, props.model.rate))
 const firstSelected = computed(() => firstOtioFrame(selected.value.start, props.model.rate))
 const afterSelected = computed(() => firstOtioFrame(selected.value.end, props.model.rate))
-const canSolo = computed(() => selected.value.kind === 'Clip' && selected.value.trackKind !== 'Audio' && afterSelected.value > firstSelected.value)
+const canSolo = computed(() => !selectedMarker.value && selected.value.kind === 'Clip' && selected.value.trackKind !== 'Audio' && afterSelected.value > firstSelected.value)
 const seconds = computed(() => frame.value / props.model.rate)
 const picture = computed(() => mode.value === 'clip' ? selected.value : otioPictureAt(props.model, seconds.value, mode.value === 'track' ? videoTrack.value : undefined, hiddenVideoTracks.value))
 const compositePosition = computed(() => renderedPreviewPosition(props.renderedPreview, seconds.value))
@@ -162,7 +164,10 @@ const unavailable = computed(() => props.requiresCompositePreview ? (props.unlin
   : !picture.value.sourceStart ? t('Source timing is unavailable for this element.') : t('No supported media in this workspace for this clip.')))
 const format = (n: number) => formatNumber(n, { maximumFractionDigits: 3, useGrouping: false })
 const displayTime = (time: OtioTime) => `${format(time.value)} @ ${format(time.rate)}`
-const rangeLabel = computed(() => t('{start} – {end} s (end exclusive)', { start: format(selected.value.start), end: format(selected.value.end) }))
+const rangeLabel = computed(() => {
+  const item = selectedMarker.value ?? selected.value
+  return selectedMarker.value?.point ? `${format(item.start)} s` : t('{start} – {end} s (end exclusive)', { start: format(item.start), end: format(item.end) })
+})
 const monitor = ref<InstanceType<typeof OtioMonitor>>()
 const muted = ref(true)
 const playing = ref(false), captureReady = ref(false), capturing = ref(false), exporting = ref(false), error = ref('')
@@ -196,9 +201,17 @@ function pickTrack(node: OtioNode | null) {
   while (parent && parent.kind !== 'Track') parent = parent.parentId === null ? undefined : byId.value.get(parent.parentId)
   trackId.value = parent?.trackKind === 'Video' ? parent.id : undefined
 }
+function selectMarker(id: string) {
+  if (locked.value) return
+  const marker = props.model.markers?.find(item => item.id === id)
+  if (!marker || !byId.value.has(marker.ownerId)) return
+  pause(); error.value = ''; markerSelection.value = id; selection.value = marker.ownerId
+  mode.value = 'timeline'; seek(marker.start * props.model.rate)
+  if (compact.value === 'outline') compact.value = 'selection'
+}
 function select(id: string) {
   if (locked.value || !byId.value.has(id)) return
-  pause(); error.value = ''; selection.value = id
+  pause(); error.value = ''; markerSelection.value = undefined; selection.value = id
   pickTrack(selected.value)
   if ((frame.value < firstSelected.value || frame.value >= afterSelected.value) && firstSelected.value < afterSelected.value) frame.value = firstSelected.value
   mode.value = !props.requiresCompositePreview && canSolo.value ? 'clip' : 'timeline'
@@ -220,7 +233,7 @@ function showBoard(next: boolean) {
 }
 function boardPosition(seconds: number, node: OtioNode | null, solo: boolean, monitorView: boolean) {
   if (locked.value) return
-  pause(); error.value = ''; selection.value = node?.id ?? props.model.root.id
+  pause(); error.value = ''; markerSelection.value = undefined; selection.value = node?.id ?? props.model.root.id
   if (!solo) pickTrack(node)
   frame.value = seconds * props.model.rate
   mode.value = solo && videoTrack.value ? 'track' : 'timeline'
@@ -312,7 +325,7 @@ async function stage(target: string | null, label: string, text: string, file?: 
 // A re-read is a new document snapshot; never retain source/board modes or capture state across it.
 watch(() => props.model, () => {
   pause(); cancelReview(); mode.value = 'timeline'; board.value = false; boardOpened.value = false
-  selection.value = props.model.root.id; frame.value = 0; trackId.value = undefined
+  markerSelection.value = undefined; selection.value = props.model.root.id; frame.value = 0; trackId.value = undefined
   hiddenVideoTracks.value = new Set(); mutedAudioTracks.value = new Set()
 }, { flush: 'sync' })
 watch(() => props.active, active => {

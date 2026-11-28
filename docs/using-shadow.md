@@ -629,6 +629,18 @@ window; the ruler and playhead follow it. **Fit** beside the zoom percentage
 restores the full edit. These are review-only controls and never move clips or
 change the OTIO file.
 
+The sidebar's **Structure / Outline** also lists parsed OTIO markers immediately
+under their owning timeline, stack, track or clip. Owners with markers can be
+collapsed; the outline shares a 100-row page limit, including markers, so hundreds
+of markers on one clip do not mount hundreds of controls at once. Marker rows
+show their authored name, color and timeline-relative point or end-exclusive range
+in seconds. Selecting one pauses playback, seeks to its start (clamped to the
+playable timeline), and shows its name/range/path in Selection. It does not select
+a marker as a clip: clip-source mode and review-reference/frame-drawing actions
+are unavailable for marker selections. Select an ordinary element to restore those
+actions. Existing track-timeline marker display remains available. Only markers
+with timing supported by the preview parser are shown; this does not edit the file.
+
 Use **Add description** or **Edit description** on a card to add a caption; all
 samples of that clip share it, with one caption per clip on each page. Save a blank
 description to remove it. **Missing descriptions only** excludes gaps and clips
