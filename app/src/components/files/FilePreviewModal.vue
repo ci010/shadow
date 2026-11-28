@@ -620,8 +620,9 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
 }
 
 /* Native controls and the header action both fullscreen the video itself.
-   Override inline/modal size caps in the browser's fullscreen top layer. */
-.file-modal-media:fullscreen {
+   Match .file-modal.fullscreen .file-modal-media specificity, then win by
+   source order over every inline/modal size cap in the fullscreen top layer. */
+.file-modal .file-modal-media:fullscreen {
   width: 100vw;
   height: 100vh;
   max-width: none;

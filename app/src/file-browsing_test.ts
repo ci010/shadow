@@ -1488,3 +1488,29 @@ test('archive video position survives released blob URLs and fresh metadata', as
   state().restoreVideo()
   assert.equal(second.currentTime, 39)
 })
+
+test('video fullscreen size overrides every modal and inline media cap in the CSS cascade', () => {
+  const source = readFileSync(new URL('./components/files/FilePreviewModal.vue', import.meta.url), 'utf8')
+  const { descriptor } = parse(source)
+  const css = descriptor.styles.map(style => style.content).join('\n').replace(/\/\*[\s\S]*?\*\//g, '')
+  // These media rules use only class selectors and :fullscreen. Evaluate their
+  // actual specificity/source order, rather than merely finding a declaration.
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, selectors, body], order) =>
+    selectors!.split(',').filter(selector => selector.includes('.file-modal-media')).map(selector => {
+      assert.doesNotMatch(selector, /[#\[>+~]|:(?!fullscreen\b)/, 'extend the cascade evaluator for new selector syntax')
+      return { selector, body: body!, order, specificity: (selector.match(/\.[\w-]+|:fullscreen/g) ?? []).length }
+    }))
+  for (const classes of [[], ['fullscreen'], ['inline'], ['fullscreen', 'inline']]) {
+    const matching = rules.filter(rule => [...rule.selector.matchAll(/\.([\w-]+)/g)].every(([, name]) =>
+      name === 'file-modal-media' || name === 'file-modal' || classes.includes(name!)))
+      .sort((a, b) => a.specificity - b.specificity || a.order - b.order)
+    for (const property of ['max-width', 'max-height']) {
+      let winner = ''
+      for (const rule of matching) {
+        const value = rule.body.match(new RegExp(`(?:^|;)\\s*${property}:\\s*([^;]+)`))?.[1]
+        if (value) winner = value.trim()
+      }
+      assert.equal(winner, 'none', `${property} must be uncapped in true fullscreen with modal classes: ${classes}`)
+    }
+  }
+})
