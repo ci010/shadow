@@ -25,7 +25,7 @@ test('shared player renders custom accessible controls and drives media events a
     resolveId: id => id === '/fixture.ts' ? '\0media-player-fixture' : undefined,
     load(id) {
       if (id !== '\0media-player-fixture') return
-      return `import {createApp,h} from 'vue'; import Player from '/src/components/MediaPlayer.vue'; import Attachments from '/src/components/MessageAttachments.vue'; import {setLocalePreference} from '/src/i18n.ts'; setLocalePreference('en'); createApp({render:()=>h('main',[h(Player,{kind:'video',label:'Video fixture'}),h(Player,{kind:'audio',label:'Audio fixture'}),h(Attachments,{paths:['/fixture.wav'],apiBase:location.origin,sessionId:'web:fixture'})])}).mount('#app');`
+      return `import {createApp,h} from 'vue'; import Player from '/src/components/MediaPlayer.vue'; import Modal from '/src/components/files/FilePreviewModal.vue'; import Attachments from '/src/components/MessageAttachments.vue'; import {setLocalePreference} from '/src/i18n.ts'; setLocalePreference('en'); createApp({render:()=>h('main',[h(Player,{kind:'video',label:'Video fixture'}),h(Player,{kind:'audio',label:'Audio fixture'}),h('section',{style:'display:flex;height:600px;width:300px'},[h(Modal,{inline:true,apiBase:location.origin,sessionId:'web:fixture',dir:'',entry:{name:'movie.mp4',ext:'.mp4',type:'file',size:0}})]),h(Attachments,{paths:['/fixture.wav'],apiBase:location.origin,sessionId:'web:fixture'})])}).mount('#app');`
     },
     configureServer(server) { server.middlewares.use((req, res, next) => {
       if (req.url !== '/') { next(); return }
@@ -35,10 +35,10 @@ test('shared player renders custom accessible controls and drives media events a
   await server.listen(); t.after(() => server.close())
   const url = server.resolvedUrls?.local[0]; assert(url)
   const script = `const assert=require('node:assert/strict'); const {app,BrowserWindow}=require('electron'); const {setTimeout:delay}=require('node:timers/promises'); app.setPath('userData',require('node:path').join(process.cwd(),'profile')); app.on('window-all-closed',()=>{});
-    (async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:320,height:800,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}}); const run=s=>win.webContents.executeJavaScript(s); await win.loadURL(${JSON.stringify(url)});
+    (async()=>{await app.whenReady();const win=new BrowserWindow({show:false,width:320,height:800,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}}); const run=async s=>{try{return await win.webContents.executeJavaScript(s)}catch(e){console.error('FAILED SCRIPT',s);throw e}}; await win.loadURL(${JSON.stringify(url)});
     for(let i=0;i<200;i++){if(await run('!!document.querySelector(".media-toolbar")'))break;await delay(50)}
     assert.equal(await run('document.querySelectorAll("video[controls],audio[controls]").length'),0);
-    assert.equal(await run('document.querySelectorAll(".media-player").length'),3);
+    assert.equal(await run('document.querySelectorAll(".media-player").length'),4);
     assert.equal(await run('getComputedStyle(document.querySelector(".attachment-details")).marginTop'),'12px');
     assert.equal(await run('[...document.querySelectorAll(".media-button")].every(e=>e.getBoundingClientRect().height>=44&&e.getBoundingClientRect().width>=44)'),true);
     assert.equal(await run('document.documentElement.scrollWidth<=innerWidth'),true);
@@ -52,6 +52,26 @@ test('shared player renders custom accessible controls and drives media events a
     await run('p.querySelector(".media-toolbar button").click()');assert.equal(await run('window.playing'),false);
     win.show(); win.focus(); win.webContents.focus(); await run(\`p.querySelector('.media-seek').focus()\`);await win.webContents.sendInputEvent({type:'keyDown',keyCode:'Right'});await win.webContents.sendInputEvent({type:'keyUp',keyCode:'Right'});await delay(100);assert.equal(await run('m.currentTime>35'),true);
     await run('document.querySelector("audio").dispatchEvent(new Event("error"))'); assert.match(await run('document.querySelector(".media-player-audio [role=alert]").textContent'),/Could not play media/);
+    await run(\`document.activeElement.blur();m.play();p.dispatchEvent(new Event('pointermove',{bubbles:true}));\`);
+    await delay(3200);assert.equal(await run('p.classList.contains("controls-hidden")'),true);
+    assert.equal(await run('document.querySelector(".media-player-audio").classList.contains("controls-hidden")'),false);
+    await run('p.dispatchEvent(new Event("pointermove"))');assert.equal(await run('p.classList.contains("controls-hidden")'),false);
+    await run('p.querySelector(".media-seek").focus()');await delay(3200);assert.equal(await run('p.classList.contains("controls-hidden")'),false);
+    await run('document.activeElement.blur();m.pause()');await delay(3200);assert.equal(await run('p.classList.contains("controls-hidden")'),false);
+    await run('m.dispatchEvent(new MouseEvent("click",{bubbles:true,detail:1}))');await delay(550);assert.equal(await run('playing'),true);
+    await run(\`window.fs=0;p.requestFullscreen=async()=>{window.fs++};m.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:1}));m.dispatchEvent(new MouseEvent('click',{bubbles:true,detail:2}));m.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,detail:2}));\`);await delay(550);
+    assert.equal(await run('playing'),true);assert.equal(await run('fs'),1);
+    await run('p.querySelectorAll(".media-toolbar button")[1].click()');await delay(550);assert.equal(await run('playing'),true);assert.equal(await run('fs'),1);
+    for(const pointerType of ['mouse','touch']){
+      await run(\`m.playbackRate=1.25;m.dispatchEvent(new PointerEvent('pointerdown',{pointerId:5,pointerType:'\${pointerType}',isPrimary:true,button:0,bubbles:true}));\`);await delay(550);
+      assert.equal(await run('m.playbackRate'),2);assert.match(await run('p.querySelector(".media-speed").textContent'),/2×/);
+      await run(\`m.dispatchEvent(new PointerEvent('pointerup',{pointerId:5,bubbles:true}));m.dispatchEvent(new MouseEvent('click',{detail:1,bubbles:true}));\`);await delay(550);
+      assert.equal(await run('m.playbackRate'),1.25);assert.equal(await run('playing'),true);
+    }
+    await run(\`m.dispatchEvent(new PointerEvent('pointerdown',{pointerId:6,isPrimary:true,button:0}));\`);await delay(550);
+    await run(\`m.dispatchEvent(new PointerEvent('pointercancel',{pointerId:6}));\`);assert.equal(await run('m.playbackRate'),1.25);
+    assert.equal(await run(\`(()=>{const b=document.querySelector('.video-preview'),v=b.querySelector('.media-player');const br=b.getBoundingClientRect(),vr=v.getBoundingClientRect();return Math.abs((br.top+br.bottom-vr.top-vr.bottom)/2)<2&&Math.abs((br.left+br.right-vr.left-vr.right)/2)<2})()\`),true);
+    await run('m.dispatchEvent(new Event("error"))');await delay(3200);assert.equal(await run('p.classList.contains("controls-hidden")'),false);
     await win.close();console.log('MEDIA_PLAYER_OK');app.exit(0)})().catch(e=>{console.error(e);app.exit(1)});`
   await build({ stdin: { contents: script, resolveDir: root, sourcefile: 'media-player.cjs', loader: 'js' }, outfile: resolve(directory, 'main.cjs'), bundle: true, platform: 'node', format: 'cjs', external: ['electron'] })
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE

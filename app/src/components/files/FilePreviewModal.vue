@@ -35,7 +35,7 @@
       </div>
       <p v-if="fullscreenError" class="file-download-error" role="alert">{{ fullscreenError }}</p>
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
-      <div ref="previewBody" class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat || ((isOtio || isModel) && !sourceView), 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
+      <div ref="previewBody" class="file-modal-body" :class="{ 'video-preview': kind === 'video', 'viewer-preview': !!viewerFormat || ((isOtio || isModel) && !sourceView), 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
         <NodeOfflineState v-if="offline" :checking="loading" :description="t('This preview will be available when the owning node reconnects.')" @retry="loadText" />
         <div v-else-if="entry.archive && (!loaded || error)" class="file-modal-note" :role="error ? 'alert' : 'status'">
           {{ error || t('Reading archive entry...') }} <button v-if="error" class="file-modal-btn" @click="loadText">{{ t('Retry') }}</button>
@@ -630,6 +630,9 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
   padding: 1rem;
   background: var(--c-bg-muted);
 }
+.inline .file-modal-body.video-preview { align-items: center; padding: 20px 24px; scroll-padding-bottom: 0; }
+.file-modal-body.video-preview { justify-content: center; }
+.file-modal-body.video-preview > .media-player { flex-shrink: 0; }
 .file-modal-body.viewer-preview { padding: 0; overflow: hidden; height: calc(88vh - 4rem); }
 .fullscreen .file-modal-body.viewer-preview { height: calc(100vh - 4rem); }
 .inline .file-modal-body.viewer-preview { height: auto; padding: 0 0 var(--composer-height, 0px); scroll-padding-bottom: 0; }

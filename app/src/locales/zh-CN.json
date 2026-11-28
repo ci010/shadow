@@ -1,6 +1,7 @@
 {
   "Play": "播放",
   "Seek": "播放进度",
+  "Playback speed": "播放速度",
   "Mute": "静音",
   "Unmute": "取消静音",
   "Could not play media. Try again or download the file.": "无法播放媒体。请重试或下载文件。",

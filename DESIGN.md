@@ -632,6 +632,15 @@ Conversation attachments, file previews and recorded I/O results share
 square controls and a thin seek track; audio uses the compact control strip,
 while video adds a central play action and fullscreen. Keep the controls
 keyboard-accessible and provide localized labels and shared `HoverInfo` hints.
+Playing video hides its controls after about three idle seconds; pointer/touch
+activity or keyboard focus reveals them. Paused/error states and active control
+interaction retain the strip; audio never auto-hides. Single-click the picture
+to toggle playback (briefly deferred to distinguish double-click fullscreen).
+Holding the picture for 500ms temporarily selects 2× speed with a localized
+status; release/cancellation restores the prior rate without toggling playback.
+Controls and the central play action are separate from picture gestures. File
+viewer video is centered on both axes, including inline document panes, without
+changing the reading alignment of other file formats.
 The dark media surface is intentional in both application themes, like video
 content itself. Do not rely on browser-native pill-shaped audio controls for
 these surfaces. Live camera/screen capture and the OTIO editing monitor retain

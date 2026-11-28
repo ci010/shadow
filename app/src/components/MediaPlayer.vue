@@ -1,13 +1,17 @@
 <template>
-  <div ref="root" class="media-player" :class="`media-player-${kind}`" role="group" :aria-label="label">
+  <div ref="root" class="media-player" :class="[`media-player-${kind}`, { 'controls-hidden': controlsHidden }]" role="group" :aria-label="label"
+    @pointermove="showControls" @touchstart.passive="showControls" @keydown="showControls" @focusin="focusControls" @focusout="blurControls">
     <component :is="kind" :ref="setMedia" v-mobile-media="mobileSource" :src="src" :aria-label="label"
       :autoplay="autoplay" :preload="preload" playsinline
       @play="sync" @pause="sync" @ended="sync" @emptied="sync" @timeupdate="sync" @durationchange="sync" @volumechange="sync"
-      @loadedmetadata="metadata" @error="mediaError" />
+      @loadedmetadata="metadata" @error="mediaError" @click="surfaceClick" @dblclick="surfaceDoubleClick"
+      @pointerdown="holdStart" @pointerup="holdEnd" @pointercancel="holdCancel" @lostpointercapture="holdCancel" @contextmenu.prevent />
+    <span v-if="holding" class="media-speed" role="status">{{ t('Playback speed') }}: 2×</span>
     <HoverInfo v-if="kind === 'video' && paused" :text="t('Play')" v-slot="{ triggerProps }">
-      <button v-bind="triggerProps" type="button" class="media-center media-button" :aria-label="t('Play')" @click="togglePlay"><span class="i-lucide-play" aria-hidden="true" /></button>
+      <button v-bind="triggerProps" type="button" class="media-center media-button" :aria-label="t('Play')" @click.stop="togglePlay" @dblclick.stop><span class="i-lucide-play" aria-hidden="true" /></button>
     </HoverInfo>
-    <div class="media-controls">
+    <div class="media-controls" @click.stop @dblclick.stop @pointerenter="controlsHovered = true; showControls()" @pointerleave="controlsHovered = false; showControls()"
+      @pointerdown="controlsPressed = true; showControls()" @pointerup="controlsPressed = false; showControls()" @pointercancel="controlsPressed = false; showControls()">
       <input class="media-seek" type="range" min="0" :max="duration || 0" step="0.1" :value="position" :disabled="!duration" :aria-label="t('Seek')" :aria-valuetext="formatTime(position) + ' / ' + formatTime(duration)" @input="seek" />
       <div class="media-toolbar">
         <HoverInfo :text="paused ? t('Play') : t('Pause')" v-slot="{ triggerProps }">
@@ -28,16 +32,76 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { t } from '../i18n.ts'
 import { vMobileMedia } from '../mobile-resources.ts'
 import HoverInfo from './HoverInfo.vue'
-withDefaults(defineProps<{ kind: 'audio' | 'video'; src?: string; label?: string; mobileSource?: string; autoplay?: boolean; preload?: 'none' | 'metadata' | 'auto' }>(), { preload: 'metadata', autoplay: false })
+const props = withDefaults(defineProps<{ kind: 'audio' | 'video'; src?: string; label?: string; mobileSource?: string; autoplay?: boolean; preload?: 'none' | 'metadata' | 'auto' }>(), { preload: 'metadata', autoplay: false })
 const emit = defineEmits<{ element: [element: HTMLMediaElement | null]; loadedmetadata: [event: Event]; error: [event: Event]; fullscreenchange: [fullscreen: boolean] }>()
 const root = ref<HTMLElement>()
 let media: HTMLMediaElement | null = null
 const paused = ref(true), position = ref(0), duration = ref(0), volume = ref(1), muted = ref(false), isFullscreen = ref(false), error = ref('')
+const controlsHidden = ref(false), holding = ref(false)
+const controlsHovered = ref(false), controlsPressed = ref(false)
+let controlsFocused = false
+let hideTimer: ReturnType<typeof setTimeout> | undefined
+let clickTimer: ReturnType<typeof setTimeout> | undefined
+let holdTimer: ReturnType<typeof setTimeout> | undefined
+let originalRate = 1, suppressClick = false
+let holdPointer: number | undefined
+function showControls() {
+  controlsHidden.value = false
+  clearTimeout(hideTimer)
+  if (props.kind !== 'video' || paused.value || error.value) return
+  hideTimer = setTimeout(() => {
+    if (!controlsHovered.value && !controlsPressed.value && !controlsFocused && !holding.value) controlsHidden.value = true
+  }, 3000)
+}
+function focusControls() { controlsFocused = true; showControls() }
+function blurControls(event: FocusEvent) {
+  controlsFocused = !!(event.relatedTarget && root.value?.contains(event.relatedTarget as Node))
+  showControls()
+}
+watch([paused, error], showControls)
+function surfaceClick(event: MouseEvent) {
+  if (props.kind !== 'video') return
+  if (suppressClick) return
+  clearTimeout(clickTimer)
+  if (event.detail > 1) return
+  clickTimer = setTimeout(() => { void togglePlay() }, 500)
+}
+function surfaceDoubleClick() {
+  clearTimeout(clickTimer)
+  if (suppressClick) return
+  void toggleFullscreen()
+}
+function holdStart(event: PointerEvent) {
+  if (props.kind !== 'video' || event.button !== 0 || !event.isPrimary || !media) return
+  clearTimeout(clickTimer)
+  suppressClick = false
+  holdPointer = event.pointerId
+  // Synthetic/retired pointers may no longer be capturable.
+  try { (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId) } catch { /* pointer already released */ }
+  holdTimer = setTimeout(() => {
+    if (!media) return
+    originalRate = media.playbackRate
+    media.playbackRate = 2
+    holding.value = true
+    suppressClick = true
+    showControls()
+  }, 500)
+}
+function restoreRate() {
+  clearTimeout(holdTimer)
+  if (holding.value && media) media.playbackRate = originalRate
+  holding.value = false
+  holdPointer = undefined
+  showControls()
+}
+function holdEnd(event: PointerEvent) { if (event.pointerId === holdPointer) restoreRate() }
+function holdCancel(event: PointerEvent) { if (event.pointerId === holdPointer) { suppressClick = true; restoreRate() } }
 function setMedia(element: unknown) {
+  if (media && media !== element) restoreRate()
   media = element as HTMLMediaElement | null
   emit('element', media)
   sync()
@@ -89,8 +153,20 @@ async function toggleFullscreen() {
     }
   } catch { error.value = t('Could not enter fullscreen.') }
 }
-onMounted(() => root.value?.ownerDocument.addEventListener('fullscreenchange', fullscreenChanged))
-onBeforeUnmount(() => { root.value?.ownerDocument.removeEventListener('fullscreenchange', fullscreenChanged); media?.pause() })
+function releaseControls() { if (controlsPressed.value) { controlsPressed.value = false; showControls() } }
+onMounted(() => {
+  root.value?.ownerDocument.addEventListener('fullscreenchange', fullscreenChanged)
+  root.value?.ownerDocument.addEventListener('pointerup', releaseControls)
+  root.value?.ownerDocument.addEventListener('pointercancel', releaseControls)
+})
+onBeforeUnmount(() => {
+  restoreRate()
+  clearTimeout(hideTimer); clearTimeout(clickTimer); clearTimeout(holdTimer)
+  root.value?.ownerDocument.removeEventListener('fullscreenchange', fullscreenChanged)
+  root.value?.ownerDocument.removeEventListener('pointerup', releaseControls)
+  root.value?.ownerDocument.removeEventListener('pointercancel', releaseControls)
+  media?.pause()
+})
 defineExpose({ get element() { return media }, toggleFullscreen })
 </script>
 
@@ -98,6 +174,10 @@ defineExpose({ get element() { return media }, toggleFullscreen })
 .media-player { display: flex; flex-direction: column; position: relative; width: 100%; min-width: 0; overflow: hidden; background: #141414; color: #fff; border-radius: 0; color-scheme: dark; }
 .media-player video { min-height: 0; display: block; width: 100%; max-height: min(60vh, 640px); aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
 .media-player audio { display: none; }
+.media-player video { touch-action: manipulation; user-select: none; -webkit-touch-callout: none; }
+.controls-hidden .media-controls { opacity: 0; pointer-events: none; }
+.controls-hidden { cursor: none; }
+.media-speed { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); padding: 6px 12px; background: #141414; color: #fff; font-size: 12px; pointer-events: none; }
 .media-controls { flex-shrink: 0; position: relative; padding: 0 8px; background: #141414; }
 .media-player-video .media-controls { position: absolute; inset: auto 0 0; background: linear-gradient(transparent, rgb(0 0 0 / 90%)); }
 .media-player-video .media-error { position: absolute; inset: 0 0 auto; box-sizing: border-box; background: #141414; }
