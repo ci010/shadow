@@ -108,7 +108,7 @@ import { vMarkdownLinkHints } from '../../markdown-link-hints'
 import { readAttachmentBytes } from '../../attachment-preview.ts'
 import UiSelect from '../UiSelect.vue'
 import { t } from '../../i18n.ts'
-import { computed, defineAsyncComponent, nextTick, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { isGltfFile, isPlaygroundFile } from '../../gltf-file-source.ts'
 const GltfFilePreview = defineAsyncComponent(() => import('./GltfFilePreview.vue'))
 import { isOtioFile } from '../../otio-review.ts'
@@ -217,14 +217,29 @@ function rememberVideo(): void {
   if (video.readyState >= 1 && Number.isFinite(video.currentTime)) videoPosition = video.currentTime
   video.pause()
 }
+// pause() alone does not cancel an unloaded element's autoplay selection.
+// Explicitly reset the native media resource before detaching it (including
+// component unmount, where a function ref is not a reliable cleanup hook).
+function releaseVideo(): void {
+  const previous = video
+  if (!previous) return
+  rememberVideo()
+  video = undefined
+  videoNeedsRestore = false
+  previous.autoplay = false
+  previous.removeAttribute('autoplay')
+  previous.removeAttribute('src')
+  previous.load()
+}
+onBeforeUnmount(releaseVideo)
 function setVideo(element: Element | import('vue').ComponentPublicInstance | null): void {
   if (element === video || (!element && !video)) return
-  rememberVideo()
+  releaseVideo()
   video = element ? element as HTMLVideoElement : undefined
   videoNeedsRestore = !!video
 }
-function restoreVideo(): void {
-  if (!video || !videoNeedsRestore) return
+function restoreVideo(event?: Event): void {
+  if (!video || !videoNeedsRestore || (event && event.target !== video)) return
   videoNeedsRestore = false
   if (videoPosition > 0) video.currentTime = Number.isFinite(video.duration)
     ? Math.min(videoPosition, video.duration) : videoPosition
@@ -234,14 +249,13 @@ const videoIdentity = computed(() => JSON.stringify([props.apiBase, props.sessio
 watch(videoIdentity, () => {
   // Invalidate the old element before its ref is detached; it must not write
   // the previous file's position into a reused preview instance.
-  video?.pause()
-  video = undefined
+  releaseVideo()
   videoPosition = 0
   videoAutoplay.value = props.active
 }, { flush: 'sync' })
 watch(() => props.active, active => {
   if (!active) {
-    rememberVideo()
+    releaseVideo()
     videoAutoplay.value = false
   }
 }, { flush: 'sync' })

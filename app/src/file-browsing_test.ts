@@ -1390,13 +1390,72 @@ test('HTML preview leases discard and revoke stale source responses, release on 
   await nextTick()
 })
 
+// Model the browser's pending autoplay/resource selection, not just pause().
+function videoMedia(currentTime = 0, duration = 120, readyState = 1) {
+  return {
+    currentTime, duration, readyState, autoplay: true, src: 'movie.mp4', pauses: 0, loads: 0, playing: false,
+    pause() { this.pauses++; this.playing = false },
+    removeAttribute(name: string) { if (name === 'src') this.src = '' },
+    load() { this.loads++; this.readyState = 0; this.currentTime = 0; this.playing = false },
+    finishLoading() { this.readyState = 1; this.playing = !!this.src && this.autoplay },
+  }
+}
+
+test('closing an unloaded video cancels pending autoplay and releases its native resource', t => {
+  const { state, unmount } = mount(t, 'FilePreviewModal', { ...base, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4' } })
+  const setup = state()
+  const media = videoMedia(0, 120, 0)
+  setup.setVideo(media)
+  // Deliberately do not simulate ref(null): component disposal must own cleanup.
+  unmount()
+  assert.ok(media.pauses > 0)
+  assert.equal(media.loads, 1)
+  assert.equal(media.src, '')
+  assert.equal(media.autoplay, false)
+  media.finishLoading()
+  setup.restoreVideo({ target: media })
+  assert.equal(media.playing, false, 'a late load after close must not start audio')
+})
+
+test('closing a playing video releases its native resource even before ref detachment', t => {
+  const { state, unmount } = mount(t, 'FilePreviewModal', { ...base, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4' } })
+  const media = videoMedia(18)
+  media.playing = true
+  state().setVideo(media)
+  unmount()
+  assert.equal(media.playing, false)
+  assert.equal(media.src, '')
+  assert.equal(media.loads, 1)
+})
+
+test('hiding a video cancels autoplay and ignores stale metadata after replacement', async t => {
+  const { props, state } = mount(t, 'FilePreviewModal', { ...base, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4' } })
+  const media = videoMedia(21)
+  state().setVideo(media)
+  props.active = false
+  await nextTick()
+  assert.equal(media.loads, 1, 'hiding releases resources without relying on ref(null)')
+  media.finishLoading()
+  assert.equal(media.playing, false)
+  state().setVideo(null)
+  props.active = true
+  await nextTick()
+  const replacement = videoMedia()
+  state().setVideo(replacement)
+  state().restoreVideo({ target: media })
+  assert.equal(replacement.currentTime, 0)
+  state().restoreVideo({ target: replacement })
+  assert.equal(replacement.currentTime, 21)
+  assert.ok(replacement.pauses > 0)
+})
+
 // Media elements are disposable; playback position must live in the tab's setup.
 test('video tabs pause and restore position across element/archive reloads without autoplay', async t => {
   const pending = requests(t)
   const { props, state } = mount(t, 'FilePreviewModal', { ...base, remote: true, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4' } })
   pending[0]!.finish({ entries: [] })
   await settle()
-  const media = (time = 0, duration = 120, readyState = 1) => ({ currentTime: time, duration, readyState, pauses: 0, pause() { this.pauses++ } })
+  const media = videoMedia
   const first = media(42)
   state().setVideo(first)
   props.active = false
@@ -1445,7 +1504,7 @@ test('video fullscreen requests the media top layer and exposes failures without
   let enters = 0
   let exits = 0
   const doc = { fullscreenElement: null as unknown, async exitFullscreen() { exits++; this.fullscreenElement = null } }
-  const media = { currentTime: 0, readyState: 1, duration: 60, ownerDocument: doc, pause() {}, async requestFullscreen() { enters++; doc.fullscreenElement = this } }
+  const media = { ...videoMedia(0, 60), ownerDocument: doc, async requestFullscreen() { enters++; doc.fullscreenElement = this } }
   state().setVideo(media)
   await state().toggleFullscreen()
   assert.equal(enters, 1)
@@ -1468,7 +1527,7 @@ test('archive video position survives released blob URLs and fresh metadata', as
   }, undefined, { '../../archive-files.ts': { readArchiveEntry: async () => { reads++; return new Blob(['video']) } } })
   await settle()
   const url = state().rawSource
-  const first = { readyState: 1, currentTime: 27, duration: 100, pause() {} }
+  const first = videoMedia(27, 100)
   state().setVideo(first)
   props.active = false
   await nextTick()
