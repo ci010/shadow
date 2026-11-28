@@ -5,6 +5,7 @@
     <header v-if="!mobile?.enabled.value" class="editor-workspace-header">
       <HoverInfo v-if="apiBase" :text="knowledgeContext ? t('Toggle Knowledge navigation (Ctrl+Shift+E)') : t('Toggle files (Ctrl+Shift+E)')" v-slot="{ triggerProps }"><button v-bind="triggerProps" ref="explorerToggle" class="project-explorer-toggle" :aria-label="knowledgeContext ? t('Toggle Knowledge navigation') : t('Toggle files')" aria-keyshortcuts="Control+Shift+E Meta+Shift+E" :aria-controls="`${hostId}-${knowledgeContext ? 'explorer' : 'files'}`" :aria-expanded="explorerOpen" @click="groups.toggleExplorer(projectId)"><span class="i-lucide-panel-left" aria-hidden="true" /></button></HoverInfo>
       <div class="editor-header-groups">
+        <ProjectEditorTabs v-if="active && surroundingTabs.before.length" class="other-project-tabs" :groups="surroundingTabs.before" :has-adjacent-project="hasLocalTabs" @activate="emit('activateProjectTab', $event)" @close="emit('closeProjectTab', $event)" />
         <span v-if="showProjectMarker" class="editor-project-marker" :id="`${hostId}-project`">{{ projectName }}</span>
         <div v-for="side in sides" :key="side" :data-editor-header-group="side" class="editor-header-group" :class="{ 'active-group': state.active === side, 'empty-group': !state[side].length, 'drag-target': dragging, 'drag-over': dragOver === side }" :style="side === 'right' && state.left.length ? { flexBasis: `${rightWidth}px`, flexGrow: 0 } : undefined">
           <div class="editor-tabs" @pointerdown.capture="($event.button !== 1) && groups.focus(projectId, side)" @focusin="groups.focus(projectId, side)" @wheel="scrollEditorTabs($event, $event.currentTarget as HTMLElement)" @dragenter="drag.enter($event, side)" @dragover="drag.enter($event, side)" @dragleave="leaveDrop($event, side)" @drop="dropTab($event, side)" role="tablist" :aria-describedby="showProjectMarker ? `${hostId}-project` : undefined" :aria-label="t(side === 'left' ? 'Left editor group' : 'Right editor group')">
@@ -14,8 +15,8 @@
             </div>
             <span v-if="dragging && !state[side].length" class="editor-drop-label">{{ t(side === 'left' ? 'Move to main area' : 'Move to right') }}</span>
           </div>
-          <ProjectEditorTabs v-if="active && side === 'left' && otherProjectTabs?.length" class="other-project-tabs" :groups="otherProjectTabs" :has-adjacent-project="hasLocalTabs" @activate="emit('activateProjectTab', $event)" @close="emit('closeProjectTab', $event)" />
         </div>
+        <ProjectEditorTabs v-if="active && surroundingTabs.after.length" class="other-project-tabs" :groups="surroundingTabs.after" :has-adjacent-project="hasLocalTabs" @activate="emit('activateProjectTab', $event)" @close="emit('closeProjectTab', $event)" />
       </div>
     </header>
     <div class="editor-workspace-body">
@@ -43,7 +44,7 @@
 </template>
 <script setup lang="ts">
 import { computed, inject, nextTick, onMounted, onUnmounted, ref, useId, watch, type ComponentPublicInstance } from 'vue'
-import { EditorGroupsKey, type EditorSide } from '../editor-groups.ts'
+import { APP_EDITOR_SCOPE, EditorGroupsKey, type EditorSide } from '../editor-groups.ts'
 import { documentTabDirection, isCloseDocumentKey, isCloseAllDocumentsKey, isToggleExplorerKey } from '../file-workbench.ts'
 import { scrollEditorTabs, revealEditorTab } from '../editor-tab-scroll.ts'
 import { createEditorTabDrag } from '../editor-tab-drag.ts'
@@ -52,6 +53,7 @@ import HoverInfo from './HoverInfo.vue'
 import MobileSheet from './MobileSheet.vue'
 import MobileEditorChrome from './MobileEditorChrome.vue'
 import type { ProjectTopTabGroup } from '../project-top-tabs.ts'
+import { surroundingProjectTabGroups } from '../project-tab-placement.ts'
 import ProjectEditorTabs from './ProjectEditorTabs.vue'
 import SessionActivity from './SessionActivity.vue'
 import ProjectFileExplorer from './files/ProjectFileExplorer.vue'
@@ -65,6 +67,8 @@ const mobile = useMobileChrome()
 const mobileExplorerTarget = ref<HTMLElement>()
 const sides: EditorSide[] = ['left', 'right']
 const state = computed(() => groups.state(props.projectId))
+const surroundingTabs = computed(() => surroundingProjectTabGroups(props.otherProjectTabs ?? [], props.projectId,
+  [...groups.projects.keys()].filter(id => id !== APP_EDITOR_SCOPE).concat(APP_EDITOR_SCOPE)))
 const hasLocalTabs = computed(() => Boolean(state.value.left.length || state.value.right.length))
 const showProjectMarker = computed(() => Boolean(props.projectName && hasLocalTabs.value && props.active && props.otherProjectTabs?.length))
 const knowledgeContext = computed(() => groups.active(props.projectId)?.explorer)

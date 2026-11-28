@@ -338,9 +338,8 @@ const projectWorkbenches = new Map<string, ConversationResource>()
 let documentRoute = ''
 let incomingDocument: symbol | undefined
 let pendingTopTab: { resource: ConversationResource; path: string } | undefined
-const projectOnlyTabGroups = computed(() => projectTopTabGroups(editorGroups, projects.value, editor =>
-  !!editor.conversation || editor.id === projectEditorId(editor.projectId, 'workflows')
-  || editor.id === projectEditorId(editor.projectId, 'board') || editor.id === projectEditorId(editor.projectId, 'settings')))
+// Open files are workbench documents too: switching Projects must not hide their tabs.
+const projectOnlyTabGroups = computed(() => projectTopTabGroups(editorGroups, projects.value, () => true))
 const openProjectTabGroups = computed(() => [
   ...projectOnlyTabGroups.value,
   ...projectTopTabGroups(editorGroups, [{ id: APP_EDITOR_SCOPE, name: 'Shadow' }], () => true),
@@ -378,6 +377,14 @@ async function activateTopTab(id: string) {
       }
       if (route.fullPath !== path) return
     }
+  }
+  else {
+    // File descriptors do not own a route. Restore the source workbench first,
+    // then focus the retained document without reopening or moving its view.
+    const resource = projectWorkbench(projectId)
+    publish(resource)
+    await router.push({ ...projectChatLocation(resource), query: conversationQueries.get(resource.key) ?? {} })
+    await nextTick()
   }
   if (props.visible && route.params.projectId === projectId) editorGroups.activate(id)
 }
