@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFile, stat, lstat, mkdtemp, rm, link } from 'node:fs/promises'
 import path from 'node:path'
-import { localMediaPath, assertLocalPath, streamDuration, alphaDecoder, type MediaStream } from './media-profile.ts'
+import { localMediaPath, assertLocalPath, streamDuration, streamDurationEvidence, alphaDecoder, type MediaStream } from './media-profile.ts'
 import { otioPictureSpans, type OtioNode, MAX_OTIO_BYTES } from '../shared/otio-model.ts'
 import { run } from './process.ts'
 import { prepareOtioProfile } from '../shared/otio-effects.ts'
@@ -12,10 +12,19 @@ const formats: Record<string, string> = { '.mp4': 'mov', '.mov': 'mov', '.m4a': 
 const images = new Set(['png_pipe', 'jpeg_pipe', 'webp_pipe'])
 function inputArgs(file: string, format: string, decoder?: string): string[] { return ['-protocol_whitelist', 'file,pipe', ...(decoder ? ['-c:v', decoder] : []), '-f', format, '-i', file] }
 function sourceOffset(n: OtioNode) { return n.sourceStart!.value / n.sourceStart!.rate - (n.mediaStart ? n.mediaStart.value / n.mediaStart.rate : 0) }
-export function initialTimeline(duration = 5, rate = 24) {
-  if (!Number.isFinite(duration) || duration <= 0 || duration > 86400 || !Number.isFinite(rate) || rate < 1 || rate > 120 || !Number.isSafeInteger(duration * rate)) throw new Error('init duration must be positive whole frames <= 24h, rate 1..120')
+/** Frame comparisons use an absolute tolerance of 1e-6 frame, not seconds. */
+export const FRAME_TOLERANCE = 1e-6
+function wholeFrames(value: number) {
+  const rounded = Math.round(value)
+  if (!Number.isSafeInteger(rounded) || rounded < 1 || Math.abs(value - rounded) >= FRAME_TOLERANCE) throw new Error('Timeline duration must align to whole frames')
+  return rounded
+}
+export function initialTimeline(duration = 5, rate = 24, frames?: number) {
+  if (!Number.isFinite(rate) || rate < 1 || rate > 120) throw new Error('init rate must be 1..120')
+  const count = frames === undefined ? wholeFrames(duration * rate) : frames
+  if (!Number.isSafeInteger(count) || count <= 0 || count / rate > 86400) throw new Error('init duration must be positive whole frames <= 24h; frames must be a positive safe integer')
   const time = (value: number) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate })
-  return { OTIO_SCHEMA: 'Timeline.1', name: 'Agent video', global_start_time: time(0), tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [{ OTIO_SCHEMA: 'Gap.1', source_range: { OTIO_SCHEMA: 'TimeRange.1', start_time: time(0), duration: time(duration * rate) } }] }] } }
+  return { OTIO_SCHEMA: 'Timeline.1', name: 'Agent video', global_start_time: time(0), tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [{ OTIO_SCHEMA: 'Gap.1', source_range: { OTIO_SCHEMA: 'TimeRange.1', start_time: time(0), duration: time(count) } }] }] } }
 }
 export async function plan(file: string, options: Options = {}) {
   assertLocalPath(file)
@@ -23,12 +32,13 @@ export async function plan(file: string, options: Options = {}) {
   if ((await stat(file)).size > MAX_OTIO_BYTES) throw new Error('OTIO file exceeds size limit')
   const text = await readFile(file, 'utf8'), profile = prepareOtioProfile(text), { model } = profile
   if (!(model.duration > 0) || model.duration > 86400 || model.rate < 1 || model.rate > 120) throw new Error('Supported timeline: duration > 0 and <= 24h, rate 1..120')
+  const timelineFrames = wholeFrames(model.duration * model.rate)
   const placements = new Map(model.nodes.filter(n => n.kind === 'Clip').map(n => [n.id, { start: n.start, end: n.end }]))
   for (const t of Object.values(profile.transitions)) {
     placements.get(t.from)!.end += t.outOffset
     placements.get(t.to)!.start -= t.inOffset
   }
-  const assets: Record<string, { file: string; format: string; image: boolean; video: boolean; audio: boolean; duration: number | null; audioDuration: number | null; decoder?: string; aspect: number; alpha: boolean }> = {}
+  const assets: Record<string, { file: string; format: string; image: boolean; video: boolean; audio: boolean; duration: number | null; audioDuration: number | null; decoder?: string; aspect: number; alpha: boolean; timing: { avg_frame_rate: string | null; r_frame_rate: string | null; time_base: string | null; streamDurationSource: string; outputRate: number; sampling: string } }> = {}
   let decoders: string | undefined
   const clips = model.nodes.filter(n => n.kind === 'Clip' && n.enabled && n.end > n.start)
   if (clips.length > 256) throw new Error('At most 256 active clips supported')
@@ -53,7 +63,8 @@ export async function plan(file: string, options: Options = {}) {
     }
     const square = !visual?.sample_aspect_ratio || ['1:1', 'N/A', '0:1'].includes(visual.sample_aspect_ratio)
     const alpha = !!decoder || !/^(?:yuv(?:j)?(?:420|422|444|440|411|410)p(?:\d+(?:le|be))?|rgb24|bgr24|gray(?:\d+(?:le|be))?|gbrp(?:\d+(?:le|be))?|nv12|nv21)$/.test(visual?.pix_fmt ?? '') || visual?.tags?.alpha_mode === '1' || !square || !!visual?.side_data_list?.some(s => s.rotation)
-    const asset = { aspect: (visual?.width ?? 0)/(visual?.height ?? 1), alpha, file: local, format, image, video: streams.some(s => s.codec_type === 'video'), audio: streams.some(s => s.codec_type === 'audio'), duration: streamDuration(selected), audioDuration: sound ? streamDuration(sound) : null, decoder }
+    const timing = { avg_frame_rate: selected.avg_frame_rate ?? null, r_frame_rate: selected.r_frame_rate ?? null, time_base: selected.time_base ?? null, streamDurationSource: streamDurationEvidence(selected).source, outputRate: model.rate, sampling: image ? 'still-image' : n.trackKind === 'Video' ? 'source timestamps sampled to constant output rate; complete VFR support and color fidelity are not guaranteed' : 'audio resampled to 48000 Hz' }
+    const asset = { timing, aspect: (visual?.width ?? 0)/(visual?.height ?? 1), alpha, file: local, format, image, video: streams.some(s => s.codec_type === 'video'), audio: streams.some(s => s.codec_type === 'audio'), duration: streamDuration(selected), audioDuration: sound ? streamDuration(sound) : null, decoder }
     const placement = placements.get(n.id)!
     const source = sourceOffset(n) + placement.start - n.start
     if (source < -1e-8 || (!image && (asset.duration === null || source + placement.end - placement.start > asset.duration + 0.001))) throw new Error(`Source range outside media duration (selected stream unknown or too short): ${n.id}`)
@@ -75,7 +86,11 @@ export async function plan(file: string, options: Options = {}) {
     const a = assets[span.node.id]!, source = sourceOffset(span.node) + span.start - span.node.start
     if (a.audioDuration === null || source + span.end - span.start > a.audioDuration + 0.001) throw new Error(`Source range outside media duration (selected audio stream unknown or too short): ${span.node.id}`)
   }
-  return { profile, placements, revision: revisionOf(text), duration: model.duration, rate: model.rate, model, assets, pictures, audio, audioPolicy: explicitAudio ? 'explicit-audio-tracks' : 'visible-video-embedded' }
+  const warnings: string[] = []
+  if (explicitAudio && audio.length === 0 && pictures.some(s => s.node && assets[s.node.id]?.audio)) warnings.push('AUDIO_EMPTY_EXPLICIT_SUPPRESSES_EMBEDDED: Enabled empty Audio tracks suppress visible video embedded audio.')
+  if (!explicitAudio && audio.length > 0 && (pictures.length > 1 || Object.keys(profile.transitions).length > 0)) warnings.push('AUDIO_EMBEDDED_VISIBLE_HARD_CUT: Embedded audio follows the highest visible picture with hard cuts; visual transitions do not automatically crossfade audio.')
+  if (explicitAudio && audio.some((a, i) => audio.slice(i + 1).some(b => Math.max(a.start, b.start) < Math.min(a.end, b.end)))) warnings.push('AUDIO_ADDITIVE_UNNORMALIZED_CLIPPING: Overlapping explicit audio is mixed additively without normalization and may clip.')
+  return { warnings, timelineFrames, profile, placements, revision: revisionOf(text), duration: model.duration, rate: model.rate, model, assets, pictures, audio, audioPolicy: explicitAudio ? 'explicit-audio-tracks' : 'visible-video-embedded' }
 }
 export async function render(file: string, output: string, options: RenderOptions) {
   assertLocalPath(output)
@@ -141,7 +156,7 @@ export async function render(file: string, output: string, options: RenderOption
       filters.push(`[${composed}][${layer}]overlay=eof_action=pass:repeatlast=0:format=auto[${next}]`)
       composed = next
     }
-    filters.push(`[${composed}]trim=start=${start}:end=${end},setpts=PTS-STARTPTS,format=yuv420p[vout]`)
+    filters.push(`[${composed}]trim=start_frame=${Math.round(start*p.rate)}:end_frame=${Math.round(end*p.rate)},setpts=PTS-STARTPTS,format=yuv420p[vout]`)
     for (const s of p.audio) {
       const a = s.start, b = Math.min(end, s.end)
       if (b <= a) continue

@@ -27,20 +27,20 @@ export function localMediaPath(value: string, directory: string, windows = proce
   return (windows ? path.win32 : path).resolve(directory, value)
 }
 export interface MediaStream {
-  codec_type: string; codec_name?: string; duration?: string; duration_ts?: number | string; time_base?: string
+  codec_type: string; codec_name?: string; duration?: string; duration_ts?: number | string; time_base?: string; avg_frame_rate?: string; r_frame_rate?: string
   start_time?: string; start_pts?: number | string
   nb_read_frames?: string; width?: number; height?: number; pix_fmt?: string; sample_aspect_ratio?: string
   tags?: Record<string, string>; side_data_list?: { rotation?: number }[]
 }
 /** Container duration is deliberately never evidence for a selected stream. */
-export function streamDuration(stream: MediaStream): number | null {
+export function streamDurationEvidence(stream: MediaStream): { duration: number | null; source: 'duration' | 'duration_ts*time_base' | 'tags.DURATION-start' | 'unknown' } {
   const positive = (n: number) => Number.isFinite(n) && n > 0 ? n : null
   const duration = positive(Number(stream.duration))
-  if (duration !== null) return duration
+  if (duration !== null) return { duration, source: 'duration' }
   const base = /^(\d+)\/(\d+)$/.exec(stream.time_base ?? '')
   if (base) {
     const ticks = positive(Number(stream.duration_ts) * Number(base[1]) / Number(base[2]))
-    if (ticks !== null) return ticks
+    if (ticks !== null) return { duration: ticks, source: 'duration_ts*time_base' }
   }
   const tag = Object.entries(stream.tags ?? {}).find(([k]) => k.toUpperCase() === 'DURATION')?.[1]
   const clock = /^(\d+):(\d{2}):(\d{2}(?:\.\d+)?)$/.exec(tag ?? '')
@@ -48,8 +48,10 @@ export function streamDuration(stream: MediaStream): number | null {
   // stream start), not elapsed media length. Require a known start to use it.
   const start = stream.start_time !== undefined ? Number(stream.start_time)
     : base && stream.start_pts !== undefined ? Number(stream.start_pts) * Number(base[1]) / Number(base[2]) : NaN
-  return clock && Number.isFinite(start) ? positive(Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3]) - start) : null
+  const elapsed = clock && Number.isFinite(start) ? positive(Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3]) - start) : null
+  return { duration: elapsed, source: elapsed === null ? 'unknown' : 'tags.DURATION-start' }
 }
+export function streamDuration(stream: MediaStream): number | null { return streamDurationEvidence(stream).duration }
 export function alphaDecoder(stream: MediaStream | undefined) {
   // Native VP8/VP9 decoders discard WebM BlockAdditional alpha. Force libvpx
   // even when ffprobe reports yuv420p; AlphaMode is not always reported.

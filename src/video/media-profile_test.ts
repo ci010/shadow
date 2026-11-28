@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { localMediaPath, assertLocalPath, streamDuration } from './media-profile.ts'
+import { localMediaPath, assertLocalPath, streamDuration, streamDurationEvidence } from './media-profile.ts'
 import { plan, render } from './index.ts'
 import { run } from './process.ts'
 import { runVideoCli } from './cli.ts'
@@ -94,4 +94,39 @@ test('CLI rejects init/manifest network destinations before file access or tool 
     // Source deliberately nonexistent: network manifest must fail before source stat.
     await assert.rejects(runVideoCli(['preview', 'must-not-stat.otio', '--output', 'must-not-create.mp4', '--revision', 'x', '--start', '0', '--end', '1', '--manifest', target, '--ffmpeg', 'must-not-launch']), /network\/device|remote file host/)
   }
+})
+
+
+test('duration evidence reports provenance without container fallback', () => {
+  assert.deepEqual(streamDurationEvidence({ codec_type: 'video', duration: '2', duration_ts: 48, time_base: '1/24' }), { duration: 2, source: 'duration' })
+  assert.deepEqual(streamDurationEvidence({ codec_type: 'video', duration_ts: 48, time_base: '1/24' }), { duration: 2, source: 'duration_ts*time_base' })
+  assert.deepEqual(streamDurationEvidence({ codec_type: 'video', start_time: '1', tags: { DURATION: '00:00:03' } }), { duration: 2, source: 'tags.DURATION-start' })
+  assert.deepEqual(streamDurationEvidence({ codec_type: 'video', time_base: '0/0' }), { duration: null, source: 'unknown' })
+})
+
+test('plan warnings are relevant, separate from diagnostics, and preserve audio policy', async () => {
+  const dir = await mkdtemp(path.resolve('.video-audio-warnings-'))
+  try {
+    await run(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=red:s=64x64:r=24:d=2', '-f', 'lavfi', '-i', 'sine=duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', path.join(dir, 'av.mp4')])
+    const file = path.join(dir, 'edit.otio')
+    const save = async (...tracks: unknown[]) => { await writeFile(file, JSON.stringify(timeline(...tracks))); return plan(file, options) }
+    const video = track('av.mp4')
+    assert.deepEqual((await save(video)).warnings, [])
+    const empty = { OTIO_SCHEMA: 'Track.1', kind: 'Audio', children: [] }
+    const suppressed = await save(video, empty)
+    assert.equal(suppressed.audioPolicy, 'explicit-audio-tracks')
+    assert.equal(suppressed.audio.length, 0)
+    assert.match(suppressed.warnings.join('\n'), /^AUDIO_EMPTY_EXPLICIT_SUPPRESSES_EMBEDDED:/)
+    assert.deepEqual(suppressed.profile.diagnostics, [])
+    const cuts = { OTIO_SCHEMA: 'Track.1', kind: 'Video', children: [clip('av.mp4', 24), clip('av.mp4', 24)] }
+    const embedded = await save(cuts)
+    assert.equal(embedded.audioPolicy, 'visible-video-embedded')
+    assert.match(embedded.warnings.join('\n'), /^AUDIO_EMBEDDED_VISIBLE_HARD_CUT:/)
+    const additive = await save(video, track('av.mp4', 'Audio'), track('av.mp4', 'Audio'))
+    assert.equal(additive.audio.length, 2)
+    assert.match(additive.warnings.join('\n'), /^AUDIO_ADDITIVE_UNNORMALIZED_CLIPPING:/)
+    assert.deepEqual((await save(video, { OTIO_SCHEMA: 'Track.1', kind: 'Audio', children: [clip('av.mp4', 24), clip('av.mp4', 24)] })).warnings, [])
+    // Disabled tracks must not suppress or warn.
+    assert.deepEqual((await save(video, { ...empty, enabled: false })).warnings, [])
+  } finally { await rm(dir, { recursive: true, force: true }) }
 })
