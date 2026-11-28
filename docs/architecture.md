@@ -2951,6 +2951,16 @@ node/root identity. Closing or rebinding the last owning conversation removes it
 folder root; unbound conversations and project-only tabs do not expose unrelated
 catalog entries. Display metadata is never resolved as a local execution path.
 
+Cross-Project file activation restores the retained workbench resource and carries
+its exact editor ID through route synchronization. Publishing that resource does
+not also focus its conversation. Deferred conversation focus is scoped to the
+route and resource that requested it; catalog loading/error/recovery publication
+is not navigation and must not steal file focus. `ProjectFileExplorer` remains
+mounted when its Project is hidden, retaining open file owners and view leases.
+Sidebar idle replacement closes only a conversation descriptor, not its resource
+controller or the Project's file owners. Media elements may be released while
+inactive without closing the file descriptor or destroying its preview owner.
+
 Middle-click closes the targeted closable tab in either editor group without
 selecting it or activating another group. Standalone document tabs
 use the same convention; permanent standalone Conversation remains

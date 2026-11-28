@@ -337,7 +337,7 @@ const conversationQueries = new Map<string, typeof route.query>()
 const projectWorkbenches = new Map<string, ConversationResource>()
 let documentRoute = ''
 let incomingDocument: symbol | undefined
-let pendingTopTab: { resource: ConversationResource; path: string } | undefined
+let pendingTopTab: { resource: ConversationResource; path: string; editorId?: string } | undefined
 // Open files are workbench documents too: switching Projects must not hide their tabs.
 const projectOnlyTabGroups = computed(() => projectTopTabGroups(editorGroups, projects.value, () => true))
 const openProjectTabGroups = computed(() => [
@@ -382,9 +382,18 @@ async function activateTopTab(id: string) {
     // File descriptors do not own a route. Restore the source workbench first,
     // then focus the retained document without reopening or moving its view.
     const resource = projectWorkbench(projectId)
-    publish(resource)
-    await router.push({ ...projectChatLocation(resource), query: conversationQueries.get(resource.key) ?? {} })
-    await nextTick()
+    const location = { ...projectChatLocation(resource), query: conversationQueries.get(resource.key) ?? {} }
+    const path = router.resolve(location).fullPath
+    const selection = { resource, path, editorId: id }
+    pendingTopTab = selection
+    try {
+      if (path === route.fullPath) publish(resource, false)
+      else if (await router.push(location)) return
+      await nextTick()
+    } finally {
+      if (pendingTopTab === selection) pendingTopTab = undefined
+    }
+    if (route.fullPath !== path) return
   }
   if (props.visible && route.params.projectId === projectId) editorGroups.activate(id)
 }
@@ -528,12 +537,16 @@ function projectWorkbench(projectId: string): ConversationResource {
   return projectWorkbenches.get(projectId)
     ?? registry.resources.findLast(item => item.projectId === projectId) ?? registry.draft(projectId)
 }
-function publish(resource: ConversationResource) {
+function publish(resource: ConversationResource, focusConversation = true) {
   projectWorkbenches.set(resource.projectId, resource)
   selected.value = resource
   resources.value = [...registry.resources]
   closeSidebar()
-  if (route.name === 'chat') void nextTick(() => {
+  const path = route.fullPath
+  if (focusConversation && route.name === 'chat') void nextTick(() => {
+    // A publish can precede navigation. Never apply its deferred focus to a
+    // different route/resource after another Project or document was selected.
+    if (route.fullPath !== path || selected.value?.key !== resource.key) return
     const key = route.query.panel === 'knowledge' ? (typeof route.query.entry === 'string' ? knowledgeEntryTabKey(route.query.entry) : KNOWLEDGE_TAB_KEY) : ''
     const id = route.query.panel === 'knowledge' ? JSON.stringify([resource.projectId, 'knowledge', key]) : `${resource.key}:${key}`
     const descriptor = editorGroups.descriptors.get(id)
@@ -541,7 +554,7 @@ function publish(resource: ConversationResource) {
   })
 }
 const consumedInspectionLinks = new Set<string>()
-function syncRoute() {
+function syncRoute(focusConversation = true) {
   if (!props.visible || !['chat', 'project-board', 'project-workflows', 'project-settings'].includes(String(route.name))) return
   const projectId = typeof route.params.projectId === 'string' ? route.params.projectId : ''
   if (!projectId || !projects.value.some(org => org.id === projectId)) {
@@ -584,11 +597,12 @@ function syncRoute() {
     const { panel, entry, diagnosis, childPanel, childDiagnosis, ...query } = route.query
     conversationQueries.set(resource.key, query)
   }
-  const editorId = tab ? projectEditorId(projectId, tab)
+  const editorId = pendingTopTab?.path === route.fullPath && pendingTopTab.editorId
+    ? pendingTopTab.editorId : tab ? projectEditorId(projectId, tab)
     : pendingAutomationEditor.value && !route.query.panel ? `${resource.key}:` : undefined
   const activation = incomingDocument = editorId ? Symbol() : undefined
   pendingAutomationEditor.value = undefined
-  publish(resource)
+  publish(resource, focusConversation && !editorId)
   if (tab) {
     const state = projectDocuments.get(projectId)
     if (!state.tabs.includes(tab)) state.tabs = [...state.tabs, tab]
@@ -617,7 +631,9 @@ watch(() => props.apiBase, (base, _previous, onCleanup) => {
         if (!next.some(item => item.id === project.id)) forgetProject(project.id)
       }
       projects.value = [...next]
-      syncRoute()
+      // A catalog read is not navigation. Retain the active file even while
+      // loading/error notifications republish the previous successful catalog.
+      syncRoute(false)
     }
   }, { immediate: true })
   onCleanup(() => { stop(); current.release(); if (catalog === current) catalog = undefined })
@@ -889,7 +905,7 @@ watch(() => editorGroups.active(APP_EDITOR_SCOPE), descriptor => {
   if (!appEditorActive.value || !current || !descriptor || !editorGroups.side(appEditorId(current))) return
   openAppRoute(descriptor.id === appEditorId('usage') ? 'usage' : 'settings')
 })
-watch(() => [route.fullPath, props.visible], syncRoute)
+watch(() => [route.fullPath, props.visible], () => syncRoute())
 watch(() => route.fullPath, () => { sessionSearchOpen.value = false; closeSidebar(false) })
 watch(() => props.visible, visible => { if (!visible) { sessionSearchOpen.value = false; closeSidebar(false) } })
 watch(desktop, () => {
