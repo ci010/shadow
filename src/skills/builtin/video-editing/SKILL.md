@@ -23,7 +23,9 @@ Use the explicit RationalTime values/rates for editing; rounded seconds are for 
 
 ## Make an edit
 
-Edit the actual OTIO file using normal file tools or a validated local script. Retain unaffected tracks, clips, source references and metadata. Split and ripple operations must update every intended linked item, not just move the visible picture. Read diagnostics again and validate the same revision before rendering.
+Prefer `project-video edit SOURCE.otio --patch changes.json --revision SOURCE_SHA256 --output NEXT.otio` for a revision-checked, non-destructive edit. The patch is a JSON array of `add`, `remove`, `replace` or `test` operations with JSON-pointer paths into the original document. Operations apply in order to a private copy and the complete supported profile is validated before publishing a new file beside the source. Never serialize the lossy parsed model as the edit. The output must be new; no automatic replacement of the user's source. The hash is not a lock against external writers. Ordinary file tools remain possible when explicitly appropriate, but must preserve unknown metadata and existing user edits.
+
+Retain unaffected tracks, clips, source references and metadata. Split and ripple operations must update every intended linked item, not just move the visible picture. Re-read the new file's pointers and diagnostics after editing; `edit` does not probe media or validate actual source handles. Run `plan` on the new revision before rendering.
 
 Unsupported effects, transitions or track semantics must be reported, not silently flattened. Viewer track solo, visibility and mute controls are review state, not persisted editing decisions. Never claim these transient controls changed the exported movie.
 
@@ -47,11 +49,13 @@ node dist/src/index.js project-video preview edit.otio --revision SHA256 --start
 node dist/src/index.js project-video export edit.otio --revision SHA256 --output final-v1.mp4
 ```
 
-`plan`/`validate` explicitly probe media using ffprobe; these are not passive file reads. `preview` requires an explicit interval. The baseline uses the timeline rate, supports even output dimensions, and rejects frame-misaligned cuts. It does not silently retime or approximate unsupported effects. No final output is published if the source timeline changes during rendering.
+`plan`/`validate` explicitly probe media using ffprobe; these are not passive file reads. `preview` requires an explicit interval. The baseline uses the timeline rate, supports even output dimensions, and rejects frame-misaligned cuts. Use `init --frames N --rate RATE` (instead of `--duration`) for fractional-rate timelines; edits must use whole output frames. Source media is sampled onto the output rate, potentially dropping or repeating source frames; this is not optical-flow retiming. Unsupported effects are never approximated. Inspect `plan.warnings` and `audioPolicy`: an enabled empty Audio track suppresses embedded video sound; embedded-visible audio follows picture cuts, not an automatic transition crossfade; explicit additive mixes are not normalized and may clip. No final output is published if the source timeline changes during rendering.
 
 ## Preview, then deliver
 
 Use the video command's help for current arguments; do not invent flags. Generate a short low-resolution preview of the changed range, inspect stills at cuts and representative moments, and review the audio when sound is part of the task. State when visual or audio review was unavailable. A successful encoder exit alone is not creative acceptance.
+
+The Viewer reads the fixed `<timeline>.preview.json` sidecar. Keep each rendered MP4 new. First publication creates a new sidecar; later publication must explicitly use `--manifest-revision PREVIOUS_MANIFEST_SHA256` with the previous command's `manifestRevision` to update that fixed sidecar. A stale hash or publisher lock fails rather than overwriting another version; do not delete locks to force an update. Refresh the Viewer after success. Publication failure may retain a completed new video: report its actual path, not a successful preview handoff. Sidecar reads/refreshes never start an encoder. A new timeline filename requires its own new sidecar.
 
 Export from the same timeline revision and time interpretation as the preview. Save each revision to a distinct output. Report actual output path, dimensions, frame rate/duration, audio policy, unsupported content, and checks performed. Do not equate viewer playback with frame-accurate final export.
 

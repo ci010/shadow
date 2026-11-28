@@ -23,10 +23,31 @@ From a source checkout:
 ```sh
 pnpm exec node --import tsx scripts/video.ts --help
 pnpm exec node --import tsx scripts/video.ts init edit.otio --duration 5 --rate 24
+# 150 exact output frames at 30000/1001 fps:
+pnpm exec node --import tsx scripts/video.ts init ntsc.otio --frames 150 --rate 29.97002997002997
 pnpm exec node --import tsx scripts/video.ts plan edit.otio
 ```
 
+For revision-checked, non-destructive edits, write a JSON Patch file and publish a new timeline beside the source:
+
+```json
+[
+  { "op": "test", "path": "/name", "value": "Agent video" },
+  { "op": "replace", "path": "/name", "value": "Assembly v2" }
+]
+```
+
+```sh
+node dist/src/index.js project-video edit edit.otio --patch changes.json --revision SOURCE_SHA256 --output edit-v2.otio
+```
+
+`edit` supports the `add`, `remove`, `replace` and `test` JSON Patch operations. Paths are JSON pointers into the **original JSON**, not a lossy parsed model; unknown metadata is retained. Operations run in order on a private copy, then the supported structural/effect profile is checked before any output is published. A failed operation, stale source revision or invalid profile does not publish an edited timeline. The output must be a new `.otio` file in the same actual directory as the source, so relative media references keep their meaning. The source and existing outputs are never intentionally overwritten. This is not a filesystem-wide transaction or a lock against another editor changing the source immediately after the final revision check.
+
+Use the returned revision and newly read pointers for subsequent edits; array insertions/removals can change every later element pointer. `edit` does not run FFmpeg, probe media, verify source handles or establish that a render will succeed. Run `plan` against the new file before preview/export. Reusing the old preview sidecar is invalid: generate a preview for the new source filename and revision.
+
 The built equivalent is `node dist/src/index.js project-video ...`. Run from the intended working directory or use absolute file arguments. `init` creates a gap-only timeline; populate its clips with local OTIO ExternalReferences using normal file edits. `plan` and `validate` explicitly run ffprobe and return a SHA-256 source revision and media/render information. For VP8/VP9 media they also check the existing FFmpeg build for an alpha-preserving libvpx decoder; `--ffmpeg` and `--ffprobe` can select installed executables. They are execution commands, not passive VFS reads.
+
+For fractional frame rates, use `init --frames N --rate RATE` to avoid guessing a duration in seconds. `--frames` and `--duration` are mutually exclusive. The timeline uses integer output frames; source media is sampled onto that output grid, which may duplicate or drop source frames without changing the intended timeline clock. This is not optical-flow interpolation or a guarantee of VFR/color-management fidelity. `plan` reports `timelineFrames`, selected-stream timing information in its assets, and sound-policy `warnings`. These are diagnostics, not permission to ignore unsupported media.
 
 Use the returned revision for rendering:
 
@@ -36,6 +57,14 @@ node dist/src/index.js project-video export edit.otio --revision SHA256 --output
 ```
 
 `preview` requires an explicit interval. Both commands accept `--width`, `--height`, `--ffmpeg` and `--ffprobe`. Output dimensions are even integers; cuts and interval boundaries must align to the timeline's frame grid. The baseline uses H.264 video and AAC audio, mixing enabled explicit Audio tracks when present and otherwise using visible video embedded sound. Tracks mix additively without normalization. A silent timeline still receives a silent AAC track. File extensions and demuxers are restricted to the supported local-media profile; remote URLs are not fetched. A source revision mismatch prevents publishing the result.
+
+Preview videos always use new output names. To update the fixed Viewer sidecar after another render, explicitly pass the **previous manifest's** `manifestRevision` (returned by a successful preview command):
+
+```sh
+node dist/src/index.js project-video preview edit.otio --revision CURRENT_SOURCE_SHA256 --start 0 --end 4 --output preview-v2.mp4 --manifest edit.otio.preview.json --manifest-revision PREVIOUS_MANIFEST_SHA256
+```
+
+Without `--manifest-revision`, sidecar creation remains no-clobber. Replacement is limited to the timeline's fixed `.preview.json` sidecar and a valid previous manifest. Cooperating publishers use an exclusive lock and atomic publication: a stale hash, lock conflict or failed publication leaves the previous entry intact. A lock conflict is an error, not permission to delete somebody else's lock. External editors do not participate in this protocol; the final hash check is not a filesystem-wide compare-and-swap. If publication fails after encoding, the CLI reports the retained new video's path. Refresh the Viewer after success; reading or refreshing still never launches FFmpeg.
 
 For effects/transitions or potentially transparent layers, the Viewer requires a matching rendered preview. It reads `<timeline>.preview.json` on load/refresh, checks its source SHA-256 and same-owner media path, and maps timeline time into the preview interval. A missing/stale/invalid or out-of-range preview is not permission to show a highest-layer approximation. Sidecar reading never launches a render. See the [composition profile](otio-effects.md) for exact effect names, units, transition handles and unsupported combinations.
 

@@ -138,15 +138,43 @@ no automatic detection or default generation. The explicit filename may be
 
 `media` is the MP4 path relative to the manifest directory, slash-separated.
 The video is rendered, verified and published **first**, then the manifest is
-created with exclusive `wx` and synced. If manifest writing fails, the command
-fails explicitly, removes only its own partial manifest and **retains the finished
-video** with its path in the error. Existing manifests/OTIO/other files are never
-overwritten. No implicit artifact cleanup on receipt failure.
+written to a synced private temporary file and atomically published. Creation is
+no-clobber. To replace the fixed `<timeline>.preview.json` entry, explicitly pass
+`--manifest-revision OLD_MANIFEST_SHA256`; the previous successful command returns
+`manifestRevision`. Only a valid previous manifest at that fixed path can be
+replaced. An exclusive cooperative lock serializes publishers; old-manifest and
+source hashes are checked again before publication. This is not a CAS against
+external editors or owner authorization. Locks are not automatically stolen.
+
+If publication fails, the old entry remains intact and the command **retains the
+finished video**, reporting its actual path. Existing OTIO/MP4 files are never
+overwritten. No implicit artifact cleanup on receipt failure. Refresh the Viewer
+after successful publication; passive reads never start an encoder.
+
+## Revision-safe edits and exact output frames
+
+`edit SOURCE.otio --patch PATCH.json --revision SOURCE_SHA256 --output NEXT.otio`
+applies a bounded JSON Patch subset (`add`, `remove`, `replace`, `test`) to the
+original JSON, preserving unknown metadata. It validates the complete profile,
+rechecks source bytes, then publishes a synced new file atomically with no
+clobber. Both timelines must share an actual parent directory to preserve relative
+media paths. This does not lock the source against an external writer, probe media
+or establish source-handle validity. Re-read new pointers and run `plan` afterward.
+
+For fractional rates use `init --frames N --rate RATE`; `--duration` and `--frames`
+are mutually exclusive. `plan` exposes `timelineFrames`, `assets[id].timing` and
+conditional audio-policy `warnings`. Input timestamps are sampled to the constant
+output rate, not optical-flow retimed. Unknown selected-stream duration remains
+an error. The short CFR regression fixtures do not establish full VFR or color
+fidelity. Explicit overlapping audio remains additive and unnormalized; visual
+transitions do not automatically crossfade embedded sound.
 
 Run `pnpm exec node --import tsx --test src/video/*_test.ts`. Tests include actual
 alpha/color/geometry pixels, dissolve/wipe samples and decoded handles, interval
 frame correspondence, gain/fade RMS, rejection/receipt/no-clobber/cleanup behavior.
-Media tests skip only if existing ffmpeg/ffprobe cannot run; no tools are installed.
+Some legacy media tests skip if existing ffmpeg/ffprobe cannot run; the timebase
+and repeated-preview workflow regressions fail instead. Check skip counts rather
+than assuming a passing command exercised media. No tools are installed.
 `TEST_FFMPEG`/`TEST_FFPROBE` select existing binaries.
 
 ## Decoder and path boundary hardening

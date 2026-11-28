@@ -31,3 +31,14 @@ test('composition skill examples use accepted effects and preserve exact profile
   assert.equal(prepared.effects['/tracks/children/0/children/0']![0]!.profile, 'opacity')
   assert.equal(prepared.requiresCompositePreview, true)
 })
+
+
+test('video workflow teaches revision-safe editing, repeated preview publication and output-frame timing', async () => {
+  const body = (await getBuiltinSkills()).get('video-editing')!.body
+  assert.match(body, /project-video edit SOURCE\.otio --patch/)
+  assert.match(body, /hash is not a lock/)
+  assert.match(body, /--frames N --rate RATE/)
+  assert.match(body, /--manifest-revision PREVIOUS_MANIFEST_SHA256/)
+  assert.match(body, /plan\.warnings/)
+  assert.match(body, /may clip/)
+})
