@@ -41,4 +41,7 @@ test('video workflow teaches revision-safe editing, repeated preview publication
   assert.match(body, /--manifest-revision PREVIOUS_MANIFEST_SHA256/)
   assert.match(body, /plan\.warnings/)
   assert.match(body, /may clip/)
+  assert.match(body, /scripts\/video-title\.mjs --text-file/)
+  assert.match(body, /font-coverage-not-verified/)
+  assert.match(body, /not a packaged `project-video` command/)
 })

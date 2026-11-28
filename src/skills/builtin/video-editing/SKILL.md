@@ -59,6 +59,18 @@ The Viewer reads the fixed `<timeline>.preview.json` sidecar. Keep each rendered
 
 Export from the same timeline revision and time interpretation as the preview. Save each revision to a distinct output. Report actual output path, dimensions, frame rate/duration, audio policy, unsupported content, and checks performed. Do not equate viewer playback with frame-accurate final export.
 
+## Title and caption-card footage
+
+In a source checkout only, generate a transparent PNG with the existing Electron helper:
+
+```sh
+pnpm exec node scripts/video-title.mjs --text-file title.txt --font fonts/title.ttf --output title-v1.png --width 1280 --height 720 --font-size 48
+```
+
+All shown arguments are required; choose an existing local TTF/OTF with appropriate license and glyph coverage. No fonts or runtimes are installed or downloaded. Text is plain UTF-8 with explicit newlines; overflowing layouts fail rather than clip. This helper is not a packaged `project-video` command and does not import SRT/ASS or animate text. Read the checkout's `docs/video-editing.md` for optional layout arguments and boundaries.
+
+Use the PNG as a frame-aligned Video clip above footage. Keep text/font inputs and copy the returned `titleProvenance` into the clip's metadata. A changed title needs a new PNG and matching composite preview. Use explicit Audio clips to preserve underlying dialogue rather than assuming a topmost title image carries the covered video's embedded audio. Inspect the final pixels: `font-coverage-not-verified` means a loaded font can still show missing glyphs, and matching hashes do not promise cross-machine pixel identity.
+
 ## Three shots
 
 Read `v:skills/three-playground` before creating or modifying a scene. Render the original marker snapshot with its lights, shaders and preview settings; do not substitute a portable GLB and assume preview fidelity. Frame sampling uses explicit time rather than recording wall-clock playback. A pre-rendered shot can be referenced as ordinary OTIO external media; the `.otio` still owns order, placement and trim. Object animation, live Three references and camera motion are supported only if the installed render command explicitly implements them.
