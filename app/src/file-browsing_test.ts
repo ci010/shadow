@@ -1389,3 +1389,102 @@ test('HTML preview leases discard and revoke stale source responses, release on 
   props.active = false
   await nextTick()
 })
+
+// Media elements are disposable; playback position must live in the tab's setup.
+test('video tabs pause and restore position across element/archive reloads without autoplay', async t => {
+  const pending = requests(t)
+  const { props, state } = mount(t, 'FilePreviewModal', { ...base, remote: true, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4' } })
+  pending[0]!.finish({ entries: [] })
+  await settle()
+  const media = (time = 0, duration = 120, readyState = 1) => ({ currentTime: time, duration, readyState, pauses: 0, pause() { this.pauses++ } })
+  const first = media(42)
+  state().setVideo(first)
+  props.active = false
+  await nextTick()
+  assert.ok(first.pauses > 0)
+  assert.equal(state().videoAutoplay, false)
+  state().setVideo(null)
+  props.active = true
+  await settle()
+  const replacement = media()
+  state().setVideo(replacement)
+  state().restoreVideo()
+  assert.equal(replacement.currentTime, 42)
+  assert.ok(replacement.pauses > 0)
+  // An unloaded replacement must not erase the saved position on another hide.
+  replacement.readyState = 0
+  replacement.currentTime = 0
+  props.active = false
+  state().setVideo(null)
+  await nextTick()
+  props.active = true
+  await nextTick()
+  const shorter = media(0, 30)
+  state().setVideo(shorter)
+  state().restoreVideo()
+  assert.equal(shorter.currentTime, 30)
+  // Same component, different source: even a late detach cannot leak progress.
+  props.entry = { ...entry, name: 'other.mp4', ext: '.mp4' }
+  await nextTick()
+  state().setVideo(null)
+  const other = media()
+  state().setVideo(other)
+  state().restoreVideo()
+  assert.equal(other.currentTime, 0)
+  assert.equal(state().videoAutoplay, true)
+  // Independent tab instance (including close/reopen) starts with fresh state.
+  const reopened = mount(t, 'FilePreviewModal', { ...base, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4' } })
+  const fresh = media()
+  reopened.state().setVideo(fresh)
+  reopened.state().restoreVideo()
+  assert.equal(fresh.currentTime, 0)
+})
+
+test('video fullscreen requests the media top layer and exposes failures without faking fullscreen', async t => {
+  const { state } = mount(t, 'FilePreviewModal', { ...base, inline: true, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4' } })
+  let enters = 0
+  let exits = 0
+  const doc = { fullscreenElement: null as unknown, async exitFullscreen() { exits++; this.fullscreenElement = null } }
+  const media = { currentTime: 0, readyState: 1, duration: 60, ownerDocument: doc, pause() {}, async requestFullscreen() { enters++; doc.fullscreenElement = this } }
+  state().setVideo(media)
+  await state().toggleFullscreen()
+  assert.equal(enters, 1)
+  assert.equal(doc.fullscreenElement, media)
+  await state().toggleFullscreen()
+  assert.equal(exits, 1)
+  media.requestFullscreen = async () => { throw new Error('Permission denied') }
+  await state().toggleFullscreen()
+  assert.equal(state().fullscreenError, 'Permission denied')
+  assert.equal(state().fullscreen, false)
+  const source = readFileSync(new URL('./components/files/FilePreviewModal.vue', import.meta.url), 'utf8')
+  assert.match(source, /v-if="!inline \|\| kind === 'video'"/)
+  assert.match(source, /\.file-modal-media:fullscreen\s*\{[^}]*max-height: none;/)
+})
+
+test('archive video position survives released blob URLs and fresh metadata', async t => {
+  let reads = 0
+  const { props, state } = mount(t, 'FilePreviewModal', {
+    ...base, dir: '', entry: { ...entry, name: 'movie.mp4', ext: '.mp4', archive: { path: 'bundle.zip', members: ['movie.mp4'] } },
+  }, undefined, { '../../archive-files.ts': { readArchiveEntry: async () => { reads++; return new Blob(['video']) } } })
+  await settle()
+  const url = state().rawSource
+  const first = { readyState: 1, currentTime: 27, duration: 100, pause() {} }
+  state().setVideo(first)
+  props.active = false
+  await nextTick()
+  state().setVideo(null)
+  assert.equal(state().archiveBlob, undefined)
+  props.active = true
+  await settle()
+  assert.equal(reads, 2)
+  assert.notEqual(state().rawSource, url)
+  const second = { ...first, currentTime: 0 }
+  state().setVideo(second)
+  state().restoreVideo()
+  assert.equal(second.currentTime, 27)
+  // Ticket/URL renewal on the same element must not restore a stale tab seek.
+  second.currentTime = 39
+  state().setVideo(second)
+  state().restoreVideo()
+  assert.equal(second.currentTime, 39)
+})

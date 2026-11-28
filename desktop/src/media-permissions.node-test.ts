@@ -151,6 +151,24 @@ for (const rendererTarget of [target, fileTarget]) {
     assert.equal(h.request('clipboard-sanitized-write'), false)
   })
 
+  test(`${rendererTarget.kind} fullscreen permits only the trusted Main document without capture grants`, t => {
+    const h = harness(rendererTarget)
+    assert.equal(h.check('fullscreen'), true)
+    assert.equal(h.request('fullscreen'), true)
+    assert.equal(h.check('fullscreen', {}, {}), false)
+    assert.equal(h.check('fullscreen', { isMainFrame: false }), false)
+    assert.equal(h.request('fullscreen', { isMainFrame: false }), false)
+    assert.equal(h.check('fullscreen', {}, h.contents, 'https://other.example'), false)
+    assert.equal(h.request('fullscreen', { securityOrigin: 'https://other.example' }), false)
+    assert.equal(h.request('fullscreen', { requestingUrl: 'https://other.example' }), false)
+    h.contents.mainFrame.url = 'https://other.example'
+    assert.equal(h.check('fullscreen'), false)
+    assert.equal(h.request('fullscreen'), false)
+    h.dispose()
+    assert.equal(h.check('fullscreen'), false)
+    assert.equal(h.request('fullscreen'), false)
+  })
+
   test(`${rendererTarget.kind} permission check/request require exact main frame and active capability`, (t) => {
     const h = harness(rendererTarget)
     t.after(h.dispose)

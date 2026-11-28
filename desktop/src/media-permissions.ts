@@ -131,7 +131,7 @@ export function installMediaPermissions(
   session.setPermissionCheckHandler((sender, permission, origin, details) => {
     if (!trustedRequest(sender, details) || !isTrustedOrigin(origin, target)) return false
     if (details.securityOrigin !== undefined && !isTrustedOrigin(details.securityOrigin, target)) return false
-    if (permission === 'clipboard-sanitized-write') return true
+    if (permission === 'clipboard-sanitized-write' || permission === 'fullscreen') return true
     if (permission === 'media') return allowsMedia(details.mediaType)
     return permission === 'display-capture' && grants.allows('screen')
   })
@@ -139,7 +139,7 @@ export function installMediaPermissions(
     if (!trustedRequest(sender, details)) return callback(false)
     if ('securityOrigin' in details && details.securityOrigin !== undefined
       && !isTrustedOrigin(details.securityOrigin, target)) return callback(false)
-    if (permission === 'clipboard-sanitized-write') return callback(true)
+    if (permission === 'clipboard-sanitized-write' || permission === 'fullscreen') return callback(true)
     if (permission === 'display-capture') return callback(grants.allows('screen'))
     const types = 'mediaTypes' in details ? details.mediaTypes : undefined
     // Electron 44 requests "media" with [] before getDisplayMedia. The display

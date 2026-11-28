@@ -16,11 +16,11 @@
               <span class="i-lucide-refresh-cw w-4 h-4" aria-hidden="true" />
             </button>
           </HoverInfo>
-          <HoverInfo v-if="!inline" :text="fullscreen ? t('Exit fullscreen') : t('Fullscreen')" v-slot="{ triggerProps }">
+          <HoverInfo v-if="!inline || kind === 'video'" :text="fullscreen ? t('Exit fullscreen') : t('Fullscreen')" v-slot="{ triggerProps }">
           <button
             class="file-modal-btn"
             v-bind="triggerProps"
-            @click="fullscreen = !fullscreen"
+            @click="toggleFullscreen"
             :aria-label="fullscreen ? t('Exit fullscreen') : t('Fullscreen')"
           ><span class="w-4 h-4" :class="fullscreen ? 'i-lucide-minimize' : 'i-lucide-maximize'" aria-hidden="true" /></button>
           </HoverInfo>
@@ -33,6 +33,7 @@
           <HoverInfo v-if="!inline" text="Close file preview" v-slot="{ triggerProps }"><button v-bind="triggerProps" class="file-modal-btn" :aria-label="t('Close file preview')" @click="$emit('close')"><span class="i-lucide-x w-4 h-4" aria-hidden="true" /></button></HoverInfo>
         </div>
       </div>
+      <p v-if="fullscreenError" class="file-download-error" role="alert">{{ fullscreenError }}</p>
       <p v-if="raw && downloads.errors.has(raw)" class="file-download-error" role="alert">{{ downloads.errors.get(raw) }}</p>
       <div ref="previewBody" class="file-modal-body" :class="{ 'viewer-preview': !!viewerFormat || ((isOtio || isModel) && !sourceView), 'html-preview': kind === 'html' && !textMode && !offline && (!remote || loaded) }">
         <NodeOfflineState v-if="offline" :checking="loading" :description="t('This preview will be available when the owning node reconnects.')" @retry="loadText" />
@@ -61,7 +62,7 @@
           :active="active" :editable="canQuote && !entry.archive" :keyboard-active="selectionActive"
           :bytes-only="!!remote && !!folderId && !sessionWorkspace && !attachmentUrl"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
-        <video v-else-if="kind === 'video' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${rawSource}`" :src="raw" class="file-modal-media" controls autoplay @error="archiveMediaError" />
+        <video v-else-if="kind === 'video' && active" :ref="setVideo" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${videoIdentity}:${rawSource}`" :src="raw" class="file-modal-media" controls :autoplay="videoAutoplay" @loadedmetadata="restoreVideo" @fullscreenchange="fullscreen = !!$event.target && ($event.target as HTMLVideoElement).ownerDocument.fullscreenElement === $event.target" @error="archiveMediaError" />
         <audio v-else-if="kind === 'audio' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`audio:${rawSource}`" :src="raw" controls class="file-modal-audio" @error="archiveMediaError" />
         <div v-else-if="kind === 'html' && !textMode && (previewError || !previewUrl)" class="file-modal-note" :role="previewError ? 'alert' : 'status'">
           {{ previewError || t('Loading…') }} <button v-if="previewError" class="file-modal-btn" @click="reloadFrame">{{ t('Retry') }}</button>
@@ -205,6 +206,46 @@ const rawSource = computed(() => props.attachmentUrl ?? (props.entry.archive ? a
 const raw = computed(() => resources.resolve(rawSource.value))
 const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.value))
 
+// State belongs to this tab, not a URL (archive/native URLs can be replaced).
+// Keep it outside the media element, which is released while the tab is hidden.
+let video: HTMLVideoElement | undefined
+let videoPosition = 0
+let videoNeedsRestore = false
+const videoAutoplay = ref(props.active)
+function rememberVideo(): void {
+  if (!video) return
+  if (video.readyState >= 1 && Number.isFinite(video.currentTime)) videoPosition = video.currentTime
+  video.pause()
+}
+function setVideo(element: Element | import('vue').ComponentPublicInstance | null): void {
+  if (element === video || (!element && !video)) return
+  rememberVideo()
+  video = element ? element as HTMLVideoElement : undefined
+  videoNeedsRestore = !!video
+}
+function restoreVideo(): void {
+  if (!video || !videoNeedsRestore) return
+  videoNeedsRestore = false
+  if (videoPosition > 0) video.currentTime = Number.isFinite(video.duration)
+    ? Math.min(videoPosition, video.duration) : videoPosition
+  if (!props.active || !videoAutoplay.value) video.pause()
+}
+const videoIdentity = computed(() => JSON.stringify([props.apiBase, props.sessionId, props.folderId, props.sessionWorkspace, path.value, kind.value, props.remote, props.entry.archive, props.attachmentUrl]))
+watch(videoIdentity, () => {
+  // Invalidate the old element before its ref is detached; it must not write
+  // the previous file's position into a reused preview instance.
+  video?.pause()
+  video = undefined
+  videoPosition = 0
+  videoAutoplay.value = props.active
+}, { flush: 'sync' })
+watch(() => props.active, active => {
+  if (!active) {
+    rememberVideo()
+    videoAutoplay.value = false
+  }
+}, { flush: 'sync' })
+
 // Bumping this recreates the preview iframe, forcing a fresh reload.
 const frameNonce = ref(0)
 function reloadFrame(): void {
@@ -213,6 +254,24 @@ function reloadFrame(): void {
 
 // Whether the modal fills the whole viewport.
 const fullscreen = ref(false)
+const fullscreenError = ref('')
+async function toggleFullscreen(): Promise<void> {
+  if (kind.value !== 'video') { fullscreen.value = !fullscreen.value; return }
+  fullscreenError.value = ''
+  if (!video || !props.active) return
+  try {
+    // Invoke directly in the click's user-activation stack, not after loading.
+    if (video.ownerDocument.fullscreenElement === video) await video.ownerDocument.exitFullscreen()
+    else if (video.requestFullscreen) await video.requestFullscreen()
+    else {
+      const native = video as HTMLVideoElement & { webkitEnterFullscreen?: () => void }
+      if (!native.webkitEnterFullscreen) throw new Error(t('Fullscreen is not supported by this browser.'))
+      native.webkitEnterFullscreen()
+    }
+  } catch (cause) {
+    fullscreenError.value = cause instanceof Error ? cause.message : t('Could not enter fullscreen.')
+  }
+}
 
 const textContent = ref('')
 const sourcePath = ref<string>()
@@ -558,6 +617,18 @@ onUnmounted(() => { request?.abort(); releaseArchive() })
   max-height: calc(88vh - 4rem);
   object-fit: contain;
   border-radius: var(--radius-control);
+}
+
+/* Native controls and the header action both fullscreen the video itself.
+   Override inline/modal size caps in the browser's fullscreen top layer. */
+.file-modal-media:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  background: #000;
+  object-fit: contain;
 }
 
 .file-modal-audio {

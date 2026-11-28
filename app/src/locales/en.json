@@ -1703,6 +1703,8 @@
   "From scratch": "From scratch",
   "From scratch · No folder selected": "From scratch · No folder selected",
   "Fullscreen": "Fullscreen",
+  "Fullscreen is not supported by this browser.": "Fullscreen is not supported by this browser.",
+  "Could not enter fullscreen.": "Could not enter fullscreen.",
   "Gateway intents": "Gateway intents",
   "General": "General",
   "Generate a mobile pairing code in the trusted Main CLI. Codes expire after five minutes and work once. Credentials stay in this device’s secure storage.": "Generate a mobile pairing code in the trusted Main CLI. Codes expire after five minutes and work once. Credentials stay in this device’s secure storage.",

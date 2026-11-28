@@ -15,6 +15,8 @@ Session storage reads use the explicit `/api/sessions/:key/workspace/` namespace
 
 Legacy `/api/sessions/:key/{files,preview,raw,static,git}` endpoints remain compatible: they browse effective execution directories, with the Home override for learning views. The new workbench does not use that compatibility override.
 
+Video previews pause when their tab is hidden and retain playback position for that open tab, including when archive bytes are loaded again. Returning leaves the video paused at that position; closing the tab discards it. The video toolbar's fullscreen action requests browser/system fullscreen on the video itself (not an enlarged workbench panel); native playback controls remain available. Fullscreen depends on the host/browser allowing it. Electron allows it only for the trusted Main document, not embedded file previews or external pages.
+
 Open documents retain their originating source independently from the selected explorer root. Identical relative paths in Project files and Session files therefore have independent tabs, previews, archive reads and diffs. Context-menu paths and file-reference drags use the listing's verified workspace metadata. Explicit session storage never participates in the legacy shared-Home tree cache.
 
 Use **Reload preview** in the file preview toolbar to reread Markdown and other text previews (including HTML source) without switching between Preview and Source or resetting the selected encoding. Interactive HTML retains its own reload behavior. The action does not reload editable visual previews such as image annotations or 3D scenes.
