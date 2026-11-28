@@ -89,3 +89,15 @@ test('folders use their own mapping and expose closed and expanded icons', () =>
   }
   assert.equal(fileIcon('src'), 'i-material-icon-theme-document')
 })
+
+test('OTIO edit timelines have a distinct icon from ordinary video and JSON', () => {
+  for (const name of ['edit.otio', 'EDIT.OTIO', 'edit.otio.json', 'cuts/EDIT.OTIO.JSON', 'cuts\\edit.otio']) {
+    assert.equal(fileIcon(name), 'i-lucide-clapperboard', name)
+    assert.notEqual(fileIcon(name), fileIcon('movie.mp4'))
+    assert.notEqual(fileIcon(name), fileIcon('data.json'))
+  }
+  for (const name of ['movie.mp4', 'movie.webm', 'movie.mov', 'movie.avi', 'movie.mkv']) {
+    assert.equal(fileIcon(name), 'i-material-icon-theme-video', name)
+  }
+  assert.equal(fileIcon('edit.otio.json.backup'), 'i-material-icon-theme-document')
+})

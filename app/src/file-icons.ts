@@ -1,11 +1,11 @@
-type MaterialIcon = `i-material-icon-theme-${string}`
+type FileIconClass = `i-material-icon-theme-${string}` | 'i-lucide-clapperboard'
 
 function associations<T>(groups: Record<string, T>): ReadonlyMap<string, T> {
   return new Map(Object.entries(groups).flatMap(([names, value]) => names.split(' ').map(name => [name, value] as const)))
 }
 
 // Keep complete class names so UnoCSS includes these icons in offline builds.
-const fileNames = associations<MaterialIcon>({
+const fileNames = associations<FileIconClass>({
   'package.json package-lock.json npm-shrinkwrap.json .npmrc': 'i-material-icon-theme-npm',
   'pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs': 'i-material-icon-theme-pnpm',
   'yarn.lock .yarnrc .yarnrc.yml': 'i-material-icon-theme-yarn',
@@ -36,7 +36,7 @@ const fileNames = associations<MaterialIcon>({
   'gemfile gemfile.lock': 'i-material-icon-theme-gemfile',
 })
 
-const extensions = associations<MaterialIcon>({
+const extensions = associations<FileIconClass>({
   'ts mts cts': 'i-material-icon-theme-typescript',
   'd.ts d.mts d.cts': 'i-material-icon-theme-typescript-def',
   'tsx': 'i-material-icon-theme-react-ts',
@@ -82,7 +82,8 @@ const extensions = associations<MaterialIcon>({
   'png jpg jpeg gif webp avif bmp tiff tif ico heic': 'i-material-icon-theme-image',
   'svg': 'i-material-icon-theme-svg',
   'mp3 wav ogg flac m4a aac': 'i-material-icon-theme-audio',
-  'mp4 webm mov avi mkv otio otio.json': 'i-material-icon-theme-video',
+  'mp4 webm mov avi mkv': 'i-material-icon-theme-video',
+  'otio otio.json': 'i-lucide-clapperboard',
   'pdf': 'i-material-icon-theme-pdf',
   'zip tar gz bz2 xz tgz 7z rar': 'i-material-icon-theme-zip',
   'woff woff2 ttf otf eot': 'i-material-icon-theme-font',
@@ -97,7 +98,7 @@ const extensions = associations<MaterialIcon>({
   'diff patch': 'i-material-icon-theme-diff',
 })
 
-const configNames: readonly [RegExp, MaterialIcon][] = [
+const configNames: readonly [RegExp, FileIconClass][] = [
   [/^\.env(?:\.|$)/, 'i-material-icon-theme-tune'],
   [/^tsconfig(?:\..+)?\.json$/, 'i-material-icon-theme-tsconfig'],
   [/^(?:eslint\.config|\.eslintrc)\.(?:[cm]?[jt]s|json|ya?ml)$/, 'i-material-icon-theme-eslint'],
@@ -111,7 +112,7 @@ const configNames: readonly [RegExp, MaterialIcon][] = [
   [/^dockerfile\./, 'i-material-icon-theme-docker'],
 ]
 
-const folders = associations<readonly [MaterialIcon, MaterialIcon]>({
+const folders = associations<readonly [FileIconClass, FileIconClass]>({
   'src source': ['i-material-icon-theme-folder-src', 'i-material-icon-theme-folder-src-open'],
   'app apps': ['i-material-icon-theme-folder-app', 'i-material-icon-theme-folder-app-open'],
   'components': ['i-material-icon-theme-folder-components', 'i-material-icon-theme-folder-components-open'],
@@ -135,7 +136,7 @@ const folders = associations<readonly [MaterialIcon, MaterialIcon]>({
   'skills': ['i-material-icon-theme-folder-skills', 'i-material-icon-theme-folder-skills-open'],
 })
 
-export function matchedFileIcon(name: string): MaterialIcon | undefined {
+export function matchedFileIcon(name: string): FileIconClass | undefined {
   const normalized = name.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
   const exact = fileNames.get(normalized)
   if (exact) return exact
@@ -149,11 +150,11 @@ export function matchedFileIcon(name: string): MaterialIcon | undefined {
   }
 }
 
-export function fileIcon(name: string): MaterialIcon {
+export function fileIcon(name: string): FileIconClass {
   return matchedFileIcon(name) ?? 'i-material-icon-theme-document'
 }
 
-export function folderIcon(name: string, expanded = false): MaterialIcon {
+export function folderIcon(name: string, expanded = false): FileIconClass {
   const icons = folders.get(name.toLowerCase())
   return icons?.[expanded ? 1 : 0] ?? (expanded ? 'i-material-icon-theme-folder-base-open' : 'i-material-icon-theme-folder-base')
 }
