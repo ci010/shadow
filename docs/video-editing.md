@@ -68,6 +68,20 @@ Without `--manifest-revision`, sidecar creation remains no-clobber. Replacement 
 
 For effects/transitions or potentially transparent layers, the Viewer requires a matching rendered preview. It reads `<timeline>.preview.json` on load/refresh, checks its source SHA-256 and same-owner media path, and maps timeline time into the preview interval. A missing/stale/invalid or out-of-range preview is not permission to show a highest-layer approximation. Sidecar reading never launches a render. See the [composition profile](otio-effects.md) for exact effect names, units, transition handles and unsupported combinations.
 
+## Titles and caption cards (source checkout only)
+
+The source checkout can generate a transparent title PNG using its existing desktop Electron installation, without relying on an optional FFmpeg `drawtext` build:
+
+```sh
+pnpm exec node scripts/video-title.mjs --text-file title.txt --font fonts/title.ttf --output title-v1.png --width 1280 --height 720 --font-size 48
+```
+
+Supply an existing local TTF/OTF font whose license and character coverage suit the task. This helper does not install fonts or download resources. The text is bounded UTF-8 plain text, not HTML, filter expressions or a subtitle script. Explicit newlines are supported; oversized layout is rejected instead of silently clipped. Optional `--align left|center|right`, `--padding N`, `--color '#RRGGBB'` and `--timeout SECONDS` control the bounded layout and execution. Outputs must be new PNGs. The helper uses a separate sandboxed Electron renderer, not the user's open Viewer.
+
+Add the PNG as a normal Video-track ExternalReference above the footage and use the clip's frame-aligned range for its title/caption timing. Preserve the returned `titleProvenance` in clip metadata and keep the text/font inputs to reproduce or revise it. Retain the underlying dialogue in explicit Audio clips if a title image would otherwise become the highest visible video and suppress embedded sound. Regenerate a new PNG and preview revision after changing text. This is static title/caption-card generation, not automatic SRT/ASS import, text animation or a packaged `project-video` command.
+
+A loaded font and successful render do not prove every character has a glyph. The receipt explicitly reports `font-coverage-not-verified`; inspect Chinese/other scripts and the actual composition before delivery. Fonts and Electron versions can change pixels across machines; the hashes and renderer/layout receipt provide provenance, not cross-machine pixel identity.
+
 ## Three footage
 
 A Three Playground scene is authored separately from the edit. A shot render samples the original marker snapshot at explicit frame times, preserving supported preview lights, shaders and display settings. The resulting video becomes an ordinary OTIO external media reference; the OTIO file continues to own ordering and trimming.
