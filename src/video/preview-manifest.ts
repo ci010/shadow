@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, realpath, open, link, rename, unlink } from 'node:fs/promises'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { OtioPreviewManifest } from '../shared/otio-effects.ts'
 import { assertLocalPath } from './media-profile.ts'
 
@@ -90,11 +91,23 @@ export async function publishPreviewManifest(file: string, manifest: string, rec
     if (sha256(await readRegular(source)) !== sourceHash) throw new Error('Preview source revision conflict')
     const handle = await open(temporary, 'wx', 0o600); ownTemp = true
     try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-    await check()
-    if (sha256(await readRegular(source)) !== sourceHash) throw new Error('Preview source revision conflict')
-    options.signal?.throwIfAborted()
-    if (expected === undefined) await link(temporary, target)
-    else await rename(temporary, target)
+    for (let attempt = 0; ; attempt++) {
+      await check()
+      if (sha256(await readRegular(source)) !== sourceHash) throw new Error('Preview source revision conflict')
+      options.signal?.throwIfAborted()
+      try {
+        if (expected === undefined) await link(temporary, target)
+        else await rename(temporary, target)
+        break
+      } catch (error) {
+        // Windows readers/scanners can briefly deny rename sharing. Keep the
+        // previous entry intact and retain our lock; never unlink as a fallback.
+        // Every retry rechecks both revisions, so a delayed publisher cannot
+        // overwrite a newly edited manifest/source under an old expectation.
+        if (expected === undefined || process.platform !== 'win32' || attempt >= 7 || !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+        await delay(10 * 2 ** attempt, undefined, { signal: options.signal })
+      }
+    }
     return { manifest: target, manifestRevision: sha256(bytes) }
   } finally {
     try { if (ownTemp) await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error }) }
