@@ -6,12 +6,9 @@
         @click="$emit('preview', { src: item.url, name: item.name, downloadUrl: item.downloadUrl ?? undefined, trigger: $event.currentTarget as HTMLButtonElement })">
         <img :src="item.url" :alt="item.name" loading="lazy" class="attachment-image" referrerpolicy="no-referrer" @error="failed.add(item.path)">
       </button>
-      <video v-else-if="item.kind === 'video' && item.url && !failed.has(item.path)"
-        v-mobile-media="resources.native ? item.path : undefined"
-        :src="item.url" controls playsinline preload="none" :aria-label="item.name" @error="failed.add(item.path)" />
-      <audio v-else-if="item.kind === 'audio' && item.url && !failed.has(item.path)"
-        v-mobile-media="resources.native ? item.path : undefined"
-        :src="item.url" controls preload="none" :aria-label="item.name" @error="failed.add(item.path)" />
+      <MediaPlayer v-else-if="(item.kind === 'video' || item.kind === 'audio') && item.url && !failed.has(item.path)"
+        :kind="item.kind" :src="item.url" :label="item.name" preload="none"
+        :mobile-source="resources.native ? item.path : undefined" @error="failed.add(item.path)" />
       <div v-if="item.kind !== 'image' || !item.url || failed.has(item.path)" class="attachment-details">
         <component :is="item.url ? 'button' : 'div'" class="attachment-main" :class="{ 'attachment-open': item.url }"
           :type="item.url ? 'button' : undefined" :aria-label="item.url ? t('Preview {name}', { name: item.name }) : undefined"
@@ -46,13 +43,14 @@
 <script setup lang="ts">
 import { t } from '../i18n.ts'
 import HoverInfo from './HoverInfo.vue'
+import MediaPlayer from './MediaPlayer.vue'
 import FilePreviewModal from './files/FilePreviewModal.vue'
 import type { FileEntry } from '../composables/useSessionFiles.ts'
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useFileDownload } from '../composables/useFileDownload.ts'
 import { canRevealAttachment, createAttachmentReveal } from '../attachment-reveal.ts'
 import { buildMediaUrl } from '../media-url.ts'
-import { useMobileResources, vMobileMedia } from '../mobile-resources.ts'
+import { useMobileResources } from '../mobile-resources.ts'
 import { attachmentExtension, attachmentKind, attachmentName } from '../message-attachments.ts'
 import type { ImagePreview } from '../image-viewer.ts'
 import type { OpenFile } from '../file-workbench.ts'
@@ -102,8 +100,7 @@ async function reveal(item: Item) {
 .message-attachment { max-width: 100%; width: 420px; overflow: hidden; }
 .attachment-image { width: auto; max-width: 100%; max-height: 320px; display: block; object-fit: contain; }
 .attachment-image-link { display: block; width: fit-content; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
-video { display: block; width: 100%; max-height: 360px; aspect-ratio: 16 / 9; background: #000; }
-audio { display: block; width: 100%; }
+.media-player + .attachment-details { margin-top: 12px; }
 .attachment-details { position: relative; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--c-border); background: var(--c-bg-soft); }
 .attachment-main { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
 .attachment-open { cursor: pointer; }

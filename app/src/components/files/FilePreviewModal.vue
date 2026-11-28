@@ -62,8 +62,12 @@
           :active="active" :editable="canQuote && !entry.archive" :keyboard-active="selectionActive"
           :bytes-only="!!remote && !!folderId && !sessionWorkspace && !attachmentUrl"
           @image-context="emit('image-context', $event)" @image-busy="emit('image-busy', $event)" />
-        <video v-else-if="kind === 'video' && active" :ref="setVideo" v-mobile-media="resources.native ? rawSource : undefined" :key="`video:${videoIdentity}:${rawSource}`" :src="raw" class="file-modal-media" controls :autoplay="videoAutoplay" @loadedmetadata="restoreVideo" @fullscreenchange="fullscreen = !!$event.target && ($event.target as HTMLVideoElement).ownerDocument.fullscreenElement === $event.target" @error="archiveMediaError" />
-        <audio v-else-if="kind === 'audio' && active" v-mobile-media="resources.native ? rawSource : undefined" :key="`audio:${rawSource}`" :src="raw" controls class="file-modal-audio" @error="archiveMediaError" />
+        <MediaPlayer v-else-if="kind === 'video' && active" ref="videoPlayer" :key="`video:${videoIdentity}:${rawSource}`"
+          kind="video" :src="raw" :label="entry.name" :mobile-source="resources.native ? rawSource : undefined"
+          class="file-modal-media" :autoplay="videoAutoplay" @element="setVideo" @loadedmetadata="restoreVideo"
+          @fullscreenchange="fullscreen = $event" @error="archiveMediaError" />
+        <MediaPlayer v-else-if="kind === 'audio' && active" :key="`audio:${rawSource}`" kind="audio" :src="raw" :label="entry.name"
+          :mobile-source="resources.native ? rawSource : undefined" class="file-modal-audio" @error="archiveMediaError" />
         <div v-else-if="kind === 'html' && !textMode && (previewError || !previewUrl)" class="file-modal-note" :role="previewError ? 'alert' : 'status'">
           {{ previewError || t('Loading…') }} <button v-if="previewError" class="file-modal-btn" @click="reloadFrame">{{ t('Retry') }}</button>
         </div>
@@ -115,11 +119,12 @@ import { isOtioFile } from '../../otio-review.ts'
 const OtioFilePreview = defineAsyncComponent(() => import('./OtioFilePreview.vue'))
 import { useFileDownload } from '../../composables/useFileDownload.ts'
 import DOMPurify from 'dompurify'
-import { useMobileResources, vMobileMedia } from '../../mobile-resources.ts'
+import { useMobileResources } from '../../mobile-resources.ts'
 const resources = useMobileResources()
 const downloads = useFileDownload()
 import SelectionMenu from '../SelectionMenu.vue'
 import HoverInfo from '../HoverInfo.vue'
+import MediaPlayer from '../MediaPlayer.vue'
 import FileHighlightText from './FileHighlightText.vue'
 import FileViewerPreview from './FileViewerPreview.vue'
 import { fileViewerFormat } from '../../file-viewer.ts'
@@ -208,6 +213,7 @@ const staticSrc = computed(() => files.value.staticUrl(props.sessionId, path.val
 
 // State belongs to this tab, not a URL (archive/native URLs can be replaced).
 // Keep it outside the media element, which is released while the tab is hidden.
+const videoPlayer = ref<InstanceType<typeof MediaPlayer>>()
 let video: HTMLVideoElement | undefined
 let videoPosition = 0
 let videoNeedsRestore = false
@@ -232,7 +238,7 @@ function releaseVideo(): void {
   previous.load()
 }
 onBeforeUnmount(releaseVideo)
-function setVideo(element: Element | import('vue').ComponentPublicInstance | null): void {
+function setVideo(element: HTMLMediaElement | null): void {
   if (element === video || (!element && !video)) return
   releaseVideo()
   video = element ? element as HTMLVideoElement : undefined
@@ -274,7 +280,9 @@ async function toggleFullscreen(): Promise<void> {
   fullscreenError.value = ''
   if (!video || !props.active) return
   try {
-    // Invoke directly in the click's user-activation stack, not after loading.
+    // Prefer the shared control surface; retain the native-element adapter for
+    // callers that supply a video element directly.
+    if (videoPlayer.value) { await videoPlayer.value.toggleFullscreen(); return }
     if (video.ownerDocument.fullscreenElement === video) await video.ownerDocument.exitFullscreen()
     else if (video.requestFullscreen) await video.requestFullscreen()
     else {

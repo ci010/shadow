@@ -1,4 +1,9 @@
 {
+  "Play": "Play",
+  "Seek": "Seek",
+  "Mute": "Mute",
+  "Unmute": "Unmute",
+  "Could not play media. Try again or download the file.": "Could not play media. Try again or download the file.",
   "File deletion is not supported for this workspace. No file was deleted.": "File deletion is not supported for this workspace. No file was deleted.",
   "Delete permanently": "Delete permanently",
   "Permanently delete {path}? This cannot be undone.": "Permanently delete {path}? This cannot be undone.",

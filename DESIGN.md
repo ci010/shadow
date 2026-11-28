@@ -625,6 +625,22 @@ User-specified Markdown structure accents are allowed within the existing workbe
 
 `ConversationEvent.vue` uses a square action surface and one-pixel chat border on that same capped rail, without nested vertical guides. Headers group a (13px) title above a (12px) neutral source line; timestamp and disclosure/navigation icons stay at the trailing edge. Source labels truncate with their full text available as a title, while event titles and bodies wrap. Headers and body use (12px) padding; body Markdown keeps a (72ch) reading measure. Completion icons use success ink, failed icons/titles use error ink, and cancellation stays neutral. Selected completion links use selection background and border. Completion headers inspect the linked execution; Event details expands content and metadata separately without navigating. Other events retain native disclosure and an explicit execution link when available. Metadata uses (12px) label/value columns, monospace values, and a single column below (440px) of event width. Actions and disclosures retain (44px) narrow/coarse-pointer targets. Execution completion never implies a verified learning outcome.
 
+### Audio and video playback
+
+Conversation attachments, file previews and recorded I/O results share
+`MediaPlayer.vue`. Use a graphite playback surface with white line icons,
+square controls and a thin seek track; audio uses the compact control strip,
+while video adds a central play action and fullscreen. Keep the controls
+keyboard-accessible and provide localized labels and shared `HoverInfo` hints.
+The dark media surface is intentional in both application themes, like video
+content itself. Do not rely on browser-native pill-shaped audio controls for
+these surfaces. Live camera/screen capture and the OTIO editing monitor retain
+their specialized preview behavior.
+
+A conversation's playable attachment and its file-details/download row are
+separate groups, with 12px of vertical space between them. Preserve the file
+name, preview, reveal and download actions beneath the player.
+
 ### Activity and tool details
 
 `SessionActivity.vue` uses neutral secondary ink for routine LLM/tool/idle states, success for completed, error for failed, and warning for waiting on a human. Inactive/unknown uses muted ink. The spinner is (14px), inside a (16px) symbol slot, with a (.8s linear) rotation disabled by `prefers-reduced-motion: reduce`. Labels carry the state in words; color alone is not the explanation.

@@ -1,4 +1,9 @@
 {
+  "Play": "播放",
+  "Seek": "播放进度",
+  "Mute": "静音",
+  "Unmute": "取消静音",
+  "Could not play media. Try again or download the file.": "无法播放媒体。请重试或下载文件。",
   "File deletion is not supported for this workspace. No file was deleted.": "此工作区暂不支持删除文件，未删除任何文件。",
   "Delete permanently": "永久删除",
   "Permanently delete {path}? This cannot be undone.": "永久删除 {path}？此操作无法撤销。",
