@@ -94,6 +94,9 @@ export class AskTool implements Tool<ToolResult> {
   }
 
   private async answerResult(answer: InputAnswer | YieldOutcome, ctx: ExecutionContext): Promise<ToolResult> {
+    // Only an actual human answer releases the automatic self-check boundary.
+    // Deferred/default/parent outcomes and ordinary input never grant permission.
+    if (answer.answeredBy === 'user') ctx.onHumanAskAnswer?.()
     const text = JSON.stringify(answer)
     if (!('media' in answer) || !answer.media?.length) return text
     return { content: [{ type: 'text', text }, ...await buildMediaParts(answer.media, ctx.cwd ?? '.', ctx.cwd ?? '.', ctx.signal)] }

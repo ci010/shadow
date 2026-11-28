@@ -431,7 +431,8 @@ export abstract class BaseSession {
     followUp?: ReturnType<typeof followUpPhase>,
   ): Promise<string> {
     let rejectedFollowUpFinals = 0
-    const selfCheck = followUp === 'self_check'
+    let selfCheck = followUp === 'self_check'
+    executionContext = { ...executionContext, onHumanAskAnswer: () => { selfCheck = false } }
     this.boundedSystemTask = this.isBoundedSystemTask(executionContext.channel)
     const model = executionContext.model ?? llm.model
     const temperature = executionContext.temperature ?? llm.temperature

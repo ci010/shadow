@@ -73,15 +73,18 @@ test('ask decision waits for the human and returns a JSON answer receipt', async
   assert.equal(schema.maxItems, 2)
   assert.equal(schema.uniqueItems, true)
   assert.equal(tool.parameters.additionalProperties, false)
-  const waiting = tool.execute(question, context('root'))
+  let humanAnswers = 0
+  const waiting = tool.execute(question, { ...context('root'), onHumanAskAnswer: () => { humanAnswers++ } })
   let settled = false
   void waiting.then(() => { settled = true })
   await Promise.resolve()
   assert.equal(settled, false)
+  assert.equal(humanAnswers, 0)
   const request = yields.get('root')!
   assert.deepEqual(request.recipient, { kind: 'user', sessionId: 'root' })
   const receipt = await yields.answerUser('root', request.id, 'C')
   assert.deepEqual(JSON.parse(requireToolText(await waiting)), receipt)
+  assert.equal(humanAnswers, 1)
 })
 
 test('oversized decision question reports its length through the real AskTool without opening a request', async () => {
@@ -108,7 +111,8 @@ test('input asks return plain text and A2A callers cannot request local human de
 
 test('reply answers a real child request and releases both calls with the same receipt', async () => {
   const { tool, reply, yields } = fixture()
-  const waiting = tool.execute({ action: 'ask', ...question }, context('child'))
+  const waiting = tool.execute({ action: 'ask', ...question }, { ...context('child'),
+    onHumanAskAnswer: () => assert.fail('parent answer is not a human answer') })
   const request = yields.get('child')!
   assert.deepEqual(request.recipient, { kind: 'parent', sessionId: 'parent' })
   const answer = await reply.execute({ request_id: request.id, text: 'A' }, context('parent'))

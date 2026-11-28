@@ -2434,7 +2434,7 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
     })
   })
 
-  test(`${Store.name}: a recovered follow-up can ask, waits for a real answer, then completes and clears scheduling`, async () => {
+  for (const phase of ['self_check', 'follow_up'] as const) test(`${Store.name}: a recovered ${phase} can ask, research after a real answer, ask again and complete`, async () => {
     await withTempWorkspace(async workspace => {
       const store = new Store(join(workspace, 'sessions'))
       await store.init()
@@ -2443,7 +2443,8 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
       try {
         const now = Date.now()
         await store.saveState('web:root', { sessionId: 'web:root', segmentIndex: 0, mode: 'session', projectId: 'follow-up-fixture',
-          followUp: { next: 'Retrieve eval 8421', after: 5 }, sessionFollowUp: { inputId: 'fixture-wake', phase: 'follow_up', wakes: 1, startedAt: now - 100, dueAt: now - 2 } })
+          ...(phase === 'follow_up' ? { followUp: { next: 'Retrieve eval 8421', after: 5 } } : {}),
+          sessionFollowUp: { inputId: 'fixture-wake', phase, wakes: 1, startedAt: now - 100, dueAt: now - 2 } })
         await f.sessions.start()
         await assert.rejects(f.sessions.deliver('web:root', { ...input('fake'), source: { kind: 'event', eventId: 'fixture-wake', source: FOLLOW_UP_SOURCE, type: 'follow_up' } }), /host-owned/)
         f.sessions.startSessionFollowUps()
@@ -2453,6 +2454,14 @@ for (const Store of [JsonlSessionStore, SqliteSessionStore]) {
         assert.equal((await store.getState('web:root'))!.sessionFollowUp!.dueAt, 0)
         const ask = f.sessions.inputs.get('web:root')!
         await f.sessions.inputs.replyUser('web:root', ask.id, 'baseline A')
+        const research = await f.next('web:root')
+        assert.ok(research.names.includes('exec'))
+        research.resolve(invoke('read', { path: 'README.md' }, 'research-after-answer'))
+        const question = await f.next('web:root')
+        assert.doesNotMatch(String(question.messages.find(m => m.tool_call_id === 'research-after-answer')!.content), /self-check may only/)
+        question.resolve(invoke('ask', { kind: 'input', question: 'Which result should I report?' }))
+        await waitFor(() => !!f.sessions.inputs.get('web:root'))
+        await f.sessions.inputs.replyUser('web:root', f.sessions.inputs.get('web:root')!.id, 'Report the comparison')
         ;(await f.next('web:root')).resolve(writeSelf({ completed: true }))
         ;(await f.next('web:root')).resolve(done('Reported the result against baseline A'))
         await waitFor(() => f.facts.length === 1)
