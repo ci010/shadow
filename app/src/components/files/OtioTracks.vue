@@ -1,7 +1,12 @@
 <template>
   <section class="tracks" :aria-label="t('Tracks')">
-    <header class="heading"><h3>{{ t('Tracks') }}</h3><span>{{ positionLabel }}</span></header>
-    <div class="viewport" :style="{ '--playhead': playhead }">
+    <header class="heading"><h3>{{ t('Tracks') }}</h3>
+      <HoverInfo :text="t('Fit')"><template #default="{ triggerProps }">
+        <button v-bind="triggerProps" type="button" class="fit" :aria-label="t('Fit')" :disabled="window.span >= duration" @click="window = fitOtioWindow(duration)">
+          <span class="i-lucide-maximize" aria-hidden="true" /> {{ Math.round(duration / (window.span || 1) * 100) }}%
+        </button>
+      </template></HoverInfo><span>{{ positionLabel }}</span></header>
+    <div class="viewport" :style="{ '--playhead': playhead }" @wheel="onWheel">
       <div class="ruler-row">
         <div class="ruler-label" aria-hidden="true">{{ t('Timeline') }}</div>
         <div class="ruler" role="slider" :tabindex="maxFrame > 0 ? 0 : -1"
@@ -50,7 +55,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, shallowReactive, watch } from 'vue'
+import { computed, ref, shallowReactive, watch } from 'vue'
+import { fitOtioWindow, wheelOtioWindow } from '../../otio-viewport.ts'
 import { t } from '../../i18n.ts'
 import type { OtioModel, OtioNode } from '../../otio-model.ts'
 import { lastOtioFrame, otioLanes, otioPercent, scrubOtioFrame } from '../../otio-navigation.ts'
@@ -79,7 +85,23 @@ const rate = computed(() => props.model.rate)
 const maxFrame = computed(() => lastOtioFrame(duration.value, rate.value))
 const currentFrame = computed(() => Math.max(0, Math.min(maxFrame.value, Math.round(props.frame))))
 const seconds = computed(() => rate.value > 0 ? props.frame / rate.value : 0)
-const playhead = computed(() => `${otioPercent(seconds.value, duration.value)}%`)
+const window = ref(fitOtioWindow(duration.value))
+watch(() => props.model, () => { window.value = fitOtioWindow(duration.value) })
+function percent(time: number) { return window.value.span > 0 ? (time - window.value.start) / window.value.span * 100 : 0 }
+const playhead = computed(() => `${percent(seconds.value)}%`)
+function onWheel(event: WheelEvent) {
+  if (!duration.value || pointer !== undefined) return
+  const target = event.target as HTMLElement
+  const lane = target.closest<HTMLElement>('.lane')
+  const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1
+  const delta = (Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX) * scale
+  if (!delta) return
+  const rect = lane?.getBoundingClientRect()
+  event.preventDefault()
+  event.stopPropagation()
+  window.value = wheelOtioWindow(window.value, duration.value, rate.value, delta,
+    rect?.width ? (event.clientX - rect.left) / rect.width : null)
+}
 const positionLabel = computed(() => t('Frame {frame} · {seconds}s', { frame: currentFrame.value, seconds: formatSeconds(seconds.value) }))
 const lanes = computed(() => {
   let video = 0, audio = 0
@@ -131,7 +153,7 @@ watch(waveSources, async (groups, _, cleanup) => {
   }
 }, { immediate: true })
 const ticks = computed(() => Array.from({ length: duration.value > 0 ? 5 : 1 }, (_, i) => ({
-  left: i * 25, text: formatSeconds(duration.value * i / 4),
+  left: i * 25, text: formatSeconds(window.value.start + window.value.span * i / 4),
 })))
 function formatSeconds(value: number) {
   return value.toLocaleString(undefined, { maximumFractionDigits: 3, useGrouping: false })
@@ -148,15 +170,17 @@ function itemKind(node: OtioNode) {
   }
 }
 function blockStyle(node: OtioNode) {
-  const left = otioPercent(node.start, duration.value)
-  return { left: `${left}%`, width: `${otioPercent(node.end, duration.value) - left}%` }
+  const left = percent(node.start)
+  return { left: `${left}%`, width: `${percent(node.end) - left}%` }
 }
 let pointer: number | undefined
 let lastSent: number | undefined
 function scrub(event: PointerEvent) {
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   if (!rect.width) return
-  const frame = scrubOtioFrame((event.clientX - rect.left) / rect.width, duration.value, rate.value)
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+  const time = window.value.start + ratio * window.value.span
+  const frame = scrubOtioFrame(duration.value > 0 ? time / duration.value : 0, duration.value, rate.value)
   if (frame !== lastSent) {
     lastSent = frame
     emit('seek', frame)
@@ -202,12 +226,14 @@ function onKey(event: KeyboardEvent) {
 .heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; padding: 8px 10px; background: var(--c-bg-soft); border-block-end: 1px solid var(--c-border); }
 h3 { margin: 0; font-size: 12px; font-weight: 650; }
 .heading span, .ruler-row { color: var(--c-text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
-.viewport { overflow: auto; min-height: 0; container-type: inline-size; }
+.viewport { overflow: auto; min-height: 0; container-type: inline-size; padding-bottom: 32px; overscroll-behavior: contain; }
+.fit { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; padding: 2px 6px; }
+.fit:disabled { cursor: default; opacity: .55; }
 .lane-row, .ruler-row { display: grid; grid-template-columns: minmax(0, clamp(46px, 24%, 142px)) minmax(0, 1fr); min-width: 0; border-block-end: 1px solid var(--c-border); }
 .ruler-row { position: sticky; inset-block-start: 0; z-index: 4; background: var(--c-bg-soft); }
 .ruler-label { padding: 7px 6px; align-self: center; overflow-wrap: anywhere; }
 .ruler, .lane { margin-inline-end: 6px; position: relative; direction: ltr; }
-.ruler { min-height: 32px; border-left: 1px solid var(--c-border); touch-action: none; user-select: none; cursor: ew-resize; }
+.ruler { overflow: hidden; min-height: 32px; border-left: 1px solid var(--c-border); touch-action: none; user-select: none; cursor: ew-resize; }
 .ruler[aria-disabled="true"] { cursor: default; }
 .tick, .grid-line, .playhead { position: absolute; pointer-events: none; }
 .tick { bottom: 0; height: 7px; border-left: 1px solid var(--c-control-border); }

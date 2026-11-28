@@ -610,6 +610,14 @@ the picture scale, and **Fit width** to restore the responsive layout. Shots are
 numbered in timeline order; panning and zooming do not move any clips. Frame
 drawing happens in the Monitor.
 
+The track timeline initially fits the entire edit. Roll the wheel over a track's
+clip area to zoom around the time under the pointer (up zooms in, down zooms out).
+Roll over the time ruler, track headers or the blank area below the tracks to pan
+horizontally without changing the zoom. All tracks share the same visible time
+window; the ruler and playhead follow it. **Fit** beside the zoom percentage
+restores the full edit. These are review-only controls and never move clips or
+change the OTIO file.
+
 Use **Add description** or **Edit description** on a card to add a caption; all
 samples of that clip share it, with one caption per clip on each page. Save a blank
 description to remove it. **Missing descriptions only** excludes gaps and clips

@@ -269,6 +269,34 @@ app.whenReady().then(async()=>{
   assert.equal(await run(()=>window.fixtureVoices.length),0,'waveform must not create playback elements');
   assert.equal(await run(()=>performance.getEntriesByType('resource').filter(entry=>entry.initiatorType==='fetch' && new URL(entry.name).searchParams.get('path')==='cuts/tone.wav').length),1,
     'three clips sharing a WAV use one request');
+  const wheelView = await run(async () => {
+    const lane = document.querySelector('.lane');
+    const clip = lane.querySelector('.block');
+    const rect = lane.getBoundingClientRect();
+    const width = parseFloat(clip.style.width);
+    const wheel = (target, deltaY) => target.dispatchEvent(new WheelEvent('wheel', {
+      deltaY, clientX: rect.left + rect.width * 0.5, bubbles: true, cancelable: true,
+    }));
+    const zoomPrevented = !wheel(clip, -240);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const zoomWidth = parseFloat(clip.style.width);
+    const ruler = document.querySelector('.ruler');
+    const zoomStart = ruler.querySelector('.tick').textContent;
+    const panPrevented = !wheel(document.querySelector('.ruler-label'), 160);
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const panStart = ruler.querySelector('.tick').textContent;
+    const panWidth = parseFloat(clip.style.width);
+    document.querySelector('.fit').click();
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    return { width, zoomWidth, panWidth, zoomStart, panStart, zoomPrevented, panPrevented,
+      fitWidth: parseFloat(clip.style.width), fitStart: ruler.querySelector('.tick').textContent };
+  });
+  assert.ok(wheelView.zoomPrevented && wheelView.panPrevented);
+  assert.ok(wheelView.zoomWidth > wheelView.width);
+  assert.equal(wheelView.panWidth, wheelView.zoomWidth);
+  assert.notEqual(wheelView.panStart, wheelView.zoomStart);
+  assert.equal(wheelView.fitWidth, wheelView.width);
+  assert.equal(wheelView.fitStart, '0');
   await click('Play preview');
   const first=await wait('real WAV plays from trimmed offset',()=>{
     const v=window.fixtureVoices[0];return v?.duration===6 && !v.paused && v.currentTime>=0.5 && v.currentTime<1.6 && v.currentTime;
