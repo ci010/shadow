@@ -102,8 +102,17 @@ test('I/O get/list/stop/outputs are session-scoped and return bounded metadata',
 })
 
 test('capabilities expose clients, first-party sources and controls, not processors or sink graphs', async t => {
-  const { broker, capabilities, context } = await fixture(t)
-  assert.equal(JSON.parse(await capabilities.execute({}, context)).status, 'needs_client')
+  const { broker, capabilities, surface, context } = await fixture(t)
+  const idle = JSON.parse(await capabilities.execute({}, context))
+  assert.equal(idle.status, 'unknown')
+  assert.deepEqual(idle.clients, [])
+  assert.match(idle.discovery, /register on demand/)
+  assert.match(idle.discovery, /empty clients list does not mean no frontend/)
+  assert.match(idle.discovery, /requires human Start/)
+  // Publishing bootstraps discovery: an idle frontend has no capture lease yet.
+  const published = JSON.parse(await surface.execute({ action: 'publish', definition }, context))
+  assert.equal(published.status, 'awaiting_consent')
+  assert.equal(broker.get(published.id, context.sessionId).status, 'awaiting_consent')
   const secret = broker.registerClient({
     id: 'c171fdd3-2d97-457f-b96c-9453be707799', name: 'Test browser',
     capabilities: [

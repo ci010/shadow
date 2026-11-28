@@ -62,7 +62,10 @@ export class IoCapabilitiesTool implements Tool {
     z.object({}).strict().parse(args)
     const capabilities = this.broker.capabilities()
     return JSON.stringify({
-      status: capabilities.clients.length ? 'available' : 'needs_client',
+      // Capture identities are registered on demand when a frontend prepares a
+      // published run. An empty lease list cannot establish that no UI is open.
+      status: capabilities.clients.length ? 'available' : 'unknown',
+      discovery: 'Capture clients register on demand after a run is published. An empty clients list does not mean no frontend is connected. Publish a finite io_surface/io_run request to let an open frontend prepare it; capture still requires human Start.',
       clients: capabilities.clients.map(client => ({
         ...client,
         capabilities: client.capabilities.filter(capability => capability.kind === 'source' &&

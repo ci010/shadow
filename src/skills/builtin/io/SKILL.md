@@ -36,7 +36,15 @@ at a caller-chosen path. It does not perform speech recognition.
    `search(query="io", handler="grep", path="v:tools")`. Read their returned contract paths,
    then call them through `invoke_tool`.
    `io_capabilities` reports connected clients, first-party sources and controls,
-   not business processors. `needs_client` means the user must open the local host.
+   not business processors. Capture clients register on demand when an open
+   frontend prepares a published request. `status: "unknown"` with `clients: []`
+   is therefore normal while idle, not evidence that no client is connected.
+   Do not block publication on an empty list: publish the finite request so the
+   frontend can discover and prepare it. A paired desktop client on another
+   device can supply its microphone to a Main-local conversation; the loopback
+   service endpoint belongs to Main, not the capture device. No audio.cpp or ASR
+   setup is needed to capture raw audio. The Record/Start button is the capture
+   control, not a separate Shadow approval flow; OS/browser permissions still apply.
 2. Write/start the adhoc service with existing exec/process tools. Bind it to
    loopback. Install its normal dependencies using those same tools when needed.
    Verify the listener is ready and retain its process handle.

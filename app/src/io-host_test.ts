@@ -18,13 +18,17 @@ const run = {
   status: 'awaiting_consent' as const, createdAt: new Date().toISOString(), bytes: 0, artifacts: [],
 }
 
-const base = 'http://fixture/projects/default/'
+let base = 'http://fixture/projects/default/'
+let fixtureId = 0
 const settle = async () => { await new Promise(resolve => setImmediate(resolve)); await nextTick() }
 interface RenderNode { children: RenderNode[]; parent?: RenderNode }
 const node = (): RenderNode => ({ children: [] })
 
 function fixture(t: TestContext, waitForReady = false) {
-  t.mock.timers.enable({ apis: waitForReady ? ['setInterval', 'setTimeout'] : ['setInterval'] })
+  // Tests run sequentially. Give each fixture its own host-budget lane so a
+  // pacing timer discarded with mocked timers cannot block another fixture.
+  base = `http://fixture-${++fixtureId}/projects/default/`
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout'] })
   let ready!: () => void
   const readiness = waitForReady ? new Promise<void>(resolve => { ready = resolve }) : Promise.resolve()
   let readySignal: AbortSignal | undefined
@@ -106,7 +110,8 @@ function fixture(t: TestContext, waitForReady = false) {
   })
   return {
     bridge, calls, errors, document, unmount, ready,
-    async settle() { await settle(); if (waitForReady) t.mock.timers.tick(0); else await new Promise(resolve => setTimeout(resolve, 2)); await settle() },
+    // Flush resource microtasks, then the live HTTP budget's 40ms start pacing.
+    async settle() { await settle(); t.mock.timers.tick(40); await settle() },
     readySignal: () => readySignal, closed: () => closed,
     inventory: (next: typeof inventory) => { inventory = next },
     live: () => live,
@@ -307,7 +312,8 @@ test('bounded initial fallback catches up at ready; real in-flight events queue 
   const f = fixture(t, true)
   let release!: (response: Response) => void
   f.inventory(() => new Promise(resolve => { release = resolve }))
-  t.mock.timers.tick(750)
+  // Projection recovery owns the current 10-second initial snapshot deadline.
+  t.mock.timers.tick(10_000)
   await f.settle()
   assert.equal(f.polls().length, 1)
   f.ready()
